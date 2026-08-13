@@ -1,0 +1,160 @@
+# springai-rag 一键部署（面向 2核4G 服务器）。
+# 默认 MQ：Redis（rag.mq.type=redis），不部署 RocketMQ。
+# 启动：  docker compose up -d --build
+# 访问：  http://<host>:9081/api/rag/
+# 日志：  docker compose logs -f app
+#
+# 内存（全开）：app ~1.1G + pg ~0.3G + redis ~0.05G + rustfs ~0.2G + openobserve ~0.5G ≈ 2.2G，4G 够用。
+# 4G 偏紧时：把 app 的 MANAGEMENT_TRACING_SAMPLING_PROBABILITY 改 0.0 并 `docker compose stop openobserve`，省 ~0.5G。
+services:
+  postgres:
+    # 自定义镜像：pgvector + pg_search（BM25 扩展，见 docker/postgres/Dockerfile）
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile
+    image: rag-postgres:pg16-pgsearch
+    container_name: rag-postgres
+    environment:
+      POSTGRES_DB: springai_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    # 宿主端口映射已移除：容器间通信用服务名 postgres:5432；服务器已有 PG 占 5432 时避免冲突。
+    # 需要宿主机访问（如 Navicat 运维）时取消下行注释并视冲突改端口：
+    # ports: ["5433:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d springai_rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    # 宿主端口映射已移除：容器间通信用服务名 redis:6379，应用无需宿主端口。
+    # 服务器已有 Redis/其他服务占用 6379 时避免 bind: address already in use。
+    # 需要宿主机直接访问（如运维 redis-cli）时取消下行注释并视冲突改端口：
+    # ports: ["6380:6379"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 对象存储（S3 兼容）。默认用 RustFS（项目原生选型）。
+  # 若 rustfs/rustfs 镜像拉取失败或不稳定，把本段注释掉、启用下方 MinIO 段，
+  # 并把 app 的 depends_on / RAG_STORAGE_S3_ENDPOINT 里的 rustfs 改成 minio（代码零改）。
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rag-rustfs
+    # 宿主 9000 映射保留：浏览器直接访问图片（RAG_STORAGE_S3_PUBLIC_URL 默认 localhost:9000）。
+    # 服务器若 9000 被占（如 MinIO），改成 9001:9000 并把 RUSTFS_PUBLIC_URL 指向 http://<ip>:9001
+    ports: ["9000:9000"]
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    volumes:
+      - rustfs-data:/data
+  # ---- MinIO 备选（与 RustFS 二选一）----
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: rag-minio
+  #   ports: ["9000:9000"]
+  #   environment:
+  #     MINIO_ROOT_USER: rustfsadmin        # 复用现有 key，代码不动
+  #     MINIO_ROOT_PASSWORD: rustfsadmin
+  #   command: ["server", "/data", "--console-address", ":9001"]
+  #   volumes:
+  #     - minio-data:/data
+
+  openobserve:
+    image: openobserve/openobserve:latest
+    container_name: rag-openobserve
+    environment:
+      ZO_ROOT_USER_EMAIL: admin@openobserve.io
+      ZO_ROOT_USER_PASSWORD: OpenObserve@2026
+    ports: ["5080:5080"]
+    volumes:
+      - oo-data:/data
+
+  # OTel Collector：接收 app 的 OTLP/HTTP trace，扇出到 OpenObserve（保留）+ Langfuse（新增）。
+  # 单独启动：docker compose up -d otel-collector（不拉起其他服务，避免与现有容器端口冲突）。
+  # 认证：OO_AUTH=base64(admin@openobserve.io:OpenObserve@2026)；LANGFUSE_AUTH=base64(pk-lf:sk-lf) 从 .env 注入。
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    container_name: rag-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./docker/otel-collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports: ["4318:4318"]   # 映射宿主：本地 IDEA app 经 localhost:4318 上报
+    networks: [default, rag-obs]
+    environment:
+      OO_AUTH: ${OO_AUTH:-YWRtaW5Ab3Blbm9ic2VydmUuaW86T3Blbk9ic2VydmVAMjAyNg==}
+      LANGFUSE_AUTH: ${LANGFUSE_AUTH}
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      rustfs:   { condition: service_started }
+      otel-collector: { condition: service_started }
+    environment:
+      # ---- 数据库 ----
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/springai_rag
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      # ---- Redis ----
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # ---- 对象存储（指向 compose 内的 rustfs；用 MinIO 时改 http://minio:9000）----
+      RAG_STORAGE_TYPE: s3
+      RAG_STORAGE_S3_ENDPOINT: http://rustfs:9000   # 内部 endpoint（应用写入/读取对象）
+      # 浏览器可访问的公开基址：入库时图片 URL 用它生成。
+      # 容器内 endpoint 是 rustfs 容器名，浏览器访问不到 → 图片不显示；
+      # 默认 localhost:9000（本地浏览器直连宿主映射）；服务器部署用 RUSTFS_PUBLIC_URL 覆盖为服务器地址。
+      RAG_STORAGE_S3_PUBLIC_URL: ${RUSTFS_PUBLIC_URL:-http://localhost:9000}
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      # ---- MQ：redis（默认，2核4G 不跑 RocketMQ）；切回 RocketMQ 需另起 name-server 并改此值 ----
+      RAG_MQ_TYPE: redis
+      # Redis 模式下排除 RocketMQ 自动配置，避免 RocketMQTemplate 尝试连 name-server 刷错误日志（双保险）。
+      # 切回 RocketMQ 时删除此行。
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
+      # ---- 模型 API key：从宿主 .env 读取（compose 自动读同目录 .env）；未配置则启动报错 ----
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 配置 DEEPSEEK_API_KEY}
+      BAILIAN_API_KEY: ${BAILIAN_API_KEY:?请在 .env 配置 BAILIAN_API_KEY}
+      # ---- OpenObserve 日志推送 + 日志诊断（logback appender 与 openobserve.url 同用此变量）----
+      # 容器内必须指向 compose 的 openobserve 服务（默认 localhost 在容器里连不上自己）
+      OPENOBSERVE_URL: http://openobserve:5080/api/default
+      # ---- OpenObserve trace 上报（4G 偏紧可设 0.0 关闭）----
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      OBSERVE_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      # ---- 关键词检索模式：bm25（pg_search 真 BM25，与本地一致）----
+      # postgres 用 docker/postgres 自定义镜像（pgvector + pg_search），
+      # 扩展在首次初始化时自动建、BM25 索引由应用启动时自动创建。
+      RAG_SEARCH_CHANNELS_KEYWORD_MODE: bm25
+      # ---- VLM 图片描述（图片块入库时用 qwen-vl 生成 description，否则图片纯 URL 噪声不可检索）----
+      RAG_VLM_ENABLED: "true"
+    ports: ["9081:9081"]
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  redis-data:
+  rustfs-data:
+  # minio-data:
+  oo-data:
+
+networks:
+  default:
+  rag-obs:
+    external: true

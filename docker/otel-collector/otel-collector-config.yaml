@@ -1,0 +1,78 @@
+# OTel Collector：接收 springai-rag 的 OTLP/HTTP trace，按后端拆分 pipeline 扇出。
+# 应用侧只写通用 OTel 语义属性（gen_ai.* / rag.trace.* / rag.step 等），不感知任何后端；
+# 后端专属映射（如 Langfuse 的 langfuse.observation.*）只在本文件的 transform processor 里做。
+# 新增/替换展示后端 = 在 exporters 加一个 otlphttp，并在 service.pipelines 加一条即可，应用零改动。
+#
+# 由 docker-compose.yml 的 otel-collector 服务挂载本文件。
+# 认证用 collector confmap 标准的 ${env:VAR} 语法，值由 compose env 注入：
+#   OO_AUTH=base64(admin@openobserve.io:OpenObserve@2026)        ← compose 内置默认
+#   LANGFUSE_AUTH=base64(pk-lf:sk-lf)                             ← 从 .env 读取
+#
+# 排错：
+#  - traces_endpoint 必须含 /v1/traces（otlphttp exporter 不会自动补）
+#  - Langfuse Basic Auth 公钥(pk-lf-)在前、私钥(sk-lf-)在后
+#  - Langfuse 只支持 OTLP/HTTP，不支持 gRPC
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # 丢弃纯 HTTP GET 噪声 trace（前端拉会话列表 /chat/conversations、Knife4j 文档 /docs/* 等）。
+  # /chat/stream 是 POST，根 span 不匹配 "^http get "；且其子 span 带 rag.*/gen_ai.*，不会被误删。
+  filter/drop-noise:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsMatch(name, "^http get ") and not IsMatch(name, "chat/stream") and attributes["gen_ai.system"] == nil and attributes["rag.step"] == nil'
+
+  # Langfuse 专属语义映射：应用写的通用 key → Langfuse 认识的 key（trace 级 input/output）。
+  # 应用零 Langfuse 知识；其他后端可按同样方式加自己的 transform，或直接用通用 key。
+  transform/langfuse:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["langfuse.observation.input"], attributes["rag.trace.input"]) where attributes["rag.trace.input"] != nil
+          - set(attributes["langfuse.observation.output"], attributes["rag.trace.output"]) where attributes["rag.trace.output"] != nil
+
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+exporters:
+  # ① OpenObserve（通用 OTel 后端，无需专属映射）
+  otlphttp/openobserve:
+    traces_endpoint: http://host.docker.internal:5080/api/default/v1/traces
+    tls:
+      insecure: true
+    headers:
+      Authorization: Basic ${env:OO_AUTH}
+
+  # ② Langfuse（OTLP/HTTP only → /api/public/otel/v1/traces）
+  otlphttp/langfuse:
+    # host.docker.internal:3000（走宿主端口映射）；不直接用 langfuse-web:3000 是因为
+    # Langfuse 的 Next.js 只 bind 容器 hostname IP，跨 docker 网络直连会被拒绝。
+    traces_endpoint: http://host.docker.internal:3000/api/public/otel/v1/traces
+    tls:
+      insecure: true
+    headers:
+      Authorization: Basic ${env:LANGFUSE_AUTH}
+
+service:
+  pipelines:
+    # 每个后端一条独立 pipeline：加新后端 = 加 exporter + 加一条 pipeline（可选加 transform）
+    traces/openobserve:
+      receivers: [otlp]
+      processors: [filter/drop-noise, batch]
+      exporters: [otlphttp/openobserve]
+    traces/langfuse:
+      receivers: [otlp]
+      processors: [filter/drop-noise, transform/langfuse, batch]
+      exporters: [otlphttp/langfuse]
+  telemetry:
+    logs:
+      level: info

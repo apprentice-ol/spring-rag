@@ -1,0 +1,121 @@
+# springai-rag 服务器部署版 compose（与本地版 docker-compose.yml 区别见注释）。
+# 用法：
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+# 与本地版的关键差异：
+#   1. RAG_STORAGE_S3_PUBLIC_URL 由 ${SERVER_IP} 拼接为 http://<SERVER_IP>/storage（本机 Nginx /storage/ 反代到 RustFS；
+#      换服务器/Nginx 路径时直接改 app 段该值）
+#   2. rustfs 宿主端口用 ${RUSTFS_PORT:-9000}（服务器 9000 被 MinIO 等占用时改端口并同步 RAG_STORAGE_S3_PUBLIC_URL）
+#   3. postgres 用自定义镜像（pgvector + pg_search，BM25 模式），与本地一致
+services:
+  postgres:
+    # 自定义镜像：pgvector + pg_search（BM25 扩展，见 docker/postgres/Dockerfile）
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile
+    image: rag-postgres:pg16-pgsearch
+    container_name: rag-postgres
+    environment:
+      POSTGRES_DB: springai_rag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    # 宿主端口映射已移除（容器间通信用服务名 postgres:5432）；服务器已有 PG 占 5432 时不冲突。
+    # 需要宿主机访问（Navicat 运维）时取消下行注释并视冲突改端口：
+    # ports: ["5433:5432"]
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d springai_rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    # 宿主端口映射已移除（容器间通信用服务名 redis:6379）；服务器已有 Redis 占 6379 时不冲突。
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rag-rustfs
+    # 宿主端口映射保留（浏览器访问图片）。9000 被占时：export RUSTFS_PORT=9001 并把 RUSTFS_PUBLIC_URL 同步改 http://<ip>:9001
+    ports: ["${RUSTFS_PORT:-9000}:9000"]
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    volumes:
+      - rustfs-data:/data
+
+  openobserve:
+    image: openobserve/openobserve:latest
+    container_name: rag-openobserve
+    environment:
+      ZO_ROOT_USER_EMAIL: admin@openobserve.io
+      ZO_ROOT_USER_PASSWORD: OpenObserve@2026
+    ports: ["5080:5080"]
+    volumes:
+      - oo-data:/data
+
+  app:
+    image: springai-rag-app:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      rustfs:   { condition: service_started }
+    volumes:
+      # app.jar + lib 已打进镜像（Dockerfile COPY）；运行时只挂 data：
+      # LiveRAG parquet 放项目根 data/liverag/ 即被 downloadParquet 复用（cacheDir=data/liverag）
+      - ./data:/app/data
+    environment:
+      # ---- 数据库 ----
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/springai_rag
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      # ---- Redis ----
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      # ---- 对象存储 ----
+      RAG_STORAGE_TYPE: s3
+      RAG_STORAGE_S3_ENDPOINT: http://rustfs:9000
+      # ⭐ 浏览器可访问的图片基址：本机 Nginx /storage/ 反代到 RustFS 根，
+      #    图片 URL = http://<SERVER_IP>/storage/springai-rag-assets/{key}
+      #    SERVER_IP 从 .env 读取；换服务器/Nginx 路径时改 .env 的 SERVER_IP 或此处
+      RAG_STORAGE_S3_PUBLIC_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}/storage
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      # ---- MQ：redis（2核4G 不跑 RocketMQ）----
+      RAG_MQ_TYPE: redis
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
+      # ---- 模型 API key（从 .env 读取，未配置则启动报错）----
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 配置 DEEPSEEK_API_KEY}
+      BAILIAN_API_KEY: ${BAILIAN_API_KEY:?请在 .env 配置 BAILIAN_API_KEY}
+      # ---- OpenObserve 日志推送 + 诊断 ----
+      OPENOBSERVE_URL: http://openobserve:5080/api/default
+      # OO Web UI 浏览器可达地址（前端「链路追踪」页跳转用；容器内 openobserve:5080 浏览器访问不到，故用服务器外网 IP）
+      OPENOBSERVE_WEB_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}:5080
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      OBSERVE_OTLP_ENDPOINT: http://openobserve:5080/api/default/v1/traces
+      # ---- 关键词检索：bm25（pg_search，postgres 为自定义镜像）----
+      RAG_SEARCH_CHANNELS_KEYWORD_MODE: bm25
+      # ---- VLM 图片描述（图片块入库时生成 description，否则图片不可检索）----
+      RAG_VLM_ENABLED: "true"
+    ports: ["${APP_PORT:-9081}:9081"]
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  redis-data:
+  rustfs-data:
+  oo-data:

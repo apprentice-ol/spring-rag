@@ -1,0 +1,45 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Env / secrets（.env 含真实密钥绝不提交；.env.example 是模板，故意提交供他人参考）
+.env
+!.env.example
+application-local.yaml
+application-prod.yaml
+
+# Frontend（node_modules 依赖 + dist 构建产物；前端源码 frontend/src 正常提交。
+# 注意：rag-core/src/main/resources/static 是 dist 的拷贝、spring boot 服务前端的方式，保留提交使 clone 即用）
+node_modules/
+frontend/dist/
+
+# 运行时数据（LiveRAG 等下载缓存，运行时生成；评测 parquet 数据集保留入库）
+/data/
+
+# Python 脚本缓存
+__pycache__/
+*.pyc
+
+# Binary 安装包（pg-search.deb 等 68MB 大文件不入 git；本地 docker build 时自行放置，
+# 见 docker/postgres/README.md）
+*.deb

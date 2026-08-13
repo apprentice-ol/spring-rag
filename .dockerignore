@@ -1,0 +1,29 @@
+# ===== Maven 产物：瘦 jar + lib/（lib 外置部署模式，镜像要 COPY 两者） =====
+**/target/*
+!**/target/*.jar
+!**/target/*.jar.original
+!**/target/lib/
+!**/target/lib/**
+
+# ===== 前端依赖与构建产物（dist 已打进 jar 的 static，无需进 context） =====
+frontend/node_modules/
+frontend/dist/
+
+# ===== 部署快照 / 大文件（容器构建用不到，别打进 context） =====
+*.tar
+*.tar.gz
+openobserve.tar
+springai-rag.tar.gz
+app.jar
+
+# ===== IDE / 版本控制 / 本地配置 =====
+.git/
+.idea/
+.claude/
+
+# ===== 系统垃圾 / 日志 / 临时 =====
+__pycache__/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

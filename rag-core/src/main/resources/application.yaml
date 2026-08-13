@@ -1,0 +1,192 @@
+server:
+  port: 9081
+  servlet:
+    context-path: /api/rag
+
+spring:
+  # 本地直接跑 app 时自动读项目根 .env（容器部署由 compose 注入环境变量，.env 不存在则 optional 跳过）。
+  # .env 格式与 properties 兼容（KEY=VALUE）；docker compose 也读同一份 .env，三方共用。
+  config:
+    import:
+      - "optional:file:.env[.properties]"
+      - "optional:file:../.env[.properties]"
+  application:
+    name: springai-rag
+
+  servlet:
+    multipart:
+      max-file-size: 50MB         # 单文件最大 50MB（默认 1MB 太小）
+      max-request-size: 60MB      # 单次请求最大 60MB
+
+  datasource:
+    # springai-rag 独立库，已含 pgvector 扩展
+    url: jdbc:postgresql://localhost:5432/springai_rag
+    username: postgres
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 3000ms
+
+  sql:
+    init:
+      mode: always                              # 启动时执行业务表脚本（与 pgvector/chat-memory 各自的初始化互不冲突）
+      schema-locations: classpath:sql/init.sql  # 幂等建 t_document / t_ingestion_task + pgvector 扩展兜底
+
+  ai:
+    # 全局 = DeepSeek（chat 直接用全局）；embedding 单独覆盖为百炼（DeepSeek 无 embedding 模型）。
+    # 全局 api-key 同时给 OpenAI 全套子模型（audio/image 等未使用的）兜底，避免它们构造时缺 key 报错。
+    # key 沿用 15_ragent 的值；生产环境请用环境变量 DEEPSEEK_API_KEY / BAILIAN_API_KEY 覆盖。
+    openai:
+      base-url: https://api.deepseek.com
+      api-key: ${DEEPSEEK_API_KEY:}
+      chat:
+        options:
+          model: deepseek-chat
+          temperature: 0.0   # 全局确定性：意图分类/查询改写等需稳定输出，避免温度导致的改写偏差使同问题检索不同资料
+      embedding:
+        base-url: https://dashscope.aliyuncs.com/compatible-mode
+        api-key: ${BAILIAN_API_KEY:}
+        options:
+          model: text-embedding-v3   # 1024 维（由 init.sql spring_ai_store_vector.embedding VECTOR(1024) 保证一致）
+
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: always  # DatabaseInitializationMode 枚举：always/embedded/never（非 boolean）
+      # 让 ChatModel observation 记录 prompt/completion 原文 → Langfuse generation UI 直接看问答内容
+      observations:
+        log-prompt: true
+        log-completion: true
+
+# 阶段 3 启用（异步入库）；阶段 0 可忽略
+rocketmq:
+  name-server: localhost:9876
+  producer:
+    group: rag-producer
+    send-message-timeout: 5000
+
+# 项目自有配置
+rag:
+  observability:               # 可观测性（业务只依赖 OTel/Micrometer；存储/展示后端由 collector 可插拔，见 docs/opentelemetry设计思路.md）
+    llm:
+      usage-attributes: true   # Spring AI LLM 用法埋点（模型参数/token 用量 → span/MDC/结构化日志）；换 AI 框架时可关
+      content-attributes: true # 把 prompt/completion 原文写成 OTel gen_ai.prompt/completion（Langfuse 等据此展示 generation I/O）
+  mq:
+    type: rocketmq            # rocketmq | redis（切换 MQ 实现；redis 走 RedisStreamMqProducer + RedisStreamIngestionConsumer）
+    topic: ingestion          # RocketMQ topic / Redis stream 默认名
+    consumer-group: ingestion-consumer
+    stream-name: ingestion    # Redis stream key（默认同 topic）
+  chat:
+    top-k: 10           # 兜底召回条数（预算未配置时用）；三段预算已在下方显式配置
+    context-top-k: 10   # ③ Rerank 后最终给 LLM 的条数（对齐 ragent default-top-k:10；8 会让代码块与概念块抢名额，个别代码块只给路径引用）
+    recall-budget: 20   # ① 每通道召回基数（对齐 ragent；100 全库概述噪声淹没步骤块，20 噪声少）
+    candidate-limit: 40 # ② RRF 融合后送 Rerank 的候选池上限（对标 ragent rag.search.fusion.rerank-candidate-limit:40）
+    similarity-threshold: 0.0   # 不过滤（0.35 会把具体操作步骤块误过滤——步骤和"流程"查询语义距离较远）（阈值过滤向后推到精排环节）
+    # system-prompt 已迁至 prompts/chat/pipeline/rag-answer-system.md（单一来源）；
+    # 如需运维覆盖，可在此设置 system-prompt: xxx
+    agent:                       # 多范式可插拔 agent 框架（rag.chat.agent.* → AgentProperties）
+      paradigm: naive            # 默认 agent 范式：naive / crag / self_rag / react / plan_execute
+      max-retries: 1             # CRAG/Self-RAG 检索不足时的重试次数上限
+      grade-threshold: 0.5       # grade 相关性阈值（chunk score >= 该值视为 relevant）
+      min-hits: 2                # 最小命中条数（少于该值视为检索不足，触发重试/兜底）
+      react-max-steps: 6         # ReAct 最大循环步数（防死循环硬上限）
+      enable-web-fallback: false # web 搜索兜底（WebSearchChannel 为 stub 时无效，CRAG 退化为重试改写）
+  search:
+    channels:
+      keyword:
+        enabled: true           # 关键词通道：metadata.keywords 双向包含匹配 + doc_name 文档路由（专有名词/人名精确召回，补向量语义弱信号）
+        mode: bm25             # 实现选择：sql=滑窗字词 SQL 检索（默认，零依赖；全表扫描无索引，当前 327 块毫秒级）
+                               #          bm25=pg_search 扩展检索（真 BM25+倒排，0.25.x 版；需先装扩展并建索引，
+                               #               见 Bm25KeywordSearchChannel 类注释；扩展/索引缺失时自动降级为空结果）
+        bm25:
+          index-name: rag_keyword_bm25   # pg_bm25 模式下的 BM25 索引名（CREATE INDEX ... USING bm25）
+      web-search:
+        enabled: false         # 联网检索通道（需配置 API key）
+    fusion:
+      rrf-k: 20                # RRF 融合平滑常数（对齐 ragent 20；调小→头部排名权重更突出、多通道更容易出头）
+  rerank:
+    enabled: true               # Rerank 精排（百炼 qwen3-rerank；gte-rerank 已于 2026-05 下线）
+    min-relevance-score: 0.3    # Rerank 相关度下限：低于此分的块不进 LLM 上下文（0=关闭）
+                                # 大块时代适配：块合并到 600-1600 字符后"部分相关"块（含表格/代码的混合块）
+                                # rerank 打分被稀释（0.3~0.45 区间），0.4 会砍掉表格类查询的一半上下文
+                                # （实测"如何提升表格检索的效果"：0.4→输出 5 条 / 0.3→输出 10 条满额）
+    bailian:
+      # 注意：此处须到 /services/rerank/text-rerank，由 BaiLianRerankClient 再拼 /text-rerank，
+      # 最终为双段 .../services/rerank/text-rerank/text-rerank（官方 2026 新版端点）。
+      # 旧值只到 /rerank 拼出单段，全部 rerank 调用 400（task can not be null）静默退化回向量序。
+      base-url: https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank
+      api-key: ${BAILIAN_API_KEY:}  # 复用 embedding 的百炼 key
+      model: qwen3-rerank
+  ingestion:
+    chunk-size: 512       # 单块目标字符数（对齐 ragent 512；结构感知分块合并上限）
+    chunk-overlap: 200    # 相邻块重叠字符数：跨块边界的答案需在上下块都完整出现，零重叠会直接损失召回
+  eval:
+    ks: [5, 10]           # Recall/Precision/nDCG 计算的 k 值（产出 recall_at_5 / recall_at_10 ...）
+    concurrency: 8        # 跑批并发数（虚拟线程 + Semaphore 限流，单实例）
+  vlm:
+    # VLM 图片描述（双文本策略核心）：图片块入库时用多模态模型生成描述，description 进 embedding、
+    # 原图 URL 留 content——否则图片块是纯 URL 噪声、检索永远命中不了（图片密集文档如发票截图完全不可检索）。
+    # DeepSeek chat 不支持图片输入，VLM 走独立 vlmChatClient（百炼 qwen-vl）。
+    enabled: true
+    base-url: https://dashscope.aliyuncs.com/compatible-mode
+    api-key: ${BAILIAN_API_KEY:}
+    model: qwen-vl-max
+    fail-on-error: false   # true=VLM 失败中断该文档入库（对齐 ragent 原子性，绝不产残缺数据）
+  storage:
+    type: s3
+    kb-bucket: springai-rag-kb
+    asset-bucket: springai-rag-assets
+    s3:
+      endpoint: http://localhost:9000
+      access-key: ${RUSTFS_ACCESS_KEY:rustfsadmin}
+      secret-key: ${RUSTFS_SECRET_KEY:rustfsadmin}
+      region: us-east-1
+      path-style: true
+
+# ===== MinerU（PDF/Word/PPT 结构化解析）=====
+# 从 15_ragent 迁移：固定 API key + 并发数降至 5
+mineru:
+  api-url: https://mineru.net/api/v4
+  api-key: ${MINERU_API_KEY:}
+  poll-interval-seconds: 5
+  timeout-seconds: 300
+  enable-table: true
+  enable-formula: true
+  ocr: false
+  language: ch
+  concurrency-limit: 5
+  semaphore-name: rag:mineru:parse
+  max-wait-seconds: 30
+  lease-seconds: 900
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0   # 全采样；trace 发往 OTLP endpoint（默认本地 otel-collector:4318）
+  otlp:
+    tracing:
+      # OTLP/HTTP → 本地 otel-collector:4318（collector 再扇出到 OpenObserve + Langfuse）。
+      # 认证已下沉到 collector 的两个 exporter，app 不再带 Basic 头。
+      # 容器部署由 OBSERVE_OTLP_ENDPOINT 覆盖为 http://otel-collector:4318/v1/traces。
+      endpoint: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+
+
+# OpenObserve 日志诊断（读取侧：OpenObserveQueryClient 按 traceId 反查日志）。
+# 写入侧 logback appender 通过 springProperty 绑定本配置（单一来源）。
+# 默认 localhost（本地/compose 端口映射即达）；服务器部署用环境变量 OPENOBSERVE_URL 覆盖。
+openobserve:
+  url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # 单冒号默认值（:- 会被 @ConfigurationProperties 占位符解析成 -http://…，URI 报 Illegal character）
+  web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}        # Web UI 浏览器可达地址（前端链路追踪页跳转用；生产指向外网可达的 OO）
+
+logging:
+  level:
+    org.springframework.ai: DEBUG
+    org.springframework.web.servlet.DispatcherServlet: DEBUG
+    org.apache.ibatis: DEBUG
+    com.nageoffer.ai.rag: DEBUG
