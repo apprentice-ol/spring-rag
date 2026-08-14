@@ -5,7 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 import org.springframework.util.StringUtils;
 
 /**
@@ -40,7 +40,7 @@ public class QueryRewriter {
      * @param historyContext 最近对话历史（可为空），格式如"用户：xxx\n助手：yyy"
      * @return LLM 改写后的 query（或原 query）
      */
-    @TraceStep("rag.query.rewrite")
+    @ObservedStep("rag.query.rewrite")
     public String rewrite(String query, String historyContext) {
         if (!StringUtils.hasText(query)) {
             return query;

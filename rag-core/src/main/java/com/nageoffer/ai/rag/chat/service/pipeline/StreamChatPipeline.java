@@ -32,7 +32,7 @@ import com.nageoffer.ai.rag.diagnose.dto.MatchResult;
 import com.nageoffer.ai.rag.diagnose.dto.RelatedDoc;
 import com.nageoffer.ai.rag.diagnose.dto.TraceLogEntry;
 import com.nageoffer.ai.rag.diagnose.service.LogDiagnoseService;
-import com.nageoffer.ai.obs.ObsLogger;
+import com.nageoffer.ai.obs.observation.logging.ObsLogger;
 
 import java.io.IOException;
 import java.util.function.Consumer;
@@ -160,7 +160,7 @@ public class StreamChatPipeline {
                 agentResult.trace().getLlmCallCount());
 
         // 发送 agent 执行轨迹（SSE trace 事件，前端对照面板用；一次性，在流式回答前发出）
-        sendTraceEvent(emitter, agentResult.trace());
+        sendObsEvent(emitter, agentResult.trace());
 
         // ========== 4. 空检索处理 ==========
         if (agentResult.verdict() == RetrievalVerdict.EMPTY || agentResult.isEmpty()) {
@@ -377,7 +377,7 @@ public class StreamChatPipeline {
      * （prompts/chat/pipeline/rag-answer-system.md），此处只把检索资料与用户问题组装进
      * user message——避免把每次都变的资料拼进 system 而破坏 prompt cache，也让规则稳定可缓存。</p>
      *
-     * <p>流式 LLM 调用已抽到 {@link RagAnswerStreamService#answer}（{@code @TraceStep} 自动埋点），
+     * <p>流式 LLM 调用已抽到 {@link RagAnswerStreamService#answer}（{@code @ObservedStep} 自动埋点），
      * 此处只写 SSE 副作用（sendEvent / saveMessage / completeEmitter）与 trace 级 output。</p>
      */
     private void streamRagResponse(String question, String conversationId,
@@ -398,7 +398,7 @@ public class StreamChatPipeline {
                             sendEvent(emitter, content);
                         },
                         e -> {
-                            log.error("[Pipeline] RAG 流式失败", e);
+                            log.error("[ObservationPipeline] RAG 流式失败", e);
                             // 异常路径也写 trace output（已累积的部分回答 / error 标记），
                             // 否则流式中断时根 span 只剩 input、output 丢失（Langfuse trace 列表 output 为空）
                             String partial = fullAnswer.toString();
@@ -472,7 +472,7 @@ public class StreamChatPipeline {
     }
 
     /** 发送 agent 执行轨迹（SSE trace 事件，前端对照面板渲染用；一次性，在流式回答前发出）。 */
-    private void sendTraceEvent(SseEmitter emitter, AgentTrace trace) {
+    private void sendObsEvent(SseEmitter emitter, AgentTrace trace) {
         if (trace == null) {
             return;
         }
@@ -480,7 +480,7 @@ public class StreamChatPipeline {
             String json = objectMapper.writeValueAsString(trace);
             emitter.send(SseEmitter.event().name("trace").data(json));
         } catch (Exception e) {
-            log.debug("[Pipeline] trace 事件发送失败（忽略）: {}", e.getMessage());
+            log.debug("[ObservationPipeline] trace 事件发送失败（忽略）: {}", e.getMessage());
         }
     }
 
@@ -489,9 +489,9 @@ public class StreamChatPipeline {
             emitter.send(SseEmitter.event().data(content).name("message"));
         } catch (IOException e) {
             // 客户端断开，忽略
-            log.debug("[Pipeline] SSE 写入失败（客户端可能已断开）: {}", e.getMessage());
+            log.debug("[ObservationPipeline] SSE 写入失败（客户端可能已断开）: {}", e.getMessage());
         } catch (Exception e) {
-            log.warn("[Pipeline] SSE 发送异常", e);
+            log.warn("[ObservationPipeline] SSE 发送异常", e);
         }
     }
 

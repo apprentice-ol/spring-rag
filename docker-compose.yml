@@ -132,12 +132,13 @@ services:
       # ---- 模型 API key：从宿主 .env 读取（compose 自动读同目录 .env）；未配置则启动报错 ----
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 配置 DEEPSEEK_API_KEY}
       BAILIAN_API_KEY: ${BAILIAN_API_KEY:?请在 .env 配置 BAILIAN_API_KEY}
-      # ---- OpenObserve 日志推送 + 日志诊断（logback appender 与 openobserve.url 同用此变量）----
+      # ---- OpenObserve 日志推送 + 日志诊断 ----
       # 容器内必须指向 compose 的 openobserve 服务（默认 localhost 在容器里连不上自己）
       OPENOBSERVE_URL: http://openobserve:5080/api/default
       # ---- OpenObserve trace 上报（4G 偏紧可设 0.0 关闭）----
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
-      OBSERVE_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      # OTLP 基础地址，不含信号路径；应用会自动拼 /v1/traces、/v1/logs、/v1/metrics
+      OBSERVE_OTLP_ENDPOINT: http://otel-collector:4318
       # ---- 关键词检索模式：bm25（pg_search 真 BM25，与本地一致）----
       # postgres 用 docker/postgres 自定义镜像（pgvector + pg_search），
       # 扩展在首次初始化时自动建、BM25 索引由应用启动时自动创建。

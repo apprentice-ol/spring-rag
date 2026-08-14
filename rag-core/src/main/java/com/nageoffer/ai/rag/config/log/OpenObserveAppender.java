@@ -194,7 +194,7 @@ public class OpenObserveAppender extends UnsynchronizedAppenderBase<ILoggingEven
         obj.put("logger", event.getLoggerName());
         obj.put("thread", event.getThreadName());
 
-        // 结构化事件日志（logger = rag.telemetry）：StructuredLog 把事件序列化成 JSON 串打 log.info，
+        // 结构化事件日志（logger = rag.telemetry）：ObsStructuredLog 把事件序列化成 JSON 串打 log.info，
         // 这里把 message 解析回 JSON 合并到顶层字段（_event/rag_step/step_id/data/duration_ms），
         // 避免 data 等被当成字符串二次转义；非结构化日志仍走 message。
         final String formatted = event.getFormattedMessage();

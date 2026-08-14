@@ -1,1 +1,1 @@
-org.springframework.boot.env.EnvironmentPostProcessor=com.nageoffer.ai.obs.config.ObsExportEnvironmentPostProcessor,com.nageoffer.ai.obs.springai.SpringAiObsEnvironmentPostProcessor
+org.springframework.boot.env.EnvironmentPostProcessor=com.nageoffer.ai.obs.autoconfigure.ObsEnvironmentPostProcessor,com.nageoffer.ai.obs.autoconfigure.springai.SpringAiObsEnvironmentPostProcessor

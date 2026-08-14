@@ -4,24 +4,20 @@
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
     <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
 
-    <!-- OpenObserve 异步日志推送。
-         url 用环境变量 OPENOBSERVE_URL（与 application.yaml 的 openobserve.url 占位符同名，单一变量名；
-         默认 localhost:5080 本地即达；服务器部署 export OPENOBSERVE_URL=http://<ip>:5080/api/default）。
-         password 用环境变量 OO_PASSWORD 覆盖。 -->
-    <appender name="OPENOBSERVE" class="com.nageoffer.ai.rag.config.log.OpenObserveAppender">
-        <url>${OPENOBSERVE_URL:-http://localhost:5080/api/default}</url>
-        <stream>springai-rag_logs</stream>
-        <service>springai-rag</service>
-        <username>admin@openobserve.io</username>
-        <password>${OO_PASSWORD:-OpenObserve@2026}</password>
-        <batchSize>200</batchSize>
-        <flushIntervalMillis>5000</flushIntervalMillis>
-        <queueCapacity>10000</queueCapacity>
+    <!-- OTLP Logs appender。
+         日志统一走 OpenTelemetry Logs：
+         - obs.collector.enabled=true  -> management.otlp.logging.endpoint 指向 otel-collector
+         - obs.collector.enabled=false -> management.otlp.logging.endpoint 指向 OpenObserve /v1/logs
+         具体端点由 ObsEnvironmentPostProcessor 启动时桥接。
+         旧的 OpenObserveAppender 不再启用，保留类文件仅作为历史实现。 -->
+    <appender name="OPEN_TELEMETRY"
+              class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureExperimentalAttributes>true</captureExperimentalAttributes>
     </appender>
 
     <!-- 日志级别由 application.yaml 的 logging.level 控制 -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
-        <appender-ref ref="OPENOBSERVE"/>
+        <appender-ref ref="OPEN_TELEMETRY"/>
     </root>
 </configuration>

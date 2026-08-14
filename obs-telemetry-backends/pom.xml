@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.nageoffer.ai</groupId>
+        <artifactId>springai-rag</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>obs-telemetry-backends</artifactId>
+    <name>obs-telemetry-backends</name>
+    <description>obs-telemetry 后端适配模块：集中管理 OpenObserve 与 Langfuse 配置、直连 exporter 和 OTLP bridge。</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.nageoffer.ai</groupId>
+            <artifactId>obs-telemetry</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <!-- 用于 before=OtlpTracingAutoConfiguration，保证直连 trace exporter 先于默认 exporter 注册 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator-autoconfigure</artifactId>
+        </dependency>
+
+        <!-- collector 关闭时直连后端 trace 需要；不使用直连 trace 的宿主可不引入。 -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>

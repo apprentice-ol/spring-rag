@@ -62,6 +62,23 @@ exporters:
     headers:
       Authorization: Basic ${env:LANGFUSE_AUTH}
 
+  # ③ OpenObserve OTLP Logs（应用日志统一走 OTLP Logs 后，由 collector 转发）
+  otlphttp/openobserve-logs:
+    logs_endpoint: http://host.docker.internal:5080/api/default/v1/logs
+    tls:
+      insecure: true
+    headers:
+      Authorization: Basic ${env:OO_AUTH}
+      stream-name: springai_rag_logs
+
+  # ④ OpenObserve OTLP Metrics（应用 metrics 统一走 OTLP Metrics）
+  otlphttp/openobserve-metrics:
+    metrics_endpoint: http://host.docker.internal:5080/api/default/v1/metrics
+    tls:
+      insecure: true
+    headers:
+      Authorization: Basic ${env:OO_AUTH}
+
 service:
   pipelines:
     # 每个后端一条独立 pipeline：加新后端 = 加 exporter + 加一条 pipeline（可选加 transform）
@@ -73,6 +90,14 @@ service:
       receivers: [otlp]
       processors: [filter/drop-noise, transform/langfuse, batch]
       exporters: [otlphttp/langfuse]
+    logs/openobserve:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve-logs]
+    metrics/openobserve:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/openobserve-metrics]
   telemetry:
     logs:
       level: info

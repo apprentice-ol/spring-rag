@@ -7,7 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchChannelType;
-import com.nageoffer.ai.obs.StructuredLog;
+import com.nageoffer.ai.obs.observation.logging.ObsStructuredLog;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,7 +23,7 @@ import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 
 /**
  * 百炼 Rerank 客户端。
@@ -69,7 +69,7 @@ public class BaiLianRerankClient implements RerankClient {
     }
 
     @Override
-    @TraceStep("rag.rerank.call")
+    @ObservedStep("rag.rerank.call")
     public List<RetrievedChunk> rerank(String query, List<RetrievedChunk> candidates, int topN) {
         if (CollUtil.isEmpty(candidates) || topN <= 0) {
             return List.of();
@@ -217,8 +217,8 @@ public class BaiLianRerankClient implements RerankClient {
             }
         }
 
-        // 逐条 relevance_score 埋点：与 @TraceStep("rag.rerank.call") 的 span 用 step_id 关联（emit 自动取 MDC）
-        StructuredLog.emit("rerank.scores",
+        // 逐条 relevance_score 埋点：与 @ObservedStep("rag.rerank.call") 的 span 用 step_id 关联（emit 自动取 MDC）
+        ObsStructuredLog.emit("rerank.scores",
                 Map.of("model", model, "min_relevance_score", minRelevanceScore,
                         "kept", reranked.size(), "dropped", dropped, "scores", scores));
         return reranked;

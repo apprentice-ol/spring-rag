@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -46,7 +46,7 @@ public class VectorSearchChannel implements SearchChannel {
 
     @Override
     @Transactional(readOnly = true)
-    @TraceStep("rag.channel")
+    @ObservedStep("rag.channel")
     public SearchChannelResult search(SearchContext context) {
         long t0 = System.currentTimeMillis();
 

@@ -22,7 +22,7 @@ import org.springframework.util.StringUtils;
  *
  * <p><b>LLM 埋点不在此处理</b>——Spring AI 每次调用自动建 ChatModel observation，
  * gen_ai.* 内容与 token 用量由 Spring AI 原生输出；会话/pipeline 关联由 obs-telemetry 的
- * {@link com.nageoffer.ai.obs.springai.SpringAiConversationCorrelationFilter} 挂到原生 span。
+ * {@link com.nageoffer.ai.obs.autoconfigure.springai.SpringAiConversationObservationFilter} 挂到原生 span。
  * 本类只装配 ChatClient，不挂任何 Advisor。</p>
  *
  * @see com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine
@@ -99,7 +99,7 @@ public class ChatClientConfig {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(20);
         executor.setThreadNamePrefix("rag-ctx-");
-        // 跨线程传播 MDC + OTel Context（Spring 官方 ContextPropagatingTaskDecorator，accessor 由 obs ContextPropagationConfig 注册），使通道检索子 span 挂在父 trace 下
+        // 跨线程传播 MDC + OTel Context（Spring 官方 ContextPropagatingTaskDecorator，accessor 由 obs ContextPropagationConfiguration 注册），使通道检索子 span 挂在父 trace 下
         executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);

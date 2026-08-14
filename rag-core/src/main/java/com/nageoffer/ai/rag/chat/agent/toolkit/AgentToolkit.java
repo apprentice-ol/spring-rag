@@ -14,7 +14,7 @@ import com.nageoffer.ai.rag.chat.retrieval.WebSearchChannel;
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.properties.AgentProperties;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -72,7 +72,7 @@ public class AgentToolkit {
 
     // ==================== retrieve ====================
 
-    @TraceStep("rag.agent.retrieve")
+    @ObservedStep("rag.agent.retrieve")
     public MultiChannelRetrievalEngine.RetrievalResult retrieve(SearchContext ctx) {
         return retrievalEngine.retrieve(ctx);
     }
@@ -83,7 +83,7 @@ public class AgentToolkit {
      * 评估 chunk 列表对问题的相关性，返回逐条分数 + 聚合裁决。
      * 失败时降级为"全 relevant"（不阻断检索）。
      */
-    @TraceStep("rag.agent.grade")
+    @ObservedStep("rag.agent.grade")
     public GradingResult grade(String query, List<RetrievedChunk> chunks, AgentProperties opts) {
         if (chunks == null || chunks.isEmpty()) {
             return GradingResult.empty();

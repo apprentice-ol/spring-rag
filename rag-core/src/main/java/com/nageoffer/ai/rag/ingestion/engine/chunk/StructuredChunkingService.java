@@ -40,7 +40,7 @@ import java.util.Objects;
  * 封装"<b>blocks 非空 → block-aware 分发；否则 → 纯文本 legacy 策略</b>"的唯一判断，
  * 供两条分块入口共用：
  * <ul>
- *   <li>{@code ingestion} 流水线的 ChunkerNode（Pipeline 模式）</li>
+ *   <li>{@code ingestion} 流水线的 ChunkerNode（ObservationPipeline 模式）</li>
  *   <li>{@code knowledge} 文档的 KnowledgeDocumentServiceImpl（简单分块模式）</li>
  * </ul>
  * 两处曾各写各的，导致简单分块模式漏接 block-aware（表格被拍平成文本后随意切碎）；

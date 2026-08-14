@@ -8,7 +8,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 
 /**
  * Rerank 精排处理器（责任链第三环）。
@@ -52,7 +52,7 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
     }
 
     @Override
-    @TraceStep("rag.postproc")
+    @ObservedStep("rag.postproc")
     public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
                                          List<SearchChannelResult> results,
                                          SearchContext context) {

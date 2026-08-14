@@ -70,7 +70,7 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
             node.setConditionJson(jsonToString(nc.getCondition()));
             nodeMapper.insert(node);
         }
-        log.info("[Pipeline] 创建流水线: id={}, name={}, nodes={}", pipeline.getId(), name, nodes.size());
+        log.info("[ObservationPipeline] 创建流水线: id={}, name={}, nodes={}", pipeline.getId(), name, nodes.size());
         return pipeline.getId();
     }
 

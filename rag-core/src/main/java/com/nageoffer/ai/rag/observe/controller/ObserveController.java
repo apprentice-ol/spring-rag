@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.observe.controller;
 
-import com.nageoffer.ai.rag.config.properties.OpenObserveProperties;
+import com.nageoffer.ai.obs.backends.openobserve.OpenObserveProperties;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;

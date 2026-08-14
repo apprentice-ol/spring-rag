@@ -10,7 +10,7 @@ spring:
     import:
       - "optional:file:.env[.properties]"
       - "optional:file:../.env[.properties]"
-      - "classpath:application-obs.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
+      - "optional:classpath:application-obs.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
   application:
     name: springai-rag
 

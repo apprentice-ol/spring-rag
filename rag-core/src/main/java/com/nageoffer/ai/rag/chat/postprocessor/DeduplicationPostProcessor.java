@@ -8,7 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 
 /**
  * 检索结果去重处理器（责任链第一环）。
@@ -36,7 +36,7 @@ public class DeduplicationPostProcessor implements SearchResultPostProcessor {
     }
 
     @Override
-    @TraceStep("rag.postproc")
+    @ObservedStep("rag.postproc")
     public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
                                          List<SearchChannelResult> results,
                                          SearchContext context) {

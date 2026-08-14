@@ -6,9 +6,9 @@ import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.ConversationMapper;
 import com.nageoffer.ai.rag.chat.dao.mapper.MessageMapper;
 import com.nageoffer.ai.rag.chat.service.ChatService;
-import com.nageoffer.ai.obs.TraceStep;
-import com.nageoffer.ai.obs.trigger.TraceConversation;
-import com.nageoffer.ai.obs.propagation.ContextPropagator;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedConversation;
+import com.nageoffer.ai.obs.observation.propagation.ContextPropagator;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -47,14 +47,13 @@ public class ChatController {
 
 
 
-    @TraceStep("rag.chat")
-    @TraceConversation
+    @ObservedStep("rag.chat")
+    @ObservedConversation
     @RequestMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE,
                     method = {RequestMethod.GET, RequestMethod.POST})
     public SseEmitter stream(@RequestParam String question,
                              @RequestParam(required = false) String conversationId,
                              @RequestParam(required = false) String agent) {
-        // conversationId 由 @TraceConversation 切面保证非空（空则回填 UUID），无需在此兜底生成
         // 5 分钟超时
         SseEmitter emitter = new SseEmitter(300_000L);
         Thread.ofVirtual().start(ContextPropagator.wrap(() -> {

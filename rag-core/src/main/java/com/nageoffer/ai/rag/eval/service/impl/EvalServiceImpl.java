@@ -19,7 +19,7 @@ import com.nageoffer.ai.rag.eval.domain.EvalParamSnapshot;
 import com.nageoffer.ai.rag.eval.domain.EvalRunOptions;
 import com.nageoffer.ai.rag.eval.runner.EvalRunner;
 import com.nageoffer.ai.rag.eval.service.EvalService;
-import com.nageoffer.ai.obs.propagation.ContextPropagator;
+import com.nageoffer.ai.obs.observation.propagation.ContextPropagator;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ExecutorService;

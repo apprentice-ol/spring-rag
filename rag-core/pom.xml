@@ -26,6 +26,11 @@
             <groupId>com.nageoffer.ai</groupId>
             <artifactId>obs-telemetry</artifactId>
         </dependency>
+        <!-- 具体后端适配：OpenObserve + Langfuse 配置、直连 exporter 与 OTLP bridge -->
+        <dependency>
+            <groupId>com.nageoffer.ai</groupId>
+            <artifactId>obs-telemetry-backends</artifactId>
+        </dependency>
 
         <!-- Web（MVC + SseEmitter 流式输出） -->
         <dependency>
@@ -78,12 +83,24 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-otel</artifactId>
         </dependency>
+        <!-- OTLP Metrics exporter：让 management.otlp.metrics.export.url 真正生效 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-otlp</artifactId>
+        </dependency>
 
 
         <!-- OTLP exporter：把 trace 发到 otel-collector（collector 再按后端 pipeline 扇出） -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry logback appender：日志统一走 OTLP Logs，而不是自定义 OpenObserveAppender -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
+            <version>2.15.0-alpha</version>
         </dependency>
 
         <!-- AOP：@TraceStep 注解切面（spring-boot-starter-web 不带，需显式引入） -->

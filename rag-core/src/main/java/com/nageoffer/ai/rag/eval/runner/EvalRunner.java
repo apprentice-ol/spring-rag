@@ -35,8 +35,8 @@ import com.nageoffer.ai.rag.eval.metrics.PrecisionAtKScorer;
 import com.nageoffer.ai.rag.eval.metrics.RecallAtKScorer;
 import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
 import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
-import com.nageoffer.ai.obs.Telemetry;
-import com.nageoffer.ai.obs.event.TraceHandle;
+import com.nageoffer.ai.obs.observation.ObsTemplate;
+import com.nageoffer.ai.obs.observation.span.ObsSpan;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -59,7 +59,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import com.nageoffer.ai.obs.propagation.ContextPropagator;
+import com.nageoffer.ai.obs.observation.propagation.ContextPropagator;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.MDC;
 import lombok.extern.slf4j.Slf4j;
@@ -81,7 +81,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class EvalRunner {
 
-    private final Telemetry ragTelemetry;
+    private final ObsTemplate ragTelemetry;
     private final AgentRegistry agentRegistry;
     private final AgentProperties agentProperties;
     private final ChatProperties chatProperties;
@@ -204,7 +204,7 @@ public class EvalRunner {
                                      Map<String, String> expectedNameMap, Semaphore semaphore) {
         // 开 item 独立的 root trace（无父）：metric.trace_id 记 item 自己的 traceId（前端/OO 跳转一致），
         // 子 span 由 ContextPropagation 传播挂到 item root 下。startRoot 已把 traceId 写 MDC。
-        try (TraceHandle root = ragTelemetry.openTrace("eval.item")) {
+        try (ObsSpan root = ragTelemetry.openTrace("eval.item")) {
             root.tag("eval.item_id", item.getId());
             root.tag("eval.run_id", runId);
             root.traceInput(item.getQuestion());

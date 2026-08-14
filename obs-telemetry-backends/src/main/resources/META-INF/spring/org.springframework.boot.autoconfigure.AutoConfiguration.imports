@@ -1,0 +1,3 @@
+com.nageoffer.ai.obs.backends.ObsBackendsAutoConfiguration
+com.nageoffer.ai.obs.backends.openobserve.OpenObserveOtlpAutoConfiguration
+com.nageoffer.ai.obs.backends.langfuse.LangfuseOtlpAutoConfiguration

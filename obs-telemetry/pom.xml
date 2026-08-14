@@ -46,6 +46,15 @@
             <artifactId>opentelemetry-api</artifactId>
         </dependency>
 
+        <!-- OTLP Logs 的 logback appender（optional）。
+             宿主如果希望日志统一走 OTLP Logs，需要自行引入该依赖；本模块提供 appender 初始化。 -->
+        <dependency>
+            <groupId>io.opentelemetry.instrumentation</groupId>
+            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
+            <version>2.15.0-alpha</version>
+            <optional>true</optional>
+        </dependency>
+
         <!-- micrometer Context Propagation（ThreadLocalAccessor：MDC / OTel Context / ConversationContext 跨线程透传） -->
         <dependency>
             <groupId>io.micrometer</groupId>

@@ -1,26 +1,81 @@
 # ====================================================================
-# 可观测性集中配置（obs.* 一个块管所有）
+# 可观测性连接与开关（统一收敛到 obs.* 命名空间）
 #
-# 数据流：app ──OTLP──> otel-collector ──扇出──> OpenObserve（trace/日志存储）
-#                                            └──> Langfuse（trace 可视化 / generation UI）
-# Langfuse 连接在 otel-collector 侧（app 只发 OTLP），故本文件不含 Langfuse 地址。
+# 统一走 OTLP：trace 走 OTLP Traces，日志走 OTLP Logs。
+#
+# 两种运行模式：
+#   obs.collector.enabled=true（默认，推荐）
+#     app --OTLP--> otel-collector --+--> OpenObserve
+#                                    `--> Langfuse
+#     应用只连接 collector，后端扇出、采样、脱敏由 collector 负责。
+#
+#   obs.collector.enabled=false
+#     app --OTLP traces--> Langfuse
+#     app --OTLP traces--> OpenObserve
+#     app --OTLP logs  --> OpenObserve
+#     应用直连后端，少一个 collector 进程，但后端地址/凭据变更需要改应用。
+#
+# 无论哪种模式，日志都进入 OpenObserve；Langfuse 主要接收 trace/LLM observation。
 # ====================================================================
+
 obs:
-  # ① 埋点核心（obs-telemetry 组件：@TraceStep / Telemetry / sink 链）
-  tracer-name: springai-rag    # OTel tracer 名（openTrace 无父新 trace 根 span，如 eval 每 item 独立 trace）
-  llm:
-    content-attributes: true   # LLM 埋点：prompt/completion/model/usage → OTel gen_ai.*（ChatModelContentFilter 自动）
+  # ---------------------------------------------------------------
+  # 1. 埋点与采样（obs-telemetry 核心）
+  # ---------------------------------------------------------------
+  tracer-name: springai-rag            # OTel tracer 名（离线 eval 等无父根 trace 用）
+  sampling:
+    probability: 1.0                   # 开发期全采样；生产建议调低降量
 
-  # ② trace 发送（obs 桥接到 Spring Boot actuator OTel exporter，用户不直接配 management）
-  export:
-    otlp:
-      endpoint: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318/v1/traces}   # OTLP/HTTP → otel-collector
-    sampling:
-      probability: 1.0   # 全采样；生产可调低降量
+  # ---------------------------------------------------------------
+  # 2. OTel Collector：可选开关
+  #    enabled=true  应用只发 collector
+  #    enabled=false 应用直连下方 OpenObserve / Langfuse OTLP 入口
+  # ---------------------------------------------------------------
+  collector:
+    enabled: ${OBS_COLLECTOR_ENABLED:true}
+    base-url: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}
+    traces-endpoint: ${OBS_COLLECTOR_TRACES_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/traces}
+    logs-endpoint: ${OBS_COLLECTOR_LOGS_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/logs}
+    metrics-endpoint: ${OBS_COLLECTOR_METRICS_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics}
+    headers:
+      # collector 开启鉴权时再配置；一般本地开发留空
+      Authorization: ${OBS_COLLECTOR_AUTHORIZATION:}
 
-  # ③ OpenObserve 连接（日志诊断查询侧：app 按 traceId 直查 OO 日志，需 Basic Auth）
+  # ---------------------------------------------------------------
+  # 3. OpenObserve：OTLP 日志/指标入口 + 日志诊断读取凭据
+  #    collector.enabled=false 时，日志端点自动由 url 推导：
+  #      url + /v1/logs
+  #      url + /v1/metrics
+  #    trace 直连端点由 obs-telemetry-backends 的 OpenObserveOtlpAutoConfiguration 使用。
+  # ---------------------------------------------------------------
   openobserve:
-    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 端点（单冒号默认值，避免 :- 占位符解析报错）
-    web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}        # Web UI（前端链路追踪页跳转用）
-    username: ${OO_USERNAME:admin@openobserve.io}               # Basic Auth 用户名（查日志用；生产用环境变量覆盖）
-    password: ${OO_PASSWORD:OpenObserve@2026}                   # Basic Auth 密码（生产用环境变量覆盖）
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 根地址（到组织 default）
+    web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}       # Web UI（前端链路追踪页跳转）
+    username: ${OO_USERNAME:admin@openobserve.io}               # 账号
+    password: ${OO_PASSWORD:OpenObserve@2026}                   # 密码
+    stream: springai_rag_logs                                   # 日志流（OpenObserve 规范化为下划线）
+    # 如需覆盖自动推导的直连端点，可显式打开：
+    # otlp-base-url: ${OPENOBSERVE_OTLP_BASE_URL:}
+    # otlp-traces-endpoint: ${OPENOBSERVE_OTLP_TRACES_ENDPOINT:}
+    # otlp-logs-endpoint: ${OPENOBSERVE_OTLP_LOGS_ENDPOINT:}
+    # otlp-metrics-endpoint: ${OPENOBSERVE_OTLP_METRICS_ENDPOINT:}
+
+  # ---------------------------------------------------------------
+  # 4. Langfuse：LLM / trace 可视化
+  #    collector.enabled=true  由 collector 转发
+  #    collector.enabled=false 应用直连 otlp-traces-endpoint
+  #    OTLP Basic Auth = base64(public-key:secret-key)，真实值放 .env
+  # ---------------------------------------------------------------
+  langfuse:
+    url: ${LANGFUSE_URL:http://localhost:3000}                  # Web UI
+    public-key: ${LANGFUSE_PUBLIC_KEY:}                         # pk-lf-...
+    secret-key: ${LANGFUSE_SECRET_KEY:}                         # sk-lf-...
+    otlp-traces-endpoint: ${LANGFUSE_OTLP_TRACES_ENDPOINT:${LANGFUSE_URL:http://localhost:3000}/api/public/otel/v1/traces}
+
+  # ---------------------------------------------------------------
+  # 5. Spring AI 内容捕获（obs.springai.* 桥接到 spring.ai.chat.observations.*）
+  #    LLM 的 gen_ai span / token 用量由 Spring AI 原生输出，这里只控制 prompt/completion 是否落库。
+  # ---------------------------------------------------------------
+  springai:
+    log-prompt: false
+    log-completion: false

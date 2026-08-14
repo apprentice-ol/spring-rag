@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 
 /**
  * 文档作用域收敛后处理器（dedup 之后、fusion 之前）。
@@ -43,7 +43,7 @@ public class DocScopePostProcessor implements SearchResultPostProcessor {
     }
 
     @Override
-    @TraceStep("rag.postproc")
+    @ObservedStep("rag.postproc")
     public List<RetrievedChunk> process(List<RetrievedChunk> chunks,
                                          List<SearchChannelResult> results,
                                          SearchContext context) {

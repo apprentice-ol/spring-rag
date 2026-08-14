@@ -7,7 +7,7 @@ import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievalBudget;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
-import com.nageoffer.ai.rag.config.properties.OpenObserveProperties;
+import com.nageoffer.ai.obs.backends.openobserve.OpenObserveProperties;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
 import com.nageoffer.ai.rag.diagnose.client.OpenObserveQueryClient;
 import com.nageoffer.ai.rag.diagnose.dto.DiagnosePreview;

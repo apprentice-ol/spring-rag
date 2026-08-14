@@ -7,7 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.obs.TraceStep;
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 
 /**
  * 基于 LLM 的意图分类器实现。
@@ -35,7 +35,7 @@ public class DefaultIntentClassifier implements IntentClassifier {
     }
 
     @Override
-    @TraceStep("rag.intent.classify")
+    @ObservedStep("rag.intent.classify")
     public IntentResult classify(String question) {
         try {
             // system/user 均不传 param → 不走 StringTemplate，prompt 中的 JSON 花括号原样发送
