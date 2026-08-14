@@ -22,15 +22,21 @@ public final class ObservationSpan implements SpanSession {
     private final Observation.Scope scope;
     private final Span span;
     private final String spanId;
+    /** 开 scope 前的 MDC 旧值（外层 step 的 step/step_id），closeScope 时恢复——嵌套 step 不丢外层键。 */
+    private final String prevStep;
+    private final String prevStepId;
 
-    private ObservationSpan(Observation observation, Span span, String spanId, Observation.Scope scope) {
+    private ObservationSpan(Observation observation, Span span, String spanId, Observation.Scope scope,
+                            String prevStep, String prevStepId) {
         this.observation = observation;
         this.span = span;
         this.spanId = spanId;
         this.scope = scope;
+        this.prevStep = prevStep;
+        this.prevStepId = prevStepId;
     }
 
-    /** 开一个挂当前父的 step span 并 openScope（makeCurrent + 写 MDC step/step_id）。 */
+    /** 开一个挂当前父的 step span 并 openScope（makeCurrent + 写 MDC step/step_id，旧值保存供恢复）。 */
     public static ObservationSpan createAndOpen(String name, ObservationRegistry registry) {
         Observation observation = Observation.createNotStarted(name, registry)
                 .lowCardinalityKeyValue("step", name)
@@ -38,9 +44,11 @@ public final class ObservationSpan implements SpanSession {
         Observation.Scope scope = observation.openScope();
         Span span = Span.current();
         String spanId = span.getSpanContext().getSpanId();
+        String prevStep = MDC.get("step");
+        String prevStepId = MDC.get("step_id");
         MDC.put("step", name);
         MDC.put("step_id", spanId);
-        return new ObservationSpan(observation, span, spanId, scope);
+        return new ObservationSpan(observation, span, spanId, scope, prevStep, prevStepId);
     }
 
     @Override
@@ -83,8 +91,17 @@ public final class ObservationSpan implements SpanSession {
             scope.close();
         } catch (Exception ignored) {
         }
-        MDC.remove("step");
-        MDC.remove("step_id");
+        // 恢复外层的 step/step_id（嵌套场景直接 remove 会把外层键一起清掉）；外层无值才真正移除
+        restoreMdc("step", prevStep);
+        restoreMdc("step_id", prevStepId);
+    }
+
+    private static void restoreMdc(String key, String prev) {
+        if (prev != null) {
+            MDC.put(key, prev);
+        } else {
+            MDC.remove(key);
+        }
     }
 
     @Override

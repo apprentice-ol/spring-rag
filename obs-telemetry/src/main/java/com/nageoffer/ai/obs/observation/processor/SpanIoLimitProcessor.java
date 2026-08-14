@@ -3,10 +3,9 @@ package com.nageoffer.ai.obs.observation.processor;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
 import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
- * 截断 processor（转·第二环）：把超长 data 截断到 {@link SpanIoLimits#MAX_SPAN_IO}，防撑爆 span attribute。
+ * 截断 processor（转·第二环）：把超长 data 截断到 {@link SpanIoLimits#maxSpanIo()}，防撑爆 span attribute。
  *
  * <p><b>所属维度</b>：转（{@link ObservationProcessor} 内置实现，@Order(20)）。</p>
  *
@@ -21,7 +20,6 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>不做什么</b>：不写 span（exporter 的事）；不摘要（上一环做）。</p>
  */
-@Component
 @Order(20)
 public class SpanIoLimitProcessor implements ObservationProcessor {
 
@@ -33,11 +31,10 @@ public class SpanIoLimitProcessor implements ObservationProcessor {
         }
         String s = cs.toString();
         if (event.getType() == ObsEvent.EventType.TRACE_IO) {
-            event.setData(s.length() > SpanIoLimits.MAX_SPAN_IO
-                    ? s.substring(0, SpanIoLimits.MAX_SPAN_IO) : s);  // trace IO：纯截断无后缀
+            event.setData(s.length() > SpanIoLimits.maxSpanIo() ? s.substring(0, SpanIoLimits.maxSpanIo()) : s);  // trace IO：纯截断无后缀
         } else {
-            event.setData(s.length() <= SpanIoLimits.MAX_SPAN_IO
-                    ? s : s.substring(0, SpanIoLimits.MAX_SPAN_IO) + "…(truncated)");  // step IO：带后缀
+            event.setData(s.length() <= SpanIoLimits.maxSpanIo()
+                    ? s : s.substring(0, SpanIoLimits.maxSpanIo()) + "…(truncated)");  // step IO：带后缀
         }
         return event;
     }

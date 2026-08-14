@@ -21,14 +21,22 @@ public final class RootSpan implements SpanSession {
     private final Span span;
     private final String spanId;
     private final io.opentelemetry.context.Scope scope;
+    /** 开 scope 前的 MDC 旧值（如外层请求已有 step/traceId），closeScope 时恢复——不清掉外层键。 */
+    private final String prevStep;
+    private final String prevStepId;
+    private final String prevTraceId;
 
-    private RootSpan(Span span, String spanId, io.opentelemetry.context.Scope scope) {
+    private RootSpan(Span span, String spanId, io.opentelemetry.context.Scope scope,
+                     String prevStep, String prevStepId, String prevTraceId) {
         this.span = span;
         this.spanId = spanId;
         this.scope = scope;
+        this.prevStep = prevStep;
+        this.prevStepId = prevStepId;
+        this.prevTraceId = prevTraceId;
     }
 
-    /** 开一个无父的 trace 根 span 并 makeCurrent（写 MDC step/step_id/traceId）。tracerName 来自配置。 */
+    /** 开一个无父的 trace 根 span 并 makeCurrent（写 MDC step/step_id/traceId，旧值保存供恢复）。tracerName 来自配置。 */
     public static RootSpan createAndOpen(String name, OpenTelemetry otel, String tracerName) {
         Span span = otel.getTracer(tracerName)
                 .spanBuilder(name)
@@ -37,10 +45,13 @@ public final class RootSpan implements SpanSession {
         io.opentelemetry.context.Scope scope = span.makeCurrent();
         String spanId = span.getSpanContext().getSpanId();
         String traceId = span.getSpanContext().getTraceId();
+        String prevStep = MDC.get("step");
+        String prevStepId = MDC.get("step_id");
+        String prevTraceId = MDC.get("traceId");
         MDC.put("step", name);
         MDC.put("step_id", spanId);
         MDC.put("traceId", traceId);
-        return new RootSpan(span, spanId, scope);
+        return new RootSpan(span, spanId, scope, prevStep, prevStepId, prevTraceId);
     }
 
     @Override
@@ -85,9 +96,18 @@ public final class RootSpan implements SpanSession {
             scope.close();
         } catch (Exception ignored) {
         }
-        MDC.remove("step");
-        MDC.remove("step_id");
-        MDC.remove("traceId");
+        // 恢复外层键（ROOT 开在已有请求/step 内时不误清外层 traceId）；外层无值才真正移除
+        restoreMdc("step", prevStep);
+        restoreMdc("step_id", prevStepId);
+        restoreMdc("traceId", prevTraceId);
+    }
+
+    private static void restoreMdc(String key, String prev) {
+        if (prev != null) {
+            MDC.put(key, prev);
+        } else {
+            MDC.remove(key);
+        }
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.nageoffer.ai.obs.observation.span.SpanSession;
 import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
 import com.nageoffer.ai.obs.observation.ObservationPipeline;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 一个观测步骤 / 根的 trace 句柄：封装"开→输入→输出→异常→关闭"的生命周期模板。
@@ -20,7 +21,7 @@ import com.nageoffer.ai.obs.observation.event.ObsEvent;
  *
  * <p><b>不做什么</b>：不加工 data（processor 的事）；不写 span/发日志（exporter 的事）；不碰 MDC（backend.closeScope 管）。</p>
  *
- * <p><b>线程安全</b>：close/finish 靠 {@code completed} 标志幂等。</p>
+ * <p><b>线程安全</b>：close/finish 靠 {@code completed} 的 CAS 幂等（回调并发触发仅一方生效）。</p>
  */
 public final class ObsSpan implements AutoCloseable {
 
@@ -31,7 +32,8 @@ public final class ObsSpan implements AutoCloseable {
     private final long startMs;
     private Object outputData;
     private boolean rawOutput;
-    private volatile boolean completed;
+    /** CAS 保证 close/finish 仅一方执行（SSE 的 onCompletion/onTimeout/onError 可能并发触发）。 */
+    private final AtomicBoolean completed = new AtomicBoolean(false);
 
     public ObsSpan(String name, SpanSession backend, ObservationPipeline pipeline) {
         this.name = name;
@@ -91,13 +93,12 @@ public final class ObsSpan implements AutoCloseable {
         return this;
     }
 
-    /** 同步关闭：emitOutput → closeScope（关 scope + 清 MDC 生命周期键）→ end。幂等。 */
+    /** 同步关闭：emitOutput → closeScope（关 scope + 恢复 MDC 生命周期键）→ end。幂等（CAS）。 */
     @Override
     public void close() {
-        if (completed) {
+        if (!completed.compareAndSet(false, true)) {
             return;
         }
-        completed = true;
         try {
             emitOutput();
         } finally {
@@ -106,12 +107,11 @@ public final class ObsSpan implements AutoCloseable {
         }
     }
 
-    /** 异步关闭（流式 doFinally）：emitOutput → end（不关 scope）。幂等。 */
+    /** 异步关闭（流式 doFinally）：emitOutput → end（不关 scope）。幂等（CAS）。 */
     public void finish() {
-        if (completed) {
+        if (!completed.compareAndSet(false, true)) {
             return;
         }
-        completed = true;
         try {
             emitOutput();
         } finally {

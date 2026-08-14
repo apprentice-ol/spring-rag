@@ -1,5 +1,7 @@
 package com.nageoffer.ai.obs.autoconfigure;
 
+import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
+import com.nageoffer.ai.obs.observation.support.Summarizer;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -34,6 +36,9 @@ public class ObsProperties {
     /** trace 采样。 */
     private Sampling sampling = new Sampling();
 
+    /** 内容捕获与摘要限额（启动期应用到 SpanIoLimits/Summarizer 全局值）。 */
+    private Limits limits = new Limits();
+
     @Data
     public static class Collector {
         /**
@@ -63,5 +68,26 @@ public class ObsProperties {
     public static class Sampling {
         /** 采样率（0.0~1.0，1.0 = 全采样）。 */
         private double probability = 1.0;
+    }
+
+    @Data
+    public static class Limits {
+        /** span/trace 单字段字符上限（防膨胀，含 trace IO 与 raw 输出截断）。默认 20000。 */
+        private int maxSpanIo = 20000;
+
+        /** step IO 摘要时单字符串截断长度。默认 200。 */
+        private int summarizeMaxString = 200;
+
+        /** 摘要时集合/数组保留的预览条数。默认 3。 */
+        private int summarizeMaxPreview = 3;
+
+        /** 摘要时 Map 保留的 entry 数。默认 10。 */
+        private int summarizeMaxMapEntries = 10;
+
+        /** 启动期一次性落到 SpanIoLimits/Summarizer 全局值（开任何 span 前调用）。 */
+        void apply() {
+            SpanIoLimits.configure(maxSpanIo);
+            Summarizer.configure(summarizeMaxString, summarizeMaxPreview, summarizeMaxMapEntries);
+        }
     }
 }

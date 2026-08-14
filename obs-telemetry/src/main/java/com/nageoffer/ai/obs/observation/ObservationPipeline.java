@@ -6,7 +6,6 @@ import com.nageoffer.ai.obs.observation.exporter.ObservationExporter;
 import com.nageoffer.ai.obs.observation.processor.ObservationProcessor;
 import java.util.List;
 import org.springframework.core.annotation.OrderUtils;
-import org.springframework.stereotype.Component;
 
 /**
  * 观测 pipeline 编排：事件串行流过 processor 链（转），fan-out 给 exporter 链（发）。
@@ -28,10 +27,13 @@ import org.springframework.stereotype.Component;
  * {@link ObservationProcessor} / {@link ObservationExporter} bean，按 @Order 排序）；被 {@code ObsSpan} /
  * {@code ObsConversation} / {@code ObsTemplate.emit} 调用。</p>
  *
- * <p><b>扩展模型</b>：新 processor/exporter = 实现接口 + @Component，本类与所有 Source 零改动——开闭原则。
+ * <p><b>扩展模型</b>：新 processor/exporter = 实现接口 + 注册为 bean（@Component 或 @Bean 均可），
+ * 本类与所有 Source 零改动——开闭原则。
  * 两链的内置顺序约定：摘要（10）→ 截断（20）→ [用户扩展 30+]；exporter：span（10）→ 日志（20）→ metrics（30）。</p>
+ *
+ * <p><b>性能契约</b>：{@link #emit} 在业务线程<b>同步</b>执行整条链，所有 processor/exporter
+ * 必须无阻塞（内存写/本地日志），任何网络 IO 一律走后端（OTLP exporter / collector）。</p>
  */
-@Component
 public class ObservationPipeline {
 
     private final List<ObservationProcessor> processors;

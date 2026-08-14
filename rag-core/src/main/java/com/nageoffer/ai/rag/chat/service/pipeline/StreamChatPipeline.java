@@ -2,49 +2,37 @@ package com.nageoffer.ai.rag.chat.service.pipeline;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nageoffer.ai.rag.common.util.QueryNormalizer;
+import com.nageoffer.ai.obs.observation.ObsTemplate;
+import com.nageoffer.ai.obs.observation.logging.ObsLogger;
+import com.nageoffer.ai.rag.chat.agent.*;
 import com.nageoffer.ai.rag.chat.dao.entity.ConversationEntity;
 import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.ConversationMapper;
 import com.nageoffer.ai.rag.chat.dao.mapper.MessageMapper;
 import com.nageoffer.ai.rag.chat.intent.IntentClassifier;
-import com.nageoffer.ai.rag.chat.normalize.QueryRewriter;
 import com.nageoffer.ai.rag.chat.intent.IntentResult;
-import com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine;
+import com.nageoffer.ai.rag.chat.normalize.QueryRewriter;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievalBudget;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
-import com.nageoffer.ai.rag.chat.agent.AgentRequest;
-import com.nageoffer.ai.rag.chat.agent.AgentRegistry;
-import com.nageoffer.ai.rag.chat.agent.AgentRetrievalResult;
-import com.nageoffer.ai.rag.chat.agent.AgentTrace;
-import com.nageoffer.ai.rag.chat.agent.AgentTraceService;
-import com.nageoffer.ai.rag.chat.agent.RagAgent;
-import com.nageoffer.ai.rag.chat.agent.RetrievalVerdict;
 import com.nageoffer.ai.rag.chat.service.RagAnswerStreamService;
 import com.nageoffer.ai.rag.chat.util.TraceIdExtractor;
+import com.nageoffer.ai.rag.common.util.QueryNormalizer;
+import com.nageoffer.ai.rag.config.prompt.PromptStore;
 import com.nageoffer.ai.rag.config.properties.AgentProperties;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
-import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.rag.diagnose.dto.DiagnosePreview;
-import com.nageoffer.ai.rag.diagnose.dto.DiagnoseResponse;
-import com.nageoffer.ai.rag.diagnose.dto.MatchResult;
-import com.nageoffer.ai.rag.diagnose.dto.RelatedDoc;
-import com.nageoffer.ai.rag.diagnose.dto.TraceLogEntry;
+import com.nageoffer.ai.rag.diagnose.dto.*;
 import com.nageoffer.ai.rag.diagnose.service.LogDiagnoseService;
-import com.nageoffer.ai.obs.observation.logging.ObsLogger;
-
-import java.io.IOException;
-import java.util.function.Consumer;
-import java.time.LocalDateTime;
-import java.util.*;
-
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.util.Strings;
-import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.function.Consumer;
 
 /**
  * 流式对话管道（StreamChatPipeline）。
@@ -96,7 +84,9 @@ public class StreamChatPipeline {
         saveMessage(conversationId, "user", question);
         long t0 = System.currentTimeMillis();
         // 0. 查询归一化：① 规则式（去噪 + 疑问→陈述）→ ② LLM 改写（带历史上下文消解指代词）
-        String ruleNormalized = QueryNormalizer.normalize(question);
+        // QueryNormalizer 是 rag-common 静态工具（AOP 够不到），手动开 step 埋点
+        String ruleNormalized = ObsTemplate.getInstance()
+                .step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
 
         if (ruleNormalized.isBlank()) {
             ruleNormalized = question == null ? "" : question.trim();

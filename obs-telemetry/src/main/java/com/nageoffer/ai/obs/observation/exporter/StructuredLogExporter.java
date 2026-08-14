@@ -4,7 +4,6 @@ import com.nageoffer.ai.obs.observation.logging.ObsStructuredLog;
 import com.nageoffer.ai.obs.observation.span.SpanWriter;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
  * 发结构化日志的 exporter（发·出口 B）。
@@ -17,7 +16,6 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>不做什么</b>：不写 span attribute（{@link SpanAttributeExporter}）；TRACE_IO/ATTRIBUTE 不发日志。</p>
  */
-@Component
 @Order(20)
 public class StructuredLogExporter implements ObservationExporter {
 

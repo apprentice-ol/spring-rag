@@ -15,13 +15,16 @@ import java.lang.annotation.Target;
  * <p>{@link #kind()} 指定父子关系（parentage，与 OTel SpanKind 无关）：
  * <ul>
  *   <li>{@code STEP}（默认）：挂当前 ambient 父 span 下。</li>
- *   <li>{@code ROOT}：强制开一条新的 trace 根 span（无父），用于后台任务或"已 in-trace 需脱钩"。</li>
+ *   <li>{@code ROOT}：强制开一条新的 trace 根 span（无父），用于后台任务或"已 in-trace 需脱钩"。
+ *       <b>注意</b>：在 HTTP 请求内使用会与请求所在的 trace 断开——OpenObserve 里呈现为两条独立 trace，
+ *       且关闭时 MDC 的 traceId 恢复为外层旧值。请求链路内请保持默认 STEP。</li>
  * </ul></p>
  *
  * <p>{@link #captureOutput()}：流式方法（返回 {@code Flux}/{@code Mono}/{@code SseEmitter}）为 true 时，
  * 把完整输出原样记为 span output，否则不捕获（默认）。同步方法忽略。</p>
  *
- * <p>生命周期由返回类型自动分派：普通对象→同步 close；{@code Flux}/{@code Mono}→{@code doFinally} finish；
+ * <p>生命周期由返回类型自动分派：普通对象→同步 close；{@code Flux}→<b>首次订阅时</b>开 span +
+ * {@code doFinally} finish（未被订阅的 Flux 不留悬空 span，重复订阅每次各开一个）；
  * {@code SseEmitter}/{@code ResponseBodyEmitter}→完成回调 finish。</p>
  *
  * <p><b>限制</b>：仅对 Spring 代理的 bean 方法生效（同类内部调用 / 静态方法 / 私有方法切不到），这类盲区用手动 {@code ObsTemplate}。</p>

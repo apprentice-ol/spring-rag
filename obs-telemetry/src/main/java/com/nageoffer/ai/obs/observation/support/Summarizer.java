@@ -1,16 +1,10 @@
 package com.nageoffer.ai.obs.observation.support;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
+import com.google.gson.*;
+import com.nageoffer.ai.obs.observation.processor.SummarizeProcessor;
+
 import java.lang.reflect.Array;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * 把任意对象摘要成观测友好（span attribute / 日志）的小对象，防止大 payload 膨胀。
@@ -19,15 +13,31 @@ import java.util.Map;
  *
  * <p><b>职责</b>：String 截断；Number/Boolean/Character 原样；Collection/数组记 size + 前 N 条预览；
  * Map 取前 N entry；其余对象 Gson 转 JsonElement 后递归摘要，序列化失败降级 {@code {type, error}}。</p>
+ *
+ * <p><b>可配置</b>：三个摘要粒度默认 200/3/10，可经 {@code obs.limits.summarize-*} 覆盖
+ * （ObsAutoConfiguration 启动期调 {@link #configure}，启动后不再变更）。</p>
  */
 public final class Summarizer {
 
     private static final Gson GSON = new Gson();
-    private static final int MAX_STRING = 200;
-    private static final int MAX_PREVIEW = 3;
-    private static final int MAX_MAP_ENTRIES = 10;
+    private static volatile int maxString = 200;
+    private static volatile int maxPreview = 3;
+    private static volatile int maxMapEntries = 10;
 
     private Summarizer() {
+    }
+
+    /** 覆盖摘要粒度（启动期配置一次；非正值忽略）。 */
+    public static void configure(int newMaxString, int newMaxPreview, int newMaxMapEntries) {
+        if (newMaxString > 0) {
+            maxString = newMaxString;
+        }
+        if (newMaxPreview > 0) {
+            maxPreview = newMaxPreview;
+        }
+        if (newMaxMapEntries > 0) {
+            maxMapEntries = newMaxMapEntries;
+        }
     }
 
     public static Object summarize(Object o) {
@@ -35,7 +45,7 @@ public final class Summarizer {
             return null;
         }
         if (o instanceof CharSequence c) {
-            return truncate(c.toString(), MAX_STRING);
+            return truncate(c.toString(), maxString);
         }
         if (o instanceof Number || o instanceof Boolean || o instanceof Character) {
             return o;
@@ -77,7 +87,7 @@ public final class Summarizer {
     private static Object summarizeCollection(Collection<?> coll) {
         List<Object> preview = new ArrayList<>();
         for (Object e : coll) {
-            if (preview.size() >= MAX_PREVIEW) {
+            if (preview.size() >= maxPreview) {
                 break;
             }
             preview.add(summarize(e));
@@ -91,7 +101,7 @@ public final class Summarizer {
     private static Object summarizeMap(Map<?, ?> map) {
         Map<String, Object> out = new LinkedHashMap<>();
         for (Map.Entry<?, ?> e : map.entrySet()) {
-            if (out.size() >= MAX_MAP_ENTRIES) {
+            if (out.size() >= maxMapEntries) {
                 break;
             }
             out.put(String.valueOf(e.getKey()), summarize(e.getValue()));
@@ -102,7 +112,7 @@ public final class Summarizer {
     private static Object summarizeArray(Object array) {
         int len = Array.getLength(array);
         List<Object> preview = new ArrayList<>();
-        for (int i = 0; i < len && preview.size() < MAX_PREVIEW; i++) {
+        for (int i = 0; i < len && preview.size() < maxPreview; i++) {
             preview.add(summarize(Array.get(array, i)));
         }
         Map<String, Object> m = new LinkedHashMap<>();
@@ -123,12 +133,12 @@ public final class Summarizer {
             if (p.isNumber()) {
                 return p.getAsNumber();
             }
-            return truncate(p.getAsString(), MAX_STRING);
+            return truncate(p.getAsString(), maxString);
         }
         if (el.isJsonArray()) {
             JsonArray arr = el.getAsJsonArray();
             List<Object> preview = new ArrayList<>();
-            for (int i = 0; i < arr.size() && preview.size() < MAX_PREVIEW; i++) {
+            for (int i = 0; i < arr.size() && preview.size() < maxPreview; i++) {
                 preview.add(summarizeJsonElement(arr.get(i)));
             }
             Map<String, Object> m = new LinkedHashMap<>();
@@ -141,7 +151,7 @@ public final class Summarizer {
             Map<String, Object> m = new LinkedHashMap<>();
             int n = 0;
             for (String key : obj.keySet()) {
-                if (n++ >= MAX_MAP_ENTRIES) {
+                if (n++ >= maxMapEntries) {
                     break;
                 }
                 m.put(key, summarizeJsonElement(obj.get(key)));

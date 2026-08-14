@@ -3,7 +3,6 @@ package com.nageoffer.ai.obs.observation.processor;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
 import com.nageoffer.ai.obs.observation.support.Summarizer;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
  * 摘要 processor（转·第一环）：把 STEP_INPUT/STEP_OUTPUT 的大 data 摘要成小对象。
@@ -14,11 +13,10 @@ import org.springframework.stereotype.Component;
  * 深层集合记 size+preview、字符串截断），防大 payload（完整检索结果/整篇文档）膨胀 span/日志。</p>
  *
  * <p><b>raw 语义</b>：{@code event.raw=true}（流式完整 LLM 回答，outputRaw 设置）时跳过摘要——
- * 完整回答要原文落 OpenObserve Output 面板；后续 {@link SpanIoLimitProcessor} 仍做 MAX_SPAN_IO 截断兜底。</p>
+ * 完整回答要原文落 OpenObserve Output 面板；后续 {@link SpanIoLimitProcessor} 仍做 maxSpanIo 截断兜底。</p>
  *
  * <p><b>不做什么</b>：不处理 TRACE_IO（trace 级 IO 要原文，不摘要）；不截断（下一环 SpanIoLimit 做）。</p>
  */
-@Component
 @Order(10)
 public class SummarizeProcessor implements ObservationProcessor {
 

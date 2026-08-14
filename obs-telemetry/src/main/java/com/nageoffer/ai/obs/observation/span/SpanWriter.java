@@ -15,7 +15,7 @@ package com.nageoffer.ai.obs.observation.span;
  */
 public interface SpanWriter {
 
-    /** 写高基数字符串属性（input/output/rag.trace.*，值应由调用方按 {@code SpanIoLimits.MAX_SPAN_IO} 截断）。 */
+    /** 写高基数字符串属性（input/output/rag.trace.*，值应由调用方按 {@code SpanIoLimits.maxSpanIo()} 截断）。 */
     void setAttribute(String key, String value);
 
     /** 写低基数标签（model/channel/hits 等可枚举值，可聚合）。null 由实现兜底为空串。 */

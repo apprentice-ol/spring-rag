@@ -21,7 +21,7 @@ public interface SpanSession extends SpanWriter {
     /** 本后端的 spanId（MDC step_id 用）。 */
     String getSpanId();
 
-    /** 关 scope（不 end span）：关 scope + 移除 MDC 生命周期键（step/step_id[/traceId]）。幂等。 */
+    /** 关 scope（不 end span）：关 scope + 恢复 MDC 生命周期键（step/step_id[/traceId]）为外层旧值，外层无值才移除。幂等。 */
     void closeScope();
 
     /** 结束 span（observation.stop / span.end）。幂等。 */

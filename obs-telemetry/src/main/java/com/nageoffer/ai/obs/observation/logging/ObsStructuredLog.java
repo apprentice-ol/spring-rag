@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 /**
- * 结构化日志：把观测步骤事件拼成固定 schema 的 JSON 串打 {@code log.info}，由 logback appender（如 OpenObserveAppender）转发到日志后端。
+ * 结构化日志：把观测步骤事件拼成固定 schema 的 JSON 串打 {@code log.info}，由 logback appender（如 OTel OpenTelemetryAppender）转发到日志后端。
  *
  * <p><b>所属维度</b>：共享（后端中立——发 slf4j，落哪个后端由应用 logback 配置决定）。</p>
  *

@@ -11,7 +11,6 @@ import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
  * {@link ObservedConversation} 注解切面：在入口方法（请求线程，HTTP server span 为 current）开启对话 trace。
@@ -21,12 +20,11 @@ import org.springframework.stereotype.Component;
  * <p><b>职责</b>：捕获 HTTP 根 span + MDC(conversation_id) + ambient {@code ObsConversation} + 设 input(用户问题)。
  * conversationId 空则生成 UUID 并回填入参（让 trace 与业务用同一个 id）。finally 清理 ambient HOLDER + MDC。</p>
  *
- * <p><b>协作</b>：开启后 ambient 经 context-propagation 透传到虚拟线程/Reactor 回调；业务经 {@link ObsTemplate#conversationOutput} 写 output。</p>
+ * <p><b>协作</b>：由 {@code ObsAutoConfiguration} 注册为 bean。开启后 ambient 经 context-propagation 透传到虚拟线程/Reactor 回调；业务经 {@link ObsTemplate#conversationOutput} 写 output。</p>
  *
  * <p><b>不做什么</b>：不开 step span；不写 output；不感知检索/回答细节。</p>
  */
 @Aspect
-@Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class ObservedConversationAspect {
 

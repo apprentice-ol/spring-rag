@@ -3,7 +3,6 @@ package com.nageoffer.ai.obs.observation.exporter;
 import com.nageoffer.ai.obs.observation.span.SpanWriter;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
 import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
 
 /**
  * 写 span attribute 的 exporter（发·出口 A）。
@@ -19,7 +18,6 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>不做什么</b>：不加工 data（processor 已做）；CUSTOM 不写 attribute（StructuredLogExporter 发日志）。</p>
  */
-@Component
 @Order(10)
 public class SpanAttributeExporter implements ObservationExporter {
 

@@ -2,9 +2,8 @@ package com.nageoffer.ai.obs.observation.propagation;
 
 import io.micrometer.context.ContextRegistry;
 import io.micrometer.context.integration.Slf4jThreadLocalAccessor;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.InitializingBean;
 import reactor.core.publisher.Hooks;
 
 /**
@@ -19,16 +18,16 @@ import reactor.core.publisher.Hooks;
  *   <li>{@link ObsConversationAccessor}：传播对话上下文，让流式回调线程能取到当前对话 trace 写 output。</li>
  * </ul>
  *
- * <p><b>协作</b>：随后开启 {@link Hooks#enableAutomaticContextPropagation()}，使 {@code stream()} 的 Flux 在回调线程自动恢复 MDC + OTel Context + 对话上下文。</p>
+ * <p><b>协作</b>：由 {@code ObsAutoConfiguration} 注册为 bean，{@link #afterPropertiesSet()} 在 bean 初始化时执行，
+ * 随后开启 {@link Hooks#enableAutomaticContextPropagation()}，使 {@code stream()} 的 Flux 在回调线程自动恢复 MDC + OTel Context + 对话上下文。</p>
  *
- * <p><b>不做什么</b>：不管 step span 生命周期；必须在任何 Flux/Mono subscribe 前调用（@PostConstruct）。</p>
+ * <p><b>不做什么</b>：不管 step span 生命周期；必须在任何 Flux/Mono subscribe 前执行（bean 初始化期，早于业务）。</p>
  */
 @Slf4j
-@Configuration
-public class ContextPropagationConfiguration {
+public class ContextPropagationConfiguration implements InitializingBean {
 
-    @PostConstruct
-    void registerAndEnable() {
+    @Override
+    public void afterPropertiesSet() {
         ContextRegistry registry = ContextRegistry.getInstance();
         registry.registerThreadLocalAccessor(new Slf4jThreadLocalAccessor());
         registry.registerThreadLocalAccessor(new OpenTelemetryContextAccessor());

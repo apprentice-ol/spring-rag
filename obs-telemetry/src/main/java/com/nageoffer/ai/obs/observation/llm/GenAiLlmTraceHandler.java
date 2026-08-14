@@ -54,8 +54,8 @@ public class GenAiLlmTraceHandler implements LlmTraceHandler {
     }
 
     private String truncate(String s) {
-        return s.length() <= SpanIoLimits.MAX_SPAN_IO
+        return s.length() <= SpanIoLimits.maxSpanIo()
                 ? s
-                : s.substring(0, SpanIoLimits.MAX_SPAN_IO) + "…[truncated]";
+                : s.substring(0, SpanIoLimits.maxSpanIo()) + "…[truncated]";
     }
 }

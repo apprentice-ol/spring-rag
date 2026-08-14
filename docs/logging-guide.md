@@ -14,8 +14,8 @@ OTel 分布式追踪 (span)        │
 (@TraceStep / RagTelemetry)   │   span 的 input/output attribute
                               │   由 StepSpan 持有的 Span 引用落 attribute（不用 Span.current()，流式回调线程不可靠）
                               │
-结构化事件日志 (logger=        ├── _json 日志 ───► OpenObserve (日志流 springai_rag_logs)
-  rag.telemetry)              │   OpenObserveAppender 把 message 解析回顶层字段
+结构化事件日志 (logger=        ├── OTLP /logs ───► OpenObserve (日志流 springai_rag_logs)
+  rag.telemetry)              │   经 logback OpenTelemetryAppender → OTLP Logs（MDC 随日志属性带出）
 (StructuredLog.emit)          │   (_event/rag_step/step_id/data/duration_ms)
                               │
 普通业务日志 (slf4j)  ─────────┘   自动带 MDC 的 traceId/spanId（OTel 注入）
@@ -129,7 +129,7 @@ StructuredLog.emit("rerank.scores", Map.of("scores", scoreList));   // 自动取
 
 ## 5. MDC 字段约定
 
-MDC 字段被 `OpenObserveAppender` 平铺成 OpenObserve 顶层字段，可过滤/聚合。**字段名用下划线**：
+MDC 字段由 logback 的 `OpenTelemetryAppender` 捕获为日志属性、随 OTLP Logs 带到 OpenObserve，可过滤/聚合。**字段名用下划线**：
 
 | 字段 | 谁写入 | 用途 |
 |---|---|---|
@@ -172,7 +172,7 @@ MDC 字段被 `OpenObserveAppender` 平铺成 OpenObserve 顶层字段，可过�
 
 ## 8. OpenObserve 查询
 
-- **日志流**：`springai_rag_logs`（**下划线**；appender 配置写 `springai-rag_logs`，OpenObserve 收录时规范化为下划线，查询必须用下划线）
+- **日志流**：`springai_rag_logs`（**下划线**；collector 的 openobserve-logs exporter / `obs.openobserve.stream` 指定，查询必须用下划线）
 - **按事件过滤**：`_event=llm.request` / `_event=step.output`
 - **按步骤过滤**：`rag_step=rag.retrieve`
 - **按 trace 反查**：`trace_id=<32位hex>`（对话诊断里用户发 traceId 即走此路）
@@ -182,7 +182,7 @@ MDC 字段被 `OpenObserveAppender` 平铺成 OpenObserve 顶层字段，可过�
 
 ## 9. 配置
 
-- **`logback-spring.xml`**：CONSOLE + OPENOBSERVE 双 appender；OpenObserve 端点/密码走环境变量（`OPENOBSERVE_URL` / `OO_PASSWORD`）
+- **`logback-spring.xml`**：CONSOLE + OPEN_TELEMETRY 双 appender；OTLP 端点由 `application-obs.yaml` 的 `obs.collector.*` 桥接，OpenObserve 凭据走环境变量（`OPENOBSERVE_URL` / `OO_USERNAME` / `OO_PASSWORD`）
 - **`application.yaml`**：`logging.level` 控制级别。当前开发期：`com.nageoffer.ai.rag: DEBUG`、`org.springframework.ai: DEBUG`、`DispatcherServlet: DEBUG`、`ibatis: DEBUG`
 - **trace 采样**：`management.tracing.sampling.probability: 1.0`（全采样，开发期；生产可调低）
 
@@ -192,11 +192,10 @@ MDC 字段被 `OpenObserveAppender` 平铺成 OpenObserve 顶层字段，可过�
 
 1. **`@TraceStep` 只对 Spring 代理的 public bean 方法生效**。同类内部调用（`this.xxx()`）、private/静态方法、流式（`Flux.subscribe`）切不到——改用 `RagTelemetry.step` 手动埋点。
 2. **流式 span 用 `log.stream(name, input, flux, captureOutput)`**。`captureOutput=true` 时内部 `doOnNext` 累积完整回答、`doFinally` 自动 `outputRaw` + `finish`，业务体不用碰 `StepSpan`；`false`（或三参重载）只记 input + 耗时。**不要**对返回的 Flux 再手动 `output()`——会和内部累积重复。
-3. **不要往 logger `rag.telemetry` 打非 JSON 消息**。`OpenObserveAppender` 会把该 logger 的 message 当 JSON 解析合并顶层；非 JSON 会降级为 message 字段。
-4. **trace 视图 Input/Output 读 span attribute `input`/`output`**，由 `StepSpan` 落（`input()` 同步落、`close()`/`finish()` 落 output）。**attribute 挂在 `StepSpan` 构造期捕获的 `Span` 引用上，不是 `Span.current()`**——流式 `finish()` 在 Reactor 回调线程跑，`Span.current()` 不保证恢复为本步骤 span（曾导致流式 output 落空、面板长期 No data available）。`LlmTraceAdvisor` 在同步栈仍用 `Span.current()`（安全）。
-5. **LLM 的 `chat deepseek-chat` span 由 Spring AI ChatModel 自动建**，其 input/output 由 Spring AI 控制（本项目不干预）。要看 LLM 输入，点 **`llm-trace` span**（本项目 advisor 的 observation，input=prompt 摘要）。
-6. **MDC 字段名用下划线**，别用驼峰（OpenObserve 关联字段 `trace_id`/`span_id` 是下划线；驼峰 `traceId` 也会平铺但下划线是标准）。
-7. **`MAX_SPAN_IO`（span attribute 上限）当前 20000，demo 阶段清晰优先**。后续要截断调小 `StepSpan.MAX_SPAN_IO` / `LlmTraceAdvisor.MAX_IO`；要完全关闭 span attribute（只留日志），删 `setSpanIo` / `Span.current().setAttribute` 调用即可。
-8. **别手动捕获/恢复 MDC 跨线程**。已由 `Hooks.enableAutomaticContextPropagation` + accessor 自动传播；手写 `MDC.getCopyOfContextMap()` 恢复是冗余（旧的 `StepSpan.mdcSnapshot` 已移除）。
-9. **大对象进日志前必须 `Summarizer`**。直接 `log.info("ctx={}", hugeContext)` 或 `s.output(bigBean)` 会让日志/span 膨胀。
-10. **生产环境**调低 `logging.level`（项目包 `INFO`、框架包 `WARN`）、`sampling.probability`（如 0.1），避免日志量过大。
+3. **trace 视图 Input/Output 读 span attribute `input`/`output`**，由 `StepSpan` 落（`input()` 同步落、`close()`/`finish()` 落 output）。**attribute 挂在 `StepSpan` 构造期捕获的 `Span` 引用上，不是 `Span.current()`**——流式 `finish()` 在 Reactor 回调线程跑，`Span.current()` 不保证恢复为本步骤 span（曾导致流式 output 落空、面板长期 No data available）。`LlmTraceAdvisor` 在同步栈仍用 `Span.current()`（安全）。
+4. **LLM 的 `chat deepseek-chat` span 由 Spring AI ChatModel 自动建**，其 input/output 由 Spring AI 控制（本项目不干预）。要看 LLM 输入，点 **`llm-trace` span**（本项目 advisor 的 observation，input=prompt 摘要）。
+5. **MDC 字段名用下划线**，别用驼峰（OpenObserve 关联字段 `trace_id`/`span_id` 是下划线；驼峰 `traceId` 也会平铺但下划线是标准）。
+6. **`MAX_SPAN_IO`（span attribute 上限）当前 20000，demo 阶段清晰优先**。后续要截断调小 `StepSpan.MAX_SPAN_IO` / `LlmTraceAdvisor.MAX_IO`；要完全关闭 span attribute（只留日志），删 `setSpanIo` / `Span.current().setAttribute` 调用即可。
+7. **别手动捕获/恢复 MDC 跨线程**。已由 `Hooks.enableAutomaticContextPropagation` + accessor 自动传播；手写 `MDC.getCopyOfContextMap()` 恢复是冗余（旧的 `StepSpan.mdcSnapshot` 已移除）。
+8. **大对象进日志前必须 `Summarizer`**。直接 `log.info("ctx={}", hugeContext)` 或 `s.output(bigBean)` 会让日志/span 膨胀。
+9. **生产环境**调低 `logging.level`（项目包 `INFO`、框架包 `WARN`）、`sampling.probability`（如 0.1），避免日志量过大。

@@ -101,12 +101,11 @@ transform/langfuse:
 - 线程池（检索通道）用 Spring 的 `ContextPropagatingTaskDecorator`。
 - 原则：**凡是异步完成点要写 span 数据的，先捕获对象引用再跨线程用**，不依赖 ThreadLocal 恢复。
 
-## 5. 日志（现状与下一步）
+## 5. 日志（已迁 OTLP Logs）
 
-日志当前仍由 `OpenObserveAppender` 直推 OpenObserve（`_json` API），日志诊断功能
-（`OpenObserveQueryClient`）也直连 OpenObserve SQL——这是仅存的两处后端耦合，与 trace 无关。
-后续可把日志也迁到 OTLP logs（logback OTLP appender → collector logs pipeline），
-届时诊断读取侧字段名（`traceid`）需同步适配；迁移前先核对 OpenObserve OTLP logs 的字段平铺规则。
+日志已由 logback 的 `OpenTelemetryAppender` 统一走 **OTLP Logs**（→ collector logs pipeline → OpenObserve，
+`obs.collector.enabled=false` 时直连 OpenObserve `/v1/logs`），旧的 `OpenObserveAppender` 直推 `_json` API
+的实现已删除。日志诊断读取（`OpenObserveQueryClient`）仍直连 OpenObserve SQL——后端耦合仅剩这一处，与 trace 无关。
 
 ## 6. 升级后验证清单
 

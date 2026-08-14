@@ -1,23 +1,23 @@
 package com.nageoffer.ai.obs.observation;
 
-import com.nageoffer.ai.obs.observation.span.ObservationSpan;
-import com.nageoffer.ai.obs.observation.span.RootSpan;
-import com.nageoffer.ai.obs.observation.span.ObsSpan;
-import com.nageoffer.ai.obs.observation.span.SpanWriter;
 import com.nageoffer.ai.obs.observation.context.ObsConversation;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
-import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
-import com.nageoffer.ai.obs.observation.ObservationPipeline;
 import com.nageoffer.ai.obs.observation.propagation.ObsConversationAccessor;
+import com.nageoffer.ai.obs.observation.span.ObsSpan;
+import com.nageoffer.ai.obs.observation.span.ObservationSpan;
+import com.nageoffer.ai.obs.observation.span.RootSpan;
+import com.nageoffer.ai.obs.observation.span.SpanWriter;
+import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
 import io.micrometer.observation.ObservationRegistry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import reactor.core.publisher.Flux;
+
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * 观测门面：业务 / AOP 的统一入口，把“开 span / 记 IO / 记异常 / 跨线程传播”收敛到语义化方法。
@@ -59,7 +59,7 @@ public class ObsTemplate {
         try (ObsSpan h = openStep(name)) {
             try {
                 return body.get();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 h.error(e);
                 throw e;
             }
@@ -73,7 +73,7 @@ public class ObsTemplate {
                 T result = body.get();
                 h.output(result);
                 return result;
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 h.error(e);
                 throw e;
             }
@@ -85,7 +85,7 @@ public class ObsTemplate {
             h.input(input);
             try {
                 body.run();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | Error e) {
                 h.error(e);
                 throw e;
             }
@@ -94,6 +94,7 @@ public class ObsTemplate {
 
     // ==================== 流式 ====================
 
+    /** 立即开 span 并装饰 Flux（调用方保证订阅）。可能被短路、不保证订阅的场景用 {@link #deferStep}。 */
     public <T> Flux<T> stream(String name, Object input, Flux<T> flux) {
         return stream(name, input, flux, false);
     }
@@ -102,6 +103,15 @@ public class ObsTemplate {
         ObsSpan handle = openStep(name);
         handle.input(input);
         return decorateFlux(handle, flux, captureOutput);
+    }
+
+    /**
+     * 延迟版 {@link #stream}：首次订阅时才开 span。
+     *
+     * <p>解决"开完 span 但 Flux 被分支短路、从未订阅"导致的悬空 span/trace；重复订阅每次各开一个 step。</p>
+     */
+    public <T> Flux<T> deferStep(String name, Object input, Supplier<Flux<T>> fluxSupplier, boolean captureOutput) {
+        return Flux.defer(() -> stream(name, input, fluxSupplier.get(), captureOutput));
     }
 
     public <T> Flux<T> decorateFlux(ObsSpan handle, Flux<T> flux, boolean captureOutput) {
