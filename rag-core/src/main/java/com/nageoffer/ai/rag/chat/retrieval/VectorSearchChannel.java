@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 import org.springframework.transaction.annotation.Transactional;
 
 /**

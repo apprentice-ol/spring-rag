@@ -13,32 +13,23 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.util.StringUtils;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.beans.factory.annotation.Value;
-import com.nageoffer.ai.rag.config.telemetry.LlmTraceAdvisor;
 import org.springframework.core.task.support.ContextPropagatingTaskDecorator;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.util.StringUtils;
 
 /**
  * 装配 RAG 专用 ChatClient 与异步执行器。
  *
- * <p>多通道检索引擎需要异步线程池并行执行各通道检索。
- * ragChatClient 挂 MessageChatMemoryAdvisor（会话记忆），
- * 检索由 {@link com.nageoffer.ai.rag.chat.service.pipeline.StreamChatPipeline} 编排。</p>
+ * <p><b>LLM 埋点不在此处理</b>——Spring AI 每次调用自动建 ChatModel observation，
+ * gen_ai.* 内容与 token 用量由 Spring AI 原生输出；会话/pipeline 关联由 obs-telemetry 的
+ * {@link com.nageoffer.ai.obs.springai.SpringAiConversationCorrelationFilter} 挂到原生 span。
+ * 本类只装配 ChatClient，不挂任何 Advisor。</p>
  *
  * @see com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine
  * @see com.nageoffer.ai.rag.chat.service.pipeline.StreamChatPipeline
  */
 @Configuration
 public class ChatClientConfig {
-
-    /** 全局默认文本模型（application.yaml spring.ai.openai.chat.options.model），LlmTraceAdvisor 兜底用 */
-    @Value("${spring.ai.openai.chat.options.model:deepseek-chat}")
-    private String defaultLlmModel;
-
-    /** LLM 用法埋点开关（LlmTraceAdvisor：模型参数/token 用量 → MDC + 结构化日志）。换 AI 框架时可关。 */
-    @Value("${rag.observability.llm.usage-attributes:true}")
-    private boolean llmUsageAttributesEnabled;
 
     @Primary
     @Bean
@@ -57,16 +48,12 @@ public class ChatClientConfig {
         // 造成 conversationId=default 串会话 + prompt 膨胀 + 无关历史资料干扰（见 2026-07-30 运行日志）。
         // 多轮阶段恢复记忆时，须同时保证"资料不进 memory"（资料放 system，或改用 RAG 专用无记忆 client）。
         // maxTokens=8192：放宽输出上限，使回答能包含多段代码块 + 对比表 + JSON 示例而不被截断。
-        ChatClient.Builder clientBuilder = builder
+        return builder
                 .defaultSystem(systemPrompt)
                 // 最终 RAG 回答用温度 0.0（贴近 ragent）：严格遵循资料边界与引用规则，输出稳定、确定。
                 // 意图分类/查询改写/入库增强走 ingestionChatClient，沿用 yaml 低温度（0.1）保证确定性。
-                .defaultOptions(OpenAiChatOptions.builder().temperature(0.1).maxTokens(8192).build());
-        // LLM 调用埋点（可配置）：记录模型参数 / token 用量为通用 span/MDC 属性 + 结构化日志
-        if (llmUsageAttributesEnabled) {
-            clientBuilder = clientBuilder.defaultAdvisors(new LlmTraceAdvisor("rag", defaultLlmModel));
-        }
-        return clientBuilder.build();
+                .defaultOptions(OpenAiChatOptions.builder().temperature(0.1).maxTokens(8192).build())
+                .build();
     }
 
     /**
@@ -75,12 +62,7 @@ public class ChatClientConfig {
      */
     @Bean("ingestionChatClient")
     public ChatClient ingestionChatClient(ChatModel chatModel) {
-        // 挂 LlmTraceAdvisor（只读不改 request/response），给 Enhancer/Enricher/意图/诊断的 LLM 调用埋点
-        ChatClient.Builder clientBuilder = ChatClient.builder(chatModel);
-        if (llmUsageAttributesEnabled) {
-            clientBuilder = clientBuilder.defaultAdvisors(new LlmTraceAdvisor("ingestion", defaultLlmModel));
-        }
-        return clientBuilder.build();
+        return ChatClient.builder(chatModel).build();
     }
 
     /**
@@ -117,7 +99,7 @@ public class ChatClientConfig {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(20);
         executor.setThreadNamePrefix("rag-ctx-");
-        // 跨线程传播 MDC + OTel Context（Spring 官方 ContextPropagatingTaskDecorator，accessor 由 ContextPropagationConfig 注册），使通道检索子 span 挂在父 trace 下
+        // 跨线程传播 MDC + OTel Context（Spring 官方 ContextPropagatingTaskDecorator，accessor 由 obs ContextPropagationConfig 注册），使通道检索子 span 挂在父 trace 下
         executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);

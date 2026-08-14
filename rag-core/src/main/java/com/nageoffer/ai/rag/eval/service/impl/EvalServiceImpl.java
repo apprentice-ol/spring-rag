@@ -19,7 +19,7 @@ import com.nageoffer.ai.rag.eval.domain.EvalParamSnapshot;
 import com.nageoffer.ai.rag.eval.domain.EvalRunOptions;
 import com.nageoffer.ai.rag.eval.runner.EvalRunner;
 import com.nageoffer.ai.rag.eval.service.EvalService;
-import io.micrometer.context.ContextSnapshot;
+import com.nageoffer.ai.obs.propagation.ContextPropagator;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -151,7 +151,7 @@ public class EvalServiceImpl implements EvalService {
         runMapper.insert(evalRunEntity);
 
         Long runId = evalRunEntity.getId();
-        evalExecutor.submit(ContextSnapshot.captureAll().wrap(() -> {
+        evalExecutor.submit(ContextPropagator.wrap(() -> {
             try {
                 // itemIds 非空时走精确子集（agent 对照用：多范式同题），否则按 category/limit 抽样
                 evalRunner.run(runId, options.category(), options.limit(), options.itemIds());
@@ -292,7 +292,7 @@ public class EvalServiceImpl implements EvalService {
 
         Long newRunId = run.getId();
         final List<Long> scope = onlyItemIds;
-        evalExecutor.submit(ContextSnapshot.captureAll().wrap(() -> {
+        evalExecutor.submit(ContextPropagator.wrap(() -> {
             try {
                 evalRunner.run(newRunId, null, null, scope);
             } catch (Exception e) {

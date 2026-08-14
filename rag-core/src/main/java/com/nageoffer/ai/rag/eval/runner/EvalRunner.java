@@ -35,8 +35,8 @@ import com.nageoffer.ai.rag.eval.metrics.PrecisionAtKScorer;
 import com.nageoffer.ai.rag.eval.metrics.RecallAtKScorer;
 import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
 import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
-import com.nageoffer.ai.rag.config.telemetry.RagTelemetry;
-import com.nageoffer.ai.rag.config.telemetry.StepSpan;
+import com.nageoffer.ai.obs.Telemetry;
+import com.nageoffer.ai.obs.event.TraceHandle;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -59,6 +59,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import com.nageoffer.ai.obs.propagation.ContextPropagator;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.MDC;
 import lombok.extern.slf4j.Slf4j;
@@ -72,7 +73,7 @@ import org.springframework.stereotype.Component;
  * 故本类不预存 query_embedding（字段保留供未来"预计算向量"优化）。</p>
  *
  * <p>并发：虚拟线程池 + {@link Semaphore} 限流（单实例；多实例再换 Redisson 信号量）。submit 时用
- * {@link ContextSnapshot#captureAll()} 包装 Runnable，把 MDC/OTel 传播到虚拟线程（traceId 贯通的前提）。
+ * {@link ContextPropagator#wrap()} 包装 Runnable，把 MDC/OTel 传播到虚拟线程（traceId 贯通的前提）。
  * 异常隔离：单 item 失败记一条 error 指标（score=-1），不中断整 run。</p>
  */
 @Slf4j
@@ -80,7 +81,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class EvalRunner {
 
-    private final RagTelemetry ragTelemetry;
+    private final Telemetry ragTelemetry;
     private final AgentRegistry agentRegistry;
     private final AgentProperties agentProperties;
     private final ChatProperties chatProperties;
@@ -203,9 +204,9 @@ public class EvalRunner {
                                      Map<String, String> expectedNameMap, Semaphore semaphore) {
         // 开 item 独立的 root trace（无父）：metric.trace_id 记 item 自己的 traceId（前端/OO 跳转一致），
         // 子 span 由 ContextPropagation 传播挂到 item root 下。startRoot 已把 traceId 写 MDC。
-        try (StepSpan root = ragTelemetry.startRoot("eval.item")) {
-            root.attr("eval.item_id", item.getId());
-            root.attr("eval.run_id", runId);
+        try (TraceHandle root = ragTelemetry.openTrace("eval.item")) {
+            root.tag("eval.item_id", item.getId());
+            root.tag("eval.run_id", runId);
             root.traceInput(item.getQuestion());
             try {
                 semaphore.acquire();
@@ -469,18 +470,18 @@ public class EvalRunner {
         // 单条重评是同步 HTTP 请求（Span.current() = HTTP server span）：直接把 trace 级 IO 写到 HTTP 根 span，
         // 一个请求一个 trace、Langfuse 列表 IO 稳定显示（不依赖子 LLM span 的 gen_ai.*，ReAct 多轮下常丢）。
         // 不像批量 eval 走 startRoot 独立 trace——那是"一次 HTTP 跑多条 item"，必须各自独立，否则挤一个 trace 没法看。
-        ragTelemetry.rootAttr("eval.run_id", runId);
-        ragTelemetry.rootAttr("eval.item_id", itemId);
-        ragTelemetry.rootAttr("eval.attempt", attempt);
-        ragTelemetry.rootAttr("eval.paradigm", effectiveParadigm);
-        ragTelemetry.rootTraceInput(item.getQuestion());
+        ragTelemetry.tag("eval.run_id", runId);
+        ragTelemetry.tag("eval.item_id", itemId);
+        ragTelemetry.tag("eval.attempt", attempt);
+        ragTelemetry.tag("eval.paradigm", effectiveParadigm);
+        ragTelemetry.traceInput(item.getQuestion());
 
         ItemScore itemScore = this.scoreItem(item, params, buildScorers());
         Map<String, String> docNameMap = loadDocNames(parseDocIds(item.getExpectedDocIds()));
         this.persistMetrics(runId, item, itemScore, params, attempt, remark, docNameMap);
         boolean hit = itemScore.error() == null && !itemScore.gotDocIds().isEmpty();
-        ragTelemetry.rootAttr("eval.hit", hit);
-        ragTelemetry.rootTraceOutput(itemScore.error() != null
+        ragTelemetry.tag("eval.hit", hit);
+        ragTelemetry.traceOutput(itemScore.error() != null
                 ? "error: " + itemScore.error()
                 : "retrieved=" + itemScore.gotDocIds());
         log.info("[Eval] 单条重评 runId={}, itemId={}, attempt={}, rewrite={}, 命中={}",
@@ -503,7 +504,12 @@ public class EvalRunner {
         return maxAttempt + 1;
     }
 
-    /** 回写 run 的最终状态（DONE/FAILED）+ 聚合指标 + 完成时间。 */
+    /**
+     * 结束 run：更新 run 的聚合指标和状态。
+     * @param runId 运行 ID
+     * @param aggregateMetrics 聚合指标
+     * @param status 运行状态
+     */
     private void finishRun(Long runId, Map<String, ?> aggregateMetrics, String status) {
         EvalRunEntity runUpdate = new EvalRunEntity();
         runUpdate.setId(runId);

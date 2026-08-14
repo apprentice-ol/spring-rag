@@ -32,10 +32,10 @@ import com.nageoffer.ai.rag.diagnose.dto.MatchResult;
 import com.nageoffer.ai.rag.diagnose.dto.RelatedDoc;
 import com.nageoffer.ai.rag.diagnose.dto.TraceLogEntry;
 import com.nageoffer.ai.rag.diagnose.service.LogDiagnoseService;
-import com.nageoffer.ai.rag.config.telemetry.ConversationTrace;
-import com.nageoffer.ai.rag.config.telemetry.RagLogger;
+import com.nageoffer.ai.obs.ObsLogger;
 
 import java.io.IOException;
+import java.util.function.Consumer;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -69,7 +69,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequiredArgsConstructor
 public class StreamChatPipeline {
 
-    private static final RagLogger log = RagLogger.of(StreamChatPipeline.class);
+    private static final ObsLogger log = ObsLogger.of(StreamChatPipeline.class);
 
     private final IntentClassifier intentClassifier;
     private final AgentRegistry agentRegistry;
@@ -92,8 +92,6 @@ public class StreamChatPipeline {
      * @param emitter        SSE 输出
      */
     public void execute(String question, String conversationId, String agent, SseEmitter emitter) {
-        // trace 作用域已由 ConversationTraceAdvisor 在请求入口开启（input=用户问题已写入根 span），
-        // output 由各回答分支在完成点显式写入（见下方各分支），saveMessage 只负责消息持久化。
         ensureConversation(conversationId, question);
         saveMessage(conversationId, "user", question);
         long t0 = System.currentTimeMillis();
@@ -185,15 +183,12 @@ public class StreamChatPipeline {
      * <p>诊断含 LLM 调用（约 10–30s），先发即时提示再分段输出结果。
      */
     private void handleDiagnose(String traceId, String conversationId, SseEmitter emitter) {
-        ConversationTrace conversationTrace = log.currentConversationTrace();
         // traceId 缺失 → 反问
         if (traceId == null) {
             String ask = "请提供要排查的 traceId（从应用日志的 `[traceId,spanId]` 复制，32 位十六进制）。";
             log.info("[对话管道] 诊断缺 traceId，反问用户");
             saveMessage(conversationId, "assistant", ask);
-            if (conversationTrace != null) {
-                conversationTrace.output(ask);
-            }
+            log.conversationOutput(ask);
             sendEvent(emitter, ask);
             completeEmitter(emitter);
             return;
@@ -215,9 +210,7 @@ public class StreamChatPipeline {
                         + "要继续排查这个 traceId 吗？还是换一个和「" + userContext + "」相关的 traceId？";
                 log.info("[对话管道] 诊断匹配校验不通过，反问: brief={}", brief);
                 saveMessage(conversationId, "assistant", ask);
-                if (conversationTrace != null) {
-                    conversationTrace.output(ask);
-                }
+                log.conversationOutput(ask);
                 sendEvent(emitter, ask);
                 completeEmitter(emitter);
                 return;
@@ -229,9 +222,7 @@ public class StreamChatPipeline {
         DiagnoseResponse resp = logDiagnoseService.complete(preview);
         String answer = formatDiagnose(resp);
         saveMessage(conversationId, "assistant", answer);
-        if (conversationTrace != null) {
-            conversationTrace.output(answer);
-        }
+        log.conversationOutput(answer);
         for (String segment : splitSegments(answer)) {
             sendEvent(emitter, segment);
         }
@@ -341,7 +332,8 @@ public class StreamChatPipeline {
         log.info("[对话管道] 走闲聊回复: question=\"{}\"", question);
 
         StringBuilder fullAnswer = new StringBuilder();
-        ConversationTrace conversationTrace = log.currentConversationTrace();
+        // 流式回调线程（reactor-netty）的 ambient HOLDER 常未恢复，subscribe 前于业务线程捕获 output sink
+        Consumer<Object> outputSink = log.conversationSink();
         ragAnswerStreamService.chitchat(question, conversationId)
                 .subscribe(
                         content -> {
@@ -350,20 +342,16 @@ public class StreamChatPipeline {
                         },
                         e -> {
                             log.error("[对话管道] 闲聊流式输出失败", e);
-                            // 同 streamRagResponse：异常路径补 trace output，避免闲聊流式中断时 output 丢失
-                            if (conversationTrace != null) {
-                                String partial = fullAnswer.toString();
-                                conversationTrace.output(partial.isEmpty()
-                                        ? "[stream error] " + e.getMessage() : partial);
-                            }
+                            // 异常路径补 trace output，避免闲聊流式中断时 output 丢失
+                            String partial = fullAnswer.toString();
+                            outputSink.accept(partial.isEmpty()
+                                    ? "[stream error] " + e.getMessage() : partial);
                             completeEmitter(emitter);
                         },
                         () -> {
                             String answer = fullAnswer.toString();
                             saveMessage(conversationId, "assistant", answer);
-                            if (conversationTrace != null) {
-                                conversationTrace.output(answer);
-                            }
+                            outputSink.accept(answer);
                             completeEmitter(emitter);
                         });
     }
@@ -373,14 +361,11 @@ public class StreamChatPipeline {
      */
     private void handleRetrievalEmpty(String question, String conversationId, SseEmitter emitter) {
         log.info("[对话管道] 检索为空，直接返回降级提示: 会话ID={}", conversationId);
-        ConversationTrace conversationTrace = log.currentConversationTrace();
         String fallbackMsg = StringUtils.hasText(chatProperties.getEmptyRetrievalMsg())
                 ? chatProperties.getEmptyRetrievalMsg()
                 : promptStore.raw("chat/pipeline/empty-retrieval");
         saveMessage(conversationId, "assistant", fallbackMsg);
-        if (conversationTrace != null) {
-            conversationTrace.output(fallbackMsg);
-        }
+        log.conversationOutput(fallbackMsg);
         sendEvent(emitter, fallbackMsg);
         completeEmitter(emitter);
     }
@@ -404,7 +389,8 @@ public class StreamChatPipeline {
         log.info("[对话管道] 给 LLM 的上下文: {}块{}文档 {}字符", chunks.size(), docCount, contextText.length());
 
         StringBuilder fullAnswer = new StringBuilder();
-        ConversationTrace conversationTrace = log.currentConversationTrace();
+        // 流式回调线程（reactor-netty）的 ambient HOLDER 常未恢复，subscribe 前于业务线程捕获 output sink
+        Consumer<Object> outputSink = log.conversationSink();
         ragAnswerStreamService.answer(question, contextText)
                 .subscribe(
                         content -> {
@@ -415,19 +401,15 @@ public class StreamChatPipeline {
                             log.error("[Pipeline] RAG 流式失败", e);
                             // 异常路径也写 trace output（已累积的部分回答 / error 标记），
                             // 否则流式中断时根 span 只剩 input、output 丢失（Langfuse trace 列表 output 为空）
-                            if (conversationTrace != null) {
-                                String partial = fullAnswer.toString();
-                                conversationTrace.output(partial.isEmpty()
-                                        ? "[stream error] " + e.getMessage() : partial);
-                            }
+                            String partial = fullAnswer.toString();
+                            outputSink.accept(partial.isEmpty()
+                                    ? "[stream error] " + e.getMessage() : partial);
                             emitter.completeWithError(e);
                         },
                         () -> {
                             String answer = fullAnswer.toString();
                             Long msgId = saveMessage(conversationId, "assistant", answer);
-                            if (conversationTrace != null) {
-                                conversationTrace.output(answer);
-                            }
+                            outputSink.accept(answer);
                             agentTraceService.record(conversationId, msgId, paradigm, question, trace);
                             log.info("========== [对话管道] 完成 ========== 会话ID={}, 耗时={}ms",
                                     conversationId, System.currentTimeMillis() - t0);
@@ -556,17 +538,17 @@ public class StreamChatPipeline {
             conversationMapper.updateById(existing);
             return;
         }
-        ConversationEntity c = new ConversationEntity();
-        c.setConversationId(conversationId);
+        ConversationEntity conversationEntity = new ConversationEntity();
+        conversationEntity.setConversationId(conversationId);
         // 用首条问题前 30 字作为标题
         String title = firstQuestion == null ? "新对话" : firstQuestion.trim();
         if (title.length() > 30){
             title = title.substring(0, 30);
         }
-        c.setTitle(title);
-        c.setCreatedAt(LocalDateTime.now());
-        c.setUpdatedAt(LocalDateTime.now());
-        conversationMapper.insert(c);
+        conversationEntity.setTitle(title);
+        conversationEntity.setCreatedAt(LocalDateTime.now());
+        conversationEntity.setUpdatedAt(LocalDateTime.now());
+        conversationMapper.insert(conversationEntity);
     }
 
     private Long saveMessage(String conversationId, String role, String content) {

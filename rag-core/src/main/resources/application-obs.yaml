@@ -1,0 +1,26 @@
+# ====================================================================
+# 可观测性集中配置（obs.* 一个块管所有）
+#
+# 数据流：app ──OTLP──> otel-collector ──扇出──> OpenObserve（trace/日志存储）
+#                                            └──> Langfuse（trace 可视化 / generation UI）
+# Langfuse 连接在 otel-collector 侧（app 只发 OTLP），故本文件不含 Langfuse 地址。
+# ====================================================================
+obs:
+  # ① 埋点核心（obs-telemetry 组件：@TraceStep / Telemetry / sink 链）
+  tracer-name: springai-rag    # OTel tracer 名（openTrace 无父新 trace 根 span，如 eval 每 item 独立 trace）
+  llm:
+    content-attributes: true   # LLM 埋点：prompt/completion/model/usage → OTel gen_ai.*（ChatModelContentFilter 自动）
+
+  # ② trace 发送（obs 桥接到 Spring Boot actuator OTel exporter，用户不直接配 management）
+  export:
+    otlp:
+      endpoint: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318/v1/traces}   # OTLP/HTTP → otel-collector
+    sampling:
+      probability: 1.0   # 全采样；生产可调低降量
+
+  # ③ OpenObserve 连接（日志诊断查询侧：app 按 traceId 直查 OO 日志，需 Basic Auth）
+  openobserve:
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 端点（单冒号默认值，避免 :- 占位符解析报错）
+    web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}        # Web UI（前端链路追踪页跳转用）
+    username: ${OO_USERNAME:admin@openobserve.io}               # Basic Auth 用户名（查日志用；生产用环境变量覆盖）
+    password: ${OO_PASSWORD:OpenObserve@2026}                   # Basic Auth 密码（生产用环境变量覆盖）

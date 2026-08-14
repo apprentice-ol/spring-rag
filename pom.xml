@@ -20,6 +20,7 @@
 
     <modules>
         <module>rag-common</module>
+        <module>obs-telemetry</module>
         <module>rag-core</module>
     </modules>
 
@@ -48,6 +49,11 @@
             <dependency>
                 <groupId>com.nageoffer.ai</groupId>
                 <artifactId>rag-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.nageoffer.ai</groupId>
+                <artifactId>obs-telemetry</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

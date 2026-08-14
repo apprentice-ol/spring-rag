@@ -7,7 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 
 /**
  * 基于 LLM 的意图分类器实现。

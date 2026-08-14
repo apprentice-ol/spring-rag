@@ -21,6 +21,11 @@
             <groupId>com.nageoffer.ai</groupId>
             <artifactId>rag-common</artifactId>
         </dependency>
+        <!-- 公共可观测组件（@TraceStep/Telemetry/ObsLogger/sink链/传播，Starter 自动装配） -->
+        <dependency>
+            <groupId>com.nageoffer.ai</groupId>
+            <artifactId>obs-telemetry</artifactId>
+        </dependency>
 
         <!-- Web（MVC + SseEmitter 流式输出） -->
         <dependency>

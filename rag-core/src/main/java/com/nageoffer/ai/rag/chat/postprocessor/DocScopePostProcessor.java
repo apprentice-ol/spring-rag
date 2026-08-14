@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 
 /**
  * 文档作用域收敛后处理器（dedup 之后、fusion 之前）。

@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 
 /**
  * RRF（Reciprocal Rank Fusion）融合后处理器（责任链第二环）。

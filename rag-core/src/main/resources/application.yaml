@@ -10,6 +10,7 @@ spring:
     import:
       - "optional:file:.env[.properties]"
       - "optional:file:../.env[.properties]"
+      - "classpath:application-obs.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
   application:
     name: springai-rag
 
@@ -58,10 +59,6 @@ spring:
         repository:
           jdbc:
             initialize-schema: always  # DatabaseInitializationMode 枚举：always/embedded/never（非 boolean）
-      # 让 ChatModel observation 记录 prompt/completion 原文 → Langfuse generation UI 直接看问答内容
-      observations:
-        log-prompt: true
-        log-completion: true
 
 # 阶段 3 启用（异步入库）；阶段 0 可忽略
 rocketmq:
@@ -70,12 +67,8 @@ rocketmq:
     group: rag-producer
     send-message-timeout: 5000
 
-# 项目自有配置
+# 项目自有配置（可观测性配置已移至 application-obs.yaml）
 rag:
-  observability:               # 可观测性（业务只依赖 OTel/Micrometer；存储/展示后端由 collector 可插拔，见 docs/opentelemetry设计思路.md）
-    llm:
-      usage-attributes: true   # Spring AI LLM 用法埋点（模型参数/token 用量 → span/MDC/结构化日志）；换 AI 框架时可关
-      content-attributes: true # 把 prompt/completion 原文写成 OTel gen_ai.prompt/completion（Langfuse 等据此展示 generation I/O）
   mq:
     type: rocketmq            # rocketmq | redis（切换 MQ 实现；redis 走 RedisStreamMqProducer + RedisStreamIngestionConsumer）
     topic: ingestion          # RocketMQ topic / Redis stream 默认名
@@ -163,26 +156,6 @@ mineru:
   semaphore-name: rag:mineru:parse
   max-wait-seconds: 30
   lease-seconds: 900
-
-management:
-  tracing:
-    sampling:
-      probability: 1.0   # 全采样；trace 发往 OTLP endpoint（默认本地 otel-collector:4318）
-  otlp:
-    tracing:
-      # OTLP/HTTP → 本地 otel-collector:4318（collector 再扇出到 OpenObserve + Langfuse）。
-      # 认证已下沉到 collector 的两个 exporter，app 不再带 Basic 头。
-      # 容器部署由 OBSERVE_OTLP_ENDPOINT 覆盖为 http://otel-collector:4318/v1/traces。
-      endpoint: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
-
-
-
-# OpenObserve 日志诊断（读取侧：OpenObserveQueryClient 按 traceId 反查日志）。
-# 写入侧 logback appender 通过 springProperty 绑定本配置（单一来源）。
-# 默认 localhost（本地/compose 端口映射即达）；服务器部署用环境变量 OPENOBSERVE_URL 覆盖。
-openobserve:
-  url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # 单冒号默认值（:- 会被 @ConfigurationProperties 占位符解析成 -http://…，URI 报 Illegal character）
-  web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}        # Web UI 浏览器可达地址（前端链路追踪页跳转用；生产指向外网可达的 OO）
 
 logging:
   level:

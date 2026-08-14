@@ -2,7 +2,7 @@ package com.nageoffer.ai.rag.chat.agent.toolkit;
 
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;

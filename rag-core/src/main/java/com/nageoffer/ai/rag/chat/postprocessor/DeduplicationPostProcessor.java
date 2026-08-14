@@ -8,7 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.rag.config.telemetry.TraceStep;
+import com.nageoffer.ai.obs.TraceStep;
 
 /**
  * 检索结果去重处理器（责任链第一环）。

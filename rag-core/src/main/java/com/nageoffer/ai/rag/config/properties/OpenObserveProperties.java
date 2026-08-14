@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Configuration;
  */
 @Data
 @Configuration
-@ConfigurationProperties("openobserve")
+@ConfigurationProperties("obs.openobserve")
 public class OpenObserveProperties {
 
     /** API 根地址（到组织），默认本地 default 组织 */
