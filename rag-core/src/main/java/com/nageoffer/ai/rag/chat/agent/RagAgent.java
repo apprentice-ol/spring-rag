@@ -1,7 +1,7 @@
 package com.nageoffer.ai.rag.chat.agent;
 
 /**
- * RAG agent 统一接口。每种范式（Naive/CRAG/Self-RAG/ReAct/Plan-Execute）是一个实现，
+ * RAG agent 统一接口。每种范式（Naive/ReAct）是一个实现，
  * 由 {@link AgentRegistry} 按 {@link #getType()} 注册，可插拔切换。
  *
  * <p><b>只插「检索编排层」</b>：本接口负责"检索什么、检索几次、何时停"的策略，
@@ -12,7 +12,7 @@ package com.nageoffer.ai.rag.chat.agent;
  */
 public interface RagAgent {
 
-    /** 范式标识，对齐 {@link RagParadigm#getCode()}（如 "naive" / "crag" / "react"）。 */
+    /** 范式标识，对齐 {@link RagParadigm#getCode()}（"naive" / "react"）。 */
     String getType();
 
     /**

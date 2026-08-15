@@ -1,9 +1,12 @@
 package com.nageoffer.ai.obs.observation.logging;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
+import com.google.gson.ReflectionAccessFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import org.slf4j.MDC;
 
 /**
@@ -17,7 +20,10 @@ import org.slf4j.MDC;
 public final class ObsStructuredLog {
 
     private static final Logger log = LoggerFactory.getLogger("obs.telemetry");
-    private static final Gson GSON = new Gson();
+    private static final Gson GSON = new GsonBuilder()
+            .disableHtmlEscaping()
+            .addReflectionAccessFilter(ReflectionAccessFilter.BLOCK_INACCESSIBLE_JAVA)
+            .create();
 
     private ObsStructuredLog() {
     }
@@ -44,7 +50,12 @@ public final class ObsStructuredLog {
             obj.addProperty("duration_ms", durationMs);
         }
         if (data != null) {
-            obj.add("data", GSON.toJsonTree(data));
+            try {
+                obj.add("data", GSON.toJsonTree(data));
+            } catch (Exception e) {
+                obj.addProperty("data", String.valueOf(data));
+                obj.addProperty("data_serialization_error", e.getMessage());
+            }
         }
         log.info(obj.toString());
     }
@@ -54,6 +65,6 @@ public final class ObsStructuredLog {
      * 供"在某个 step 内发附属事件"（llm.request / rerank.scores 等），免去手写 {@code MDC.get} 样板。
      */
     public static void emit(String event, Object data) {
-        emit(event, MDC.get("step"), MDC.get("step_id"), data, null);
+        emit(event, MDC.get(OtelKeys.step()), MDC.get(OtelKeys.stepId()), data, null);
     }
 }

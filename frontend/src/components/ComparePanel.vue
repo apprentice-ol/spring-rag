@@ -5,6 +5,7 @@ import { streamChat, type AgentTrace } from '../api/chat'
 import { listDatasets, listItems, triggerRun, getRun, type EvalDataset } from '../api/eval'
 import { PARADIGMS, paradigmLabel } from './evalShared'
 import AgentTraceTree from './AgentTraceTree.vue'
+import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 const paradigmOpts = PARADIGMS.map(p => ({ label: p.label, value: p.value }))
 
@@ -12,7 +13,7 @@ const activeTab = ref<'live' | 'eval'>('live')
 
 // ===== Live 并发对照 =====
 const question = ref('RAG是什么')
-const liveAgents = ref<string[]>(['naive', 'crag', 'react'])
+const liveAgents = ref<string[]>(['naive', 'react'])
 const liveRunning = ref(false)
 interface LiveColumn {
   trace: AgentTrace | null
@@ -69,7 +70,7 @@ async function runLive() {
 // ===== Eval 指标对照 =====
 const datasets = ref<EvalDataset[]>([])
 const datasetId = ref<number | undefined>()
-const evalAgents = ref<string[]>(['naive', 'crag', 'plan_execute'])
+const evalAgents = ref<string[]>(['naive', 'react'])
 const evalLimit = ref(5)
 const evalRunning = ref(false)
 interface EvalResult {
@@ -162,14 +163,14 @@ function metricOf(agent: string, name: string): string {
   return (m[name].mean ?? 0).toFixed(3)
 }
 
-const evalColumns = [
+const evalColumns = useResizableColumns([
   { title: '范式', dataIndex: 'paradigm', key: 'paradigm' },
   { title: '状态', dataIndex: 'status', key: 'status' },
   { title: 'Recall@5', dataIndex: 'recall5', key: 'recall5' },
   { title: 'Precision@5', dataIndex: 'precision5', key: 'precision5' },
   { title: 'MRR', dataIndex: 'mrr', key: 'mrr' },
   { title: 'nDCG@5', dataIndex: 'ndcg5', key: 'ndcg5' },
-]
+])
 const evalRows = computed(() =>
   evalAgents.value.map((a) => ({
     key: a,
@@ -201,7 +202,7 @@ const evalRows = computed(() =>
         <div class="cols">
           <div v-for="a in liveAgents" :key="a" class="col">
             <div class="col-head">
-              <a-tag color="teal">{{ paradigmLabel(a) }}</a-tag>
+              <a-tag color="purple">{{ paradigmLabel(a) }}</a-tag>
               <span class="col-status">
                 <template v-if="liveColumns[a]?.error" class="err">错误</template>
                 <template v-else-if="liveColumns[a] && !liveColumns[a].done">运行中…</template>
@@ -245,7 +246,12 @@ const evalRows = computed(() =>
           :pagination="false"
           size="small"
           bordered
-        />
+          :scroll="{ x: 640 }"
+        >
+          <template #headerCell="{ column }">
+            <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="evalColumns">{{ column.title }}</span>
+          </template>
+        </a-table>
         <p class="hint">
           所有范式跑<strong>同一批问题</strong>（{{ evalQuestionCount ?? evalLimit }} 题），指标为 mean（Recall@5 / Precision@5 / MRR / nDCG@5），保证对照公平。延迟与 LLM 调用次数见 Live 对照或单 run 详情。
         </p>
@@ -284,7 +290,7 @@ const evalRows = computed(() =>
   max-width: 460px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 12px;
 }
 .col-head {
@@ -298,7 +304,7 @@ const evalRows = computed(() =>
   color: var(--color-ink-secondary);
 }
 .col-status .err {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 .answer {
   margin-top: 10px;

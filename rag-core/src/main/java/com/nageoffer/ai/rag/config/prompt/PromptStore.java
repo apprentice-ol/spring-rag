@@ -51,7 +51,6 @@ public class PromptStore {
             "agent/grade",
             "agent/decompose",
             "agent/react-system",
-            "agent/self-rag-reflect",
             "vlm/describe-image");
 
     private final Map<String, String> cache = new ConcurrentHashMap<>();

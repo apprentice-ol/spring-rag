@@ -75,7 +75,7 @@ public class EvalMetricEntity {
     @TableField(value = "agent_trace", typeHandler = JsonbTypeHandler.class)
     private String agentTrace;
 
-    /** agent 范式（naive/crag/self_rag/react/plan_execute） */
+    /** agent 范式（naive/react） */
     private String paradigm;
 
     /** 条目分类（冗余自 sa_eval_item.category，便于运行记录按分类展示/筛选） */

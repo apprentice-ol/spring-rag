@@ -95,13 +95,13 @@ const emit = defineEmits<{
   font-size: 11px;
 }
 .status-done {
-  color: #22c55e;
+  color: var(--color-success);
 }
 .status-failed {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 .status-other {
-  color: #f59e0b;
+  color: var(--color-signal);
 }
 .doc-actions {
   display: flex;

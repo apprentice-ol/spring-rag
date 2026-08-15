@@ -217,7 +217,7 @@ function extLabel() {
 <style scoped>
 .preview { height: 100%; display: flex; flex-direction: column; background: var(--color-bg); }
 .preview-iframe { width: 100%; flex: 1; border: 0; }
-.preview-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #f0f0f0; padding: 16px; }
+.preview-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: var(--color-surface-secondary); padding: 16px; }
 .preview-image { max-width: 100%; max-height: 100%; object-fit: contain; }
 .preview-header {
   display: flex; justify-content: space-between; align-items: flex-start;
@@ -228,8 +228,8 @@ function extLabel() {
 .preview-title-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .preview-name { margin: 0; font-size: 15px; font-weight: 600; color: var(--color-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-meta { font-size: 12px; color: var(--color-ink-tertiary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.doc-badge { display: inline-block; padding: 0 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; background: var(--color-surface-secondary); border: 1px solid var(--color-border-light); border-radius: 3px; color: var(--color-ink-secondary); }
-.no-source-badge { color: #e67e22; font-weight: 500; }
+.doc-badge { display: inline-block; padding: 0 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; background: var(--color-surface-secondary); border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); color: var(--color-ink-secondary); }
+.no-source-badge { color: var(--color-signal); font-weight: 500; }
 .preview-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .preview-dl { color: var(--color-ink-secondary); }
 .preview-close { color: var(--color-ink-secondary); font-size: 14px; }
@@ -240,12 +240,12 @@ function extLabel() {
   color: var(--color-ink-tertiary); gap: 8px;
 }
 .error-box { display: flex; align-items: center; gap: 8px; color: var(--color-ink-secondary); }
-.preview-container { width: 100%; max-width: 880px; margin: 0 auto; padding: 20px 24px 40px; font-size: 14px; line-height: 1.75; color: #222; }
+.preview-container { width: 100%; max-width: 880px; margin: 0 auto; padding: 20px 24px 40px; font-size: 14px; line-height: 1.75; color: var(--color-ink); }
 /* github-markdown-css 自带白色背景，与页面灰绿背景分层 → 统一透明继承页面背景 */
 .preview-container.markdown-body { background: transparent; }
 /* 全屏预览页：内容宽度跟随可拖拽容器（自由拉宽缩短） */
 .preview-fullpage .preview-container { max-width: none; }
-.preview-container :deep(pre) { border-radius: 4px; }
+.preview-container :deep(pre) { border-radius: var(--radius-sm); }
 .preview-container :deep(table) { display: block; overflow-x: auto; }
 .preview-container :deep(img) { max-width: 100%; }
 .preview-container :deep(hr) { margin: 24px 0; border: none; border-top: 1px dashed var(--color-border-light); }

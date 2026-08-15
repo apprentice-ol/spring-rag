@@ -83,12 +83,9 @@ rag:
     # system-prompt 已迁至 prompts/chat/pipeline/rag-answer-system.md（单一来源）；
     # 如需运维覆盖，可在此设置 system-prompt: xxx
     agent:                       # 多范式可插拔 agent 框架（rag.chat.agent.* → AgentProperties）
-      paradigm: naive            # 默认 agent 范式：naive / crag / self_rag / react / plan_execute
-      max-retries: 1             # CRAG/Self-RAG 检索不足时的重试次数上限
+      paradigm: naive            # 默认 agent 范式：naive / react
       grade-threshold: 0.5       # grade 相关性阈值（chunk score >= 该值视为 relevant）
-      min-hits: 2                # 最小命中条数（少于该值视为检索不足，触发重试/兜底）
       react-max-steps: 6         # ReAct 最大循环步数（防死循环硬上限）
-      enable-web-fallback: false # web 搜索兜底（WebSearchChannel 为 stub 时无效，CRAG 退化为重试改写）
   search:
     channels:
       keyword:

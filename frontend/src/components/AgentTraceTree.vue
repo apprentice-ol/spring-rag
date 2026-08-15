@@ -67,7 +67,7 @@ function droppedRefs(detail: RerankDetail): number[] {
 <template>
   <div v-if="trace" class="agent-trace">
     <div class="trace-meta">
-      <a-tag color="teal">{{ trace.paradigm }}</a-tag>
+      <a-tag color="purple">{{ trace.paradigm }}</a-tag>
       <span class="meta-item">{{ trace.steps.length }} 步</span>
       <span class="meta-item">LLM ×{{ trace.llmCallCount }}</span>
       <span v-if="trace.totalLatencyMs" class="meta-item">{{ trace.totalLatencyMs }}ms</span>
@@ -171,15 +171,15 @@ function droppedRefs(detail: RerankDetail): number[] {
 .step-latency { font-size: 11px; color: var(--color-ink-tertiary); }
 .expand-btn {
   margin-left: auto; font-size: 11px; cursor: pointer; user-select: none;
-  color: var(--color-primary, #1677ff);
+  color: var(--color-primary);
 }
 .step-thought { font-size: 12px; color: var(--color-ink); margin: 2px 0; line-height: 1.5; }
 .step-io { font-size: 11px; color: var(--color-ink-secondary); margin-top: 1px; word-break: break-all; }
 .io-label { color: var(--color-ink-tertiary); }
 
 .step-detail {
-  margin-top: 6px; padding: 6px 8px; border-radius: 4px;
-  background: var(--color-fill-1, rgba(0,0,0,0.03));
+  margin-top: 6px; padding: 6px 8px; border-radius: var(--radius-sm);
+  background: var(--color-surface-secondary);
 }
 .detail-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: auto; }
 .detail-table th {
@@ -188,7 +188,7 @@ function droppedRefs(detail: RerankDetail): number[] {
 }
 .detail-table td {
   padding: 2px 6px; vertical-align: top;
-  border-top: 1px solid var(--color-border, rgba(0,0,0,0.06));
+  border-top: 1px solid var(--color-border-light);
 }
 .text-cell, .wide-col { max-width: 240px; color: var(--color-ink-secondary); word-break: break-all; }
 
@@ -205,9 +205,9 @@ function droppedRefs(detail: RerankDetail): number[] {
 .ref-chip {
   display: inline-flex; align-items: baseline; gap: 2px;
   padding: 1px 7px; border-radius: 10px; font-size: 11px;
-  background: var(--color-fill-2, rgba(0,0,0,0.06));
+  background: var(--color-surface-secondary);
 }
 .ref-chip small { font-size: 9px; color: var(--color-ink-tertiary); }
-.ref-chip.keep { color: var(--color-success, #52c41a); }
+.ref-chip.keep { color: var(--color-success); }
 .ref-chip.drop { opacity: 0.4; text-decoration: line-through; }
 </style>

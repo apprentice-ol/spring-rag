@@ -22,6 +22,7 @@
         <module>rag-common</module>
         <module>obs-telemetry</module>
         <module>obs-telemetry-backends</module>
+        <module>obs-telemetry-examples</module>
         <module>rag-core</module>
     </modules>
 

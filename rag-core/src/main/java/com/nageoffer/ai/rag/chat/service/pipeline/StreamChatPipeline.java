@@ -23,6 +23,7 @@ import com.nageoffer.ai.rag.config.properties.AgentProperties;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
 import com.nageoffer.ai.rag.diagnose.dto.*;
 import com.nageoffer.ai.rag.diagnose.service.LogDiagnoseService;
+import com.nageoffer.ai.obs.backends.openobserve.dto.TraceLogEntry;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.util.Strings;
 import org.springframework.stereotype.Service;
@@ -71,6 +72,7 @@ public class StreamChatPipeline {
     private final LogDiagnoseService logDiagnoseService;
     private final AgentTraceService agentTraceService;
     private final RagAnswerStreamService ragAnswerStreamService;
+    private final ObsTemplate obsTemplate;
 
     /**
      * 执行流式对话管道。
@@ -85,8 +87,7 @@ public class StreamChatPipeline {
         long t0 = System.currentTimeMillis();
         // 0. 查询归一化：① 规则式（去噪 + 疑问→陈述）→ ② LLM 改写（带历史上下文消解指代词）
         // QueryNormalizer 是 rag-common 静态工具（AOP 够不到），手动开 step 埋点
-        String ruleNormalized = ObsTemplate.getInstance()
-                .step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
+        String ruleNormalized = obsTemplate.step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
 
         if (ruleNormalized.isBlank()) {
             ruleNormalized = question == null ? "" : question.trim();
@@ -137,10 +138,11 @@ public class StreamChatPipeline {
                 chatProperties.getTopK(), chatProperties.getSimilarityThreshold(),
                 chatProperties.getRecallBudget(), chatProperties.getCandidateLimit(), chatProperties.getContextTopK());
 
-        // 检索编排委托给可插拔 agent：请求级 ?agent= 覆盖默认范式（naive/crag/react/...）
+        // 检索编排委托给可插拔 agent：请求级 ?agent= 覆盖默认范式（naive/react）
         RagAgent ragAgent = StringUtils.hasText(agent)
                 ? agentRegistry.require(agent)
                 : agentRegistry.defaultAgent();
+        // trace 维度（intent/agent 范式）由 ObsDimensions 从 step 返回值自动提取，此处零观测调用
         AgentRequest agentReq = new AgentRequest(question, historyForRewrite, intent, searchCtx, agentProperties, null);
         AgentRetrievalResult agentResult = ragAgent.planAndRetrieve(agentReq);
         log.info("[对话管道] agent={} 完成: verdict={}, 最终块={}条, 检索耗时={}ms, llm调用={}次",
@@ -328,6 +330,9 @@ public class StreamChatPipeline {
                 .subscribe(
                         content -> {
                             fullAnswer.append(content);
+                            // 先写 trace output 再发 SSE：客户端断连时 sendEvent 可能让 server span 提前结束，
+                            // 若在 error 回调再写会因 span 已结束而丢失 output。
+                            outputSink.accept(fullAnswer.toString());
                             sendEvent(emitter, content);
                         },
                         e -> {
@@ -384,7 +389,15 @@ public class StreamChatPipeline {
         ragAnswerStreamService.answer(question, contextText)
                 .subscribe(
                         content -> {
-                            fullAnswer.append(content);
+                            try {
+                                fullAnswer.append(content);
+                                // 先写 trace output 再发 SSE：客户端断连时 sendEvent 可能让 server span 提前结束，
+                                // 若在 error 回调再写会因 span 已结束而丢失 output。
+                                outputSink.accept(fullAnswer.toString());
+                            } catch (Throwable t) {
+                                // 观测写失败绝不能中断流式回答
+                                log.warn("[ObservationPipeline] 写 trace output 失败（忽略）", t);
+                            }
                             sendEvent(emitter, content);
                         },
                         e -> {
@@ -392,15 +405,32 @@ public class StreamChatPipeline {
                             // 异常路径也写 trace output（已累积的部分回答 / error 标记），
                             // 否则流式中断时根 span 只剩 input、output 丢失（Langfuse trace 列表 output 为空）
                             String partial = fullAnswer.toString();
-                            outputSink.accept(partial.isEmpty()
-                                    ? "[stream error] " + e.getMessage() : partial);
+                            try {
+                                outputSink.accept(partial.isEmpty()
+                                        ? "[stream error] " + e.getMessage() : partial);
+                            } catch (Throwable t) {
+                                log.warn("[ObservationPipeline] 写 trace output 失败", t);
+                            }
                             emitter.completeWithError(e);
                         },
                         () -> {
                             String answer = fullAnswer.toString();
-                            Long msgId = saveMessage(conversationId, "assistant", answer);
-                            outputSink.accept(answer);
-                            agentTraceService.record(conversationId, msgId, paradigm, question, trace);
+                            Long msgId = null;
+                            try {
+                                msgId = saveMessage(conversationId, "assistant", answer);
+                            } catch (Throwable t) {
+                                log.warn("[对话管道] 保存助手消息失败", t);
+                            }
+                            try {
+                                outputSink.accept(answer);
+                            } catch (Throwable t) {
+                                log.warn("[ObservationPipeline] 写最终 trace output 失败", t);
+                            }
+                            try {
+                                agentTraceService.record(conversationId, msgId, paradigm, question, trace);
+                            } catch (Throwable t) {
+                                log.warn("[对话管道] 记录 agent trace 失败", t);
+                            }
                             log.info("========== [对话管道] 完成 ========== 会话ID={}, 耗时={}ms",
                                     conversationId, System.currentTimeMillis() - t0);
                             completeEmitter(emitter);

@@ -31,7 +31,7 @@ public class ObsEvent {
     /** 仅 STEP_OUTPUT：步骤耗时 ms。 */
     private Long durationMs;
 
-    /** 仅 TRACE_IO / ATTRIBUTE：attribute key（rag.trace.input / model 等）。 */
+    /** 仅 TRACE_IO / ATTRIBUTE：attribute key（gen_ai.input/output.messages / model 等）。 */
     private String ioKey;
 
     /** true = data 是原样输出（流式完整 LLM 回答），SummarizeProcessor 跳过摘要（仍受截断兜底）。 */
@@ -50,7 +50,7 @@ public class ObsEvent {
         STEP_INPUT,
         /** step 输出（含 durationMs）。 */
         STEP_OUTPUT,
-        /** trace 级 IO（rag.trace.input/output，原文不摘要）。 */
+        /** trace 级 IO（gen_ai.input/output.messages，原文不摘要）。 */
         TRACE_IO,
         /** 低基数标签（model/channel 等）。 */
         ATTRIBUTE,

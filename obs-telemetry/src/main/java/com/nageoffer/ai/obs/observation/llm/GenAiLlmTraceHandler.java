@@ -1,5 +1,6 @@
 package com.nageoffer.ai.obs.observation.llm;
 
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
 import io.micrometer.common.KeyValue;
 import io.micrometer.observation.Observation;
@@ -22,14 +23,14 @@ public class GenAiLlmTraceHandler implements LlmTraceHandler {
             return;
         }
         try {
-            addLow(context, "gen_ai.operation.name", OPERATION_CHAT);
-            addLow(context, "gen_ai.system", call.getSystem());
-            addLow(context, "gen_ai.request.model", call.getModel());
-            addHigh(context, "gen_ai.prompt", call.getPrompt());
-            addHigh(context, "gen_ai.completion", call.getCompletion());
-            addNum(context, "gen_ai.usage.input_tokens", call.getPromptTokens());
-            addNum(context, "gen_ai.usage.output_tokens", call.getCompletionTokens());
-            addNum(context, "gen_ai.usage.total_tokens", call.getTotalTokens());
+            addLow(context, OtelKeys.GEN_AI_OPERATION_NAME, OPERATION_CHAT);
+            addLow(context, OtelKeys.GEN_AI_SYSTEM, call.getSystem());
+            addLow(context, OtelKeys.GEN_AI_REQUEST_MODEL, call.getModel());
+            addHigh(context, OtelKeys.GEN_AI_PROMPT, call.getPrompt());
+            addHigh(context, OtelKeys.GEN_AI_COMPLETION, call.getCompletion());
+            addNum(context, OtelKeys.GEN_AI_USAGE_INPUT_TOKENS, call.getPromptTokens());
+            addNum(context, OtelKeys.GEN_AI_USAGE_OUTPUT_TOKENS, call.getCompletionTokens());
+            addNum(context, OtelKeys.GEN_AI_USAGE_TOTAL_TOKENS, call.getTotalTokens());
         } catch (Throwable ignored) {
             // 绝不影响 observation 生命周期
         }
@@ -54,6 +55,9 @@ public class GenAiLlmTraceHandler implements LlmTraceHandler {
     }
 
     private String truncate(String s) {
+        if (!SpanIoLimits.isTruncateEnabled()) {
+            return s;
+        }
         return s.length() <= SpanIoLimits.maxSpanIo()
                 ? s
                 : s.substring(0, SpanIoLimits.maxSpanIo()) + "…[truncated]";

@@ -23,6 +23,7 @@ import {
   type EvalItem,
 } from '../api/eval'
 import { parseDocIds, SOURCE_LABEL, CATEGORY_DESC, PARADIGMS, paradigmLabel } from './evalShared'
+import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 const props = defineProps<{ datasets: EvalDataset[] }>()
 const emit = defineEmits<{ 'need-reload-datasets': [] }>()
@@ -34,12 +35,12 @@ const importSampleSize = ref(50)
 const newQuestion = ref('')
 const newExpected = ref('')
 
-const dsColumns = [
+const dsColumns = useResizableColumns([
   { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
   { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
   { title: '题数', dataIndex: 'itemCount', key: 'itemCount', width: 80 },
   { title: '操作', key: 'action', width: 170 },
-]
+])
 
 const selectedDataset = computed(() => props.datasets.find((d) => d.id === selectedDatasetId.value) || null)
 
@@ -257,14 +258,14 @@ async function doTrigger() {
   }
 }
 
-const itemColumns = [
+const itemColumns = useResizableColumns([
   { title: '问题', dataIndex: 'question', key: 'question', ellipsis: true },
   { title: '分类', dataIndex: 'category', key: 'category', width: 100 },
   { title: '来源', dataIndex: 'source', key: 'source', width: 130 },
   { title: '期望文档', dataIndex: 'expected', key: 'expected', width: 90 },
   { title: '启用', dataIndex: 'enabled', key: 'enabled', width: 70 },
   { title: '操作', key: 'action', width: 90 },
-]
+])
 
 const itemSummary = computed(() => {
   const bySource = new Map<string, number>()
@@ -282,112 +283,146 @@ interface ErrResp {
 
 <template>
   <div class="ds-tab">
-    <div class="ds-toolbar">
-      <a-button type="primary" @click="openCreate">
-        <template #icon><PlusOutlined /></template>新建数据集
-      </a-button>
-      <a-button @click="openImport">
-        <template #icon><CloudDownloadOutlined /></template>导入数据集
-      </a-button>
+    <!-- 页头：标题 + 主操作（导入 / 新建） -->
+    <div class="page-header">
+      <div class="page-header-text">
+        <h1 class="page-title">数据集</h1>
+        <p class="page-desc">黄金集题库 · 点击数据集行展开，管理评测条目并触发运行</p>
+      </div>
+      <div class="page-actions">
+        <a-button @click="openImport">
+          <template #icon><CloudDownloadOutlined /></template>导入数据集
+        </a-button>
+        <a-button type="primary" @click="openCreate">
+          <template #icon><PlusOutlined /></template>新建数据集
+        </a-button>
+      </div>
     </div>
 
-    <a-table
-      :data-source="datasets"
-      :columns="dsColumns"
-      size="small"
-      row-key="id"
-      :pagination="false"
-      :row-class-name="(r: any) => (r.id === selectedDatasetId ? 'row-selected' : '')"
-      :custom-row="(r: any) => ({ onClick: () => onRowClick(r) })"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'action'">
-          <a-button type="link" size="small" @click.stop="openEdit(record)"><EditOutlined />编辑</a-button>
-          <a-button type="link" size="small" danger @click.stop="confirmDeleteDataset(record)"><DeleteOutlined />删除</a-button>
-        </template>
-      </template>
-      <template #emptyText><a-empty description="暂无数据集，请新建或导入" /></template>
-    </a-table>
-
-    <!-- 选中数据集的条目面板 -->
-    <div v-if="selectedDataset" class="item-panel">
-      <div class="panel-title">
-        {{ selectedDataset.name }} · {{ items.length }} 条
-        <a-button type="link" size="small" class="collapse-btn" @click="selectedDatasetId = null">收起</a-button>
+    <!-- 数据集表格卡 -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <span class="toolbar-hint">共 {{ datasets.length }} 个数据集 · 点击行展开条目</span>
       </div>
-
-      <!-- 评测范围 + 触发（置顶，选中数据集即可见） -->
-      <div class="trigger-row">
-        <span class="tr-label">范式</span>
-        <a-select v-model:value="triggerParadigm" style="width: 170px">
-          <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">
-            {{ p.label }} · {{ p.desc }}
-          </a-select-option>
-        </a-select>
-        <span class="tr-label">评测范围</span>
-        <a-select
-          v-model:value="triggerCategory"
-          placeholder="全部分类"
-          allow-clear
-          style="width: 140px"
-          :options="categoryOptions.map((c) => ({ label: c, value: c }))"
-        />
-        <a-input-number v-model:value="triggerLimit" :min="1" placeholder="抽样数量" style="width: 120px" />
-        <span class="tr-hint">不选 = 全量（{{ items.length }} 题）</span>
-        <a-checkbox v-model:checked="triggerRewrite" title="勾选后评测走真实聊天链路（含 LLM 改写，分数更接近线上）">启用查询改写</a-checkbox>
-        <a-button type="primary" size="large" :disabled="!items.length" @click="doTrigger">
-          <template #icon><PlayCircleOutlined /></template>触发评测
-        </a-button>
-      </div>
-
-      <div v-if="items.length" class="sum">
-        <span v-for="[src, n] in itemSummary" :key="src" class="chip">{{ SOURCE_LABEL[src] || src }} × {{ n }}</span>
-      </div>
-
-      <div class="add-form">
-        <a-textarea v-model:value="newQuestion" placeholder="用户问题" :auto-size="{ minRows: 1, maxRows: 3 }" style="flex: 2" />
-        <a-input v-model:value="newExpected" placeholder="期望 doc_id（逗号或换行分隔）" style="flex: 2" />
-        <a-button type="primary" @click="doAddItem">
-          <template #icon><PlusOutlined /></template>添加
-        </a-button>
-      </div>
-
       <a-table
-        :data-source="items"
-        :columns="itemColumns"
+        :data-source="datasets"
+        :columns="dsColumns"
         size="small"
         row-key="id"
-        :pagination="{ pageSize: 10, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条` }"
+        :pagination="false"
         :scroll="{ x: 760 }"
+        :row-class-name="(r: any) => (r.id === selectedDatasetId ? 'row-selected' : '')"
+        :custom-row="(r: any) => ({ onClick: () => onRowClick(r) })"
       >
         <template #headerCell="{ column }">
-          <template v-if="column.key === 'category'">
-            分类
-            <a-tooltip placement="top" :overlay-style="{ maxWidth: '340px' }">
-              <template #title>
-                <div class="cat-tip-title">LiveRAG 问题类型（answer-type）</div>
-                <div v-for="c in CATEGORY_DESC" :key="c.key" class="cat-tip-row">
-                  <b>{{ c.key }}</b> {{ c.desc }}
-                </div>
-              </template>
-              <QuestionCircleOutlined class="col-help" />
-            </a-tooltip>
-          </template>
-          <template v-else>{{ column.title }}</template>
+          <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="dsColumns">{{ column.title }}</span>
         </template>
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'expected'">{{ parseDocIds(record.expectedDocIds).length }}</template>
-          <template v-else-if="column.key === 'source'">{{ SOURCE_LABEL[record.source] || record.source }}</template>
-          <template v-else-if="column.key === 'enabled'">
-            <a-switch :checked="record.enabled === 1" size="small" @change="doToggle(record)" />
-          </template>
-          <template v-else-if="column.key === 'action'">
-            <a-button type="link" size="small" danger @click="confirmDeleteItem(record)">删除</a-button>
+          <template v-if="column.key === 'action'">
+            <a-button type="link" size="small" @click.stop="openEdit(record)"><EditOutlined />编辑</a-button>
+            <a-button type="link" size="small" danger @click.stop="confirmDeleteDataset(record)"><DeleteOutlined />删除</a-button>
           </template>
         </template>
+        <template #emptyText><a-empty description="暂无数据集，请新建或导入" /></template>
       </a-table>
     </div>
-    <div v-else class="select-hint">↑ 点击上方数据集查看与管理其评测条目</div>
+
+    <!-- 选中数据集：触发条件筛选卡 + 条目表格卡 -->
+    <template v-if="selectedDataset">
+      <!-- 评测范围 + 触发（筛选卡形式，选中数据集即可见） -->
+      <div class="filter-card">
+        <div class="filter-row">
+          <div class="filter-item">
+            <span class="filter-label">范式</span>
+            <a-select v-model:value="triggerParadigm" style="width: 180px">
+              <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">
+                {{ p.label }} · {{ p.desc }}
+              </a-select-option>
+            </a-select>
+          </div>
+          <div class="filter-item">
+            <span class="filter-label">评测范围</span>
+            <a-select
+              v-model:value="triggerCategory"
+              placeholder="全部分类"
+              allow-clear
+              style="width: 140px"
+              :options="categoryOptions.map((c) => ({ label: c, value: c }))"
+            />
+          </div>
+          <div class="filter-item">
+            <span class="filter-label">抽样</span>
+            <a-input-number v-model:value="triggerLimit" :min="1" placeholder="数量" style="width: 110px" />
+          </div>
+          <span class="filter-hint">不选 = 全量（{{ items.length }} 题）</span>
+          <div class="filter-actions">
+            <a-checkbox v-model:checked="triggerRewrite" title="勾选后评测走真实聊天链路（含 LLM 改写，分数更接近线上）">启用查询改写</a-checkbox>
+            <a-button type="primary" :disabled="!items.length" @click="doTrigger">
+              <template #icon><PlayCircleOutlined /></template>触发评测
+            </a-button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 条目表格卡：工具栏（数据集名 + 来源统计）+ 追加表单 + 条目表 -->
+      <div class="table-card">
+        <div class="table-toolbar">
+          <div class="toolbar-left">
+            <span class="panel-name">{{ selectedDataset.name }}</span>
+            <span class="selected-count">{{ items.length }} 条</span>
+            <span v-for="[src, n] in itemSummary" :key="src" class="toolbar-hint">{{ SOURCE_LABEL[src] || src }} × {{ n }}</span>
+          </div>
+          <div class="toolbar-right">
+            <a-button type="text" size="small" @click="selectedDatasetId = null">收起</a-button>
+          </div>
+        </div>
+
+        <!-- 追加评测条目 -->
+        <div class="add-row">
+          <a-textarea v-model:value="newQuestion" placeholder="用户问题" :auto-size="{ minRows: 1, maxRows: 3 }" style="flex: 2" />
+          <a-input v-model:value="newExpected" placeholder="期望 doc_id（逗号或换行分隔）" style="flex: 2" />
+          <a-button type="primary" @click="doAddItem">
+            <template #icon><PlusOutlined /></template>添加
+          </a-button>
+        </div>
+
+        <a-table
+          :data-source="items"
+          :columns="itemColumns"
+          size="small"
+          row-key="id"
+          :pagination="{ pageSize: 10, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条` }"
+          :scroll="{ x: 760 }"
+        >
+          <template #headerCell="{ column }">
+            <span v-if="column.key === 'category'" class="th-cell" v-resize:[column.key]="itemColumns">
+              分类
+              <a-tooltip placement="top" :overlay-style="{ maxWidth: '340px' }">
+                <template #title>
+                  <div class="cat-tip-title">LiveRAG 问题类型（answer-type）</div>
+                  <div v-for="c in CATEGORY_DESC" :key="c.key" class="cat-tip-row">
+                    <b>{{ c.key }}</b> {{ c.desc }}
+                  </div>
+                </template>
+                <QuestionCircleOutlined class="col-help" />
+              </a-tooltip>
+            </span>
+            <span v-else-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="itemColumns">{{ column.title }}</span>
+          </template>
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'expected'">{{ parseDocIds(record.expectedDocIds).length }}</template>
+            <template v-else-if="column.key === 'source'">{{ SOURCE_LABEL[record.source] || record.source }}</template>
+            <template v-else-if="column.key === 'enabled'">
+              <a-switch :checked="record.enabled === 1" size="small" @change="doToggle(record)" />
+            </template>
+            <template v-else-if="column.key === 'action'">
+              <a-button type="link" size="small" danger @click="confirmDeleteItem(record)">删除</a-button>
+            </template>
+          </template>
+        </a-table>
+      </div>
+    </template>
+    <div v-else class="select-hint">点击上方数据集查看与管理其评测条目</div>
 
     <!-- 新建/编辑 Modal -->
     <a-modal
@@ -445,13 +480,10 @@ interface ErrResp {
 .ds-tab {
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
-.ds-toolbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
+/* 页头/筛选卡自带下边距，这里给表格卡之间补 12px 节奏 */
+.ds-tab .table-card {
+  margin-bottom: 12px;
 }
 /* 导入 dialog */
 .import-form .opt-desc {
@@ -472,7 +504,7 @@ interface ErrResp {
 .col-help {
   margin-left: 4px;
   font-size: 12px;
-  color: var(--color-ink-tertiary, #999);
+  color: var(--color-ink-tertiary);
   cursor: help;
 }
 .cat-tip-title {
@@ -483,61 +515,24 @@ interface ErrResp {
   font-size: 12px;
   line-height: 1.7;
 }
-.item-panel {
-  margin-top: 8px;
-  padding: 14px 16px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-sm);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.panel-title {
+/* 条目工具栏里的数据集名 */
+.panel-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-ink);
-  display: flex;
-  align-items: center;
 }
-.collapse-btn {
-  margin-left: auto;
-  padding: 0;
-  height: auto;
+/* 触发条件提示文案 */
+.filter-hint {
   font-size: 12px;
+  color: var(--color-ink-tertiary);
 }
-.sum {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.chip {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--color-surface-secondary);
-  color: var(--color-ink-secondary);
-}
-.add-form {
+/* 追加条目表单行（表格卡内、条目表上方） */
+.add-row {
   display: flex;
   gap: 8px;
   align-items: stretch;
   flex-wrap: wrap;
-}
-.trigger-row {
-  margin-top: 4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.tr-label {
-  font-size: 13px;
-  color: var(--color-ink-secondary);
-}
-.tr-hint {
-  font-size: 12px;
-  color: var(--color-ink-tertiary);
+  padding: 12px 20px 4px;
 }
 .select-hint {
   text-align: center;

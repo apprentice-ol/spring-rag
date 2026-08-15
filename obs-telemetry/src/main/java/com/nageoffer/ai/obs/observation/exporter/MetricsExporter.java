@@ -1,26 +1,45 @@
 package com.nageoffer.ai.obs.observation.exporter;
 
-import com.nageoffer.ai.obs.observation.span.SpanWriter;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
+import com.nageoffer.ai.obs.observation.span.SpanWriter;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.util.concurrent.TimeUnit;
+import org.springframework.core.annotation.Order;
 
 /**
- * Metrics 支柱预留 exporter（当前 no-op）。
+ * Metrics 支柱 exporter（发·出口 C）。
  *
- * <p><b>所属维度</b>：发（{@link ObservationExporter} 预留扩展位）。</p>
+ * <p><b>所属维度</b>：发（{@link ObservationExporter}，@Order(30)，MeterRegistry 缺失时 no-op）。</p>
  *
- * <p><b>职责（规划）</b>：STEP_OUTPUT 时打 Micrometer 指标——Timer（按 step name 耗时分布）、
- * Counter（次数），补齐 metrics 支柱。启用时：实现 export + 注入 MeterRegistry + 加 @Component。</p>
+ * <p><b>职责</b>：STEP_OUTPUT 时按步骤打耗时 Timer（{@code {ns}.step.duration}，tag=步骤名低基数）。
+ * 指标名走命名空间前缀——OTel GenAI 语义约定只标准化了 LLM 客户端指标
+ * （{@code gen_ai.client.operation.duration} 等，由 Spring AI 原生观察输出，本类不重复）；
+ * "流水线步骤耗时"是框架自有概念，无标准名，按 {@link OtelKeys#stepDurationMetric()} 命名。</p>
  *
- * <p><b>当前状态</b>：no-op，不注册为 bean。本类的存在让 metrics 扩展点显式可见。</p>
+ * <p><b>不做什么</b>：不写 span attribute / 日志（出口 A/B 的职责）；tag 只放低基数步骤名。</p>
  */
+@Order(30)
 public class MetricsExporter implements ObservationExporter {
+
+    private final MeterRegistry meterRegistry;
+
+    /** @param meterRegistry 可为 null（宿主无 micrometer-core 时 no-op） */
+    public MetricsExporter(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     @Override
     public void export(ObsEvent event, SpanWriter target) {
-        // TODO(后续任务): Micrometer Timer/Counter 打点。
-        //   if (event.getType() == EventType.STEP_OUTPUT && event.getDurationMs() != null) {
-        //       meterRegistry.timer("obs.step.duration", "step", event.getName())
-        //               .record(event.getDurationMs(), TimeUnit.MILLISECONDS);
-        //   }
+        if (meterRegistry == null || event.getType() != ObsEvent.EventType.STEP_OUTPUT
+                || event.getDurationMs() == null || event.getName() == null) {
+            return;
+        }
+        try {
+            meterRegistry.timer(OtelKeys.stepDurationMetric(), OtelKeys.step(), event.getName())
+                    .record(event.getDurationMs(), TimeUnit.MILLISECONDS);
+        } catch (RuntimeException ignored) {
+            // 指标绝不影响观测事件流
+        }
     }
 }

@@ -40,10 +40,26 @@
             <artifactId>micrometer-observation</artifactId>
         </dependency>
 
+        <!-- micrometer core（MeterRegistry，MetricsExporter 步骤耗时指标用）。
+             optional：宿主带 actuator 时才有，缺省时 MetricsExporter 不注册 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- OpenTelemetry API（Span / OpenTelemetry / Tracer / Context）；运行时 bean 由引入方应用的 tracing-bridge 提供 -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
+        </dependency>
+
+        <!-- OpenTelemetry SDK（SpanProcessor 接口，BaggageAttributeSpanProcessor 用）。
+             optional：宿主带 tracing 桥（micrometer-tracing-bridge-otel）时才有该类，缺省时对应 bean 自动跳过 -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- OTLP Logs 的 logback appender（optional）。

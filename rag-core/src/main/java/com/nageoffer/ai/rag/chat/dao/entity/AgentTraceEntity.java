@@ -27,7 +27,7 @@ public class AgentTraceEntity {
     /** 关联的 assistant 消息 id（sa_message.id），可空 */
     private Long messageId;
 
-    /** 范式：naive/crag/self_rag/react/plan_execute */
+    /** 范式：naive/react */
     private String paradigm;
 
     /** 用户原始问题 */

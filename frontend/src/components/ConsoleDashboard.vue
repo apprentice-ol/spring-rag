@@ -51,10 +51,10 @@ const stats = computed(() => {
   const s = data.value?.stats
   if (!s) return []
   return [
-    { label: '文档', value: statVal(s.documents), icon: FileTextOutlined, bg: '#DBEAFE', fg: '#2563EB' },
-    { label: '向量块', value: statVal(s.chunks), icon: DatabaseOutlined, bg: '#D1FAE5', fg: '#0f766e' },
-    { label: '会话', value: statVal(s.conversations), icon: MessageOutlined, bg: '#FEF3C7', fg: '#D97706' },
-    { label: '评测运行', value: statVal(s.evalRuns), icon: BarChartOutlined, bg: '#EDE9FE', fg: '#7C3AED' },
+    { label: '文档', value: statVal(s.documents), icon: FileTextOutlined },
+    { label: '向量块', value: statVal(s.chunks), icon: DatabaseOutlined },
+    { label: '会话', value: statVal(s.conversations), icon: MessageOutlined },
+    { label: '评测运行', value: statVal(s.evalRuns), icon: BarChartOutlined },
   ]
 })
 
@@ -128,7 +128,7 @@ const modelRows = computed(() => {
                 <div class="rg-kpi-num">{{ s.value }}</div>
                 <div class="rg-kpi-label">{{ s.label }}</div>
               </div>
-              <div class="rg-kpi-icon" :style="{ background: s.bg, color: s.fg }">
+              <div class="rg-kpi-icon">
                 <component :is="s.icon" />
               </div>
             </div>
@@ -241,26 +241,14 @@ const modelRows = computed(() => {
 </template>
 
 <style scoped>
-/* 仿 ragent DashboardPage：大标题 + 左右分栏 + DashCard + 彩色 KPI；slate 中性 + teal 品牌 */
+/* 控制台：大标题 + 左右分栏 + 平面细边框卡片；全局 token（中性灰 + 靛蓝单强调色） */
 .rg {
-  --slate-900: #0f172a;
-  --slate-800: #1e293b;
-  --slate-700: #334155;
-  --slate-600: #475569;
-  --slate-500: #64748b;
-  --slate-400: #94a3b8;
-  --slate-200: #e2e8f0;
-  --slate-100: #f1f5f9;
-  --slate-50: #f8fafc;
-  --teal: #0f766e;
-  --teal-soft: #d1fae5;
-
-  padding: 24px 28px 48px;
+  padding: 28px 32px 48px;
   max-width: 1200px;
   margin: 0 auto;
-  background: #fafafa;
+  background: var(--color-bg);
   min-height: 100%;
-  color: var(--slate-700);
+  color: var(--color-ink-secondary);
   font-feature-settings: 'tnum';
 }
 
@@ -269,14 +257,14 @@ const modelRows = computed(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 .rg-title {
   margin: 0;
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--slate-900);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
 }
 .rg-header-right {
   display: flex;
@@ -287,20 +275,20 @@ const modelRows = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 12px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
 }
 .rg-live.ok {
-  background: var(--teal-soft);
-  color: var(--teal);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
 }
 .rg-live-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
   animation: pulse 2s ease-in-out infinite;
@@ -314,19 +302,19 @@ const modelRows = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: 1px solid var(--slate-200);
-  background: #fff;
-  color: var(--slate-500);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink-secondary);
   cursor: pointer;
-  font-size: 15px;
+  font-size: 14px;
   transition: color 0.15s, border-color 0.15s;
 }
 .rg-icon-btn:hover {
-  color: var(--slate-700);
-  border-color: var(--slate-400);
+  color: var(--color-ink);
+  border-color: var(--color-ink-tertiary);
 }
 .rg-icon-btn.spinning :deep(svg) {
   animation: spin 1s linear infinite;
@@ -341,7 +329,7 @@ const modelRows = computed(() => {
 .rg-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 20px;
+  gap: 16px;
 }
 @media (min-width: 1080px) {
   .rg-grid {
@@ -357,29 +345,29 @@ const modelRows = computed(() => {
 .rg-side {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   min-width: 0;
 }
 
-/* DashCard */
+/* 卡片：白底 + 1px 细边框，无投影 */
 .rg-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
 }
 .rg-card-title {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin: 0 0 16px;
-  font-size: 14px;
+  margin: 0 0 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--slate-700);
+  color: var(--color-ink);
 }
 .rg-title-icon {
-  color: var(--teal);
-  font-size: 15px;
+  color: var(--color-ink-tertiary);
+  font-size: 14px;
 }
 .rg-action {
   margin-left: auto;
@@ -388,7 +376,7 @@ const modelRows = computed(() => {
   gap: 4px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--teal);
+  color: var(--color-primary);
   cursor: pointer;
 }
 .rg-action:hover {
@@ -399,7 +387,7 @@ const modelRows = computed(() => {
 .rg-kpis {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
+  gap: 12px;
 }
 @media (min-width: 620px) {
   .rg-kpis {
@@ -411,32 +399,35 @@ const modelRows = computed(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--slate-50);
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-light);
+  background: var(--color-surface);
 }
 .rg-kpi-num {
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--slate-900);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
   font-family: var(--font-display);
   line-height: 1.15;
 }
 .rg-kpi-label {
   margin-top: 4px;
-  font-size: 13px;
-  color: var(--slate-500);
+  font-size: 12px;
+  color: var(--color-ink-tertiary);
 }
 .rg-kpi-icon {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
-  font-size: 18px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 15px;
 }
 
 /* 两列（参数 + 开关） */
@@ -464,7 +455,7 @@ const modelRows = computed(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid var(--slate-100);
+  border-bottom: 1px solid var(--color-border-light);
   font-size: 13px;
 }
 .rg-param:last-child {
@@ -476,11 +467,11 @@ const modelRows = computed(() => {
   gap: 16px;
 }
 .rg-param-k {
-  color: var(--slate-500);
+  color: var(--color-ink-tertiary);
 }
 .rg-param-v {
-  color: var(--slate-800);
-  font-weight: 600;
+  color: var(--color-ink);
+  font-weight: 500;
   font-family: var(--font-display);
 }
 
@@ -489,30 +480,31 @@ const modelRows = computed(() => {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border-radius: 12px;
-  background: var(--slate-50);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
 }
 .rg-toggle {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
-  color: var(--slate-600);
+  color: var(--color-ink-secondary);
 }
 .rg-pill {
   padding: 2px 10px;
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   font-family: var(--font-display);
 }
 .rg-pill.on {
-  background: var(--teal-soft);
-  color: var(--teal);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
 }
 .rg-pill.off {
-  background: var(--slate-100);
-  color: var(--slate-400);
+  background: var(--color-surface);
+  color: var(--color-ink-tertiary);
+  border: 1px solid var(--color-border-light);
 }
 
 /* 系统健康（右栏） */
@@ -525,37 +517,37 @@ const modelRows = computed(() => {
   align-items: center;
   gap: 10px;
   padding: 9px 0;
-  border-bottom: 1px solid var(--slate-100);
+  border-bottom: 1px solid var(--color-border-light);
   font-size: 13px;
 }
 .rg-health-row:last-child {
   border-bottom: none;
 }
 .rg-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 .rg-dot.on {
-  background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px rgba(63, 191, 79, 0.14);
 }
 .rg-dot.off {
-  background: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
+  background: var(--color-danger);
+  box-shadow: 0 0 0 3px rgba(249, 57, 32, 0.14);
 }
 .rg-health-glyph {
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
   font-size: 14px;
 }
 .rg-health-k {
-  color: var(--slate-500);
+  color: var(--color-ink-tertiary);
 }
 .rg-health-v {
   margin-left: auto;
-  color: var(--slate-800);
-  font-weight: 600;
+  color: var(--color-ink);
+  font-weight: 500;
   font-family: var(--font-display);
   font-size: 12.5px;
 }
@@ -570,18 +562,18 @@ const modelRows = computed(() => {
   justify-content: space-between;
   align-items: center;
   padding: 9px 0;
-  border-bottom: 1px solid var(--slate-100);
+  border-bottom: 1px solid var(--color-border-light);
   font-size: 13px;
 }
 .rg-model:last-child {
   border-bottom: none;
 }
 .rg-model-k {
-  color: var(--slate-500);
+  color: var(--color-ink-tertiary);
 }
 .rg-model-v {
-  color: var(--slate-800);
-  font-weight: 600;
+  color: var(--color-ink);
+  font-weight: 500;
   font-family: var(--font-display);
   font-size: 12.5px;
 }
@@ -591,8 +583,8 @@ const modelRows = computed(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 11px 12px;
-  border-radius: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -600,35 +592,35 @@ const modelRows = computed(() => {
   margin-top: 4px;
 }
 .rg-entry:hover {
-  background: var(--slate-50);
+  background: var(--color-surface-secondary);
 }
 .rg-entry-icon {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  background: var(--teal-soft);
-  color: var(--teal);
-  font-size: 16px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 15px;
 }
 .rg-entry-text {
   flex: 1;
   min-width: 0;
 }
 .rg-entry-name {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--slate-800);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink);
 }
 .rg-entry-hint {
   font-size: 12px;
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
 }
 .rg-entry-go {
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
   font-size: 12px;
 }
 
@@ -639,13 +631,13 @@ const modelRows = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 80px 20px;
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
   text-align: center;
 }
 .rg-empty p {
   margin: 6px 0 0;
   font-size: 14px;
-  color: var(--slate-600);
+  color: var(--color-ink-secondary);
   font-weight: 500;
 }
 .rg-empty code {
@@ -659,7 +651,7 @@ const modelRows = computed(() => {
     padding: 18px 14px 36px;
   }
   .rg-title {
-    font-size: 24px;
+    font-size: 19px;
   }
 }
 </style>

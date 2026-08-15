@@ -129,7 +129,7 @@ public Score run(EvalItem item) { ... }
 
 ### 2. `@ObservedConversation`：会话入口
 
-标注在 Controller 入口，自动捕获会话 id 与用户问题，写入根 span 的 `rag.trace.input` / `rag.trace.output`。
+标注在 Controller 入口，自动捕获会话 id 与用户问题，写入根 span 的 OTel GenAI 标准属性 `gen_ai.input.messages` / `gen_ai.output.messages`（OpenObserve 原生识别；Langfuse 由 backends 模块兼容映射）。
 
 ```java
 @PostMapping("/chat/stream")

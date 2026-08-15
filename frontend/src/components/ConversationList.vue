@@ -89,12 +89,12 @@ async function onRemove(convId: string) {
   font-size: 13px; color: var(--color-ink);
 }
 .conv-item:hover { background: var(--color-surface-secondary); }
-.conv-item.active { background: rgba(15,118,110,.08); color: var(--color-primary); }
+.conv-item.active { background: var(--color-primary-light); color: var(--color-primary); }
 .conv-item-icon { font-size: 12px; flex-shrink: 0; color: var(--color-ink-tertiary); }
 .conv-item-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-item-del { opacity: 0; color: var(--color-ink-tertiary); flex-shrink: 0; }
 .conv-item:hover .conv-item-del { opacity: 1; }
-.conv-item-del:hover { color: #ef4444; }
+.conv-item-del:hover { color: var(--color-danger); }
 .conv-empty { padding: 20px; text-align: center; font-size: 12px; color: var(--color-ink-tertiary); }
 
 @media (max-width: 768px) {

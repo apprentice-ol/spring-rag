@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ArrowLeftOutlined, InboxOutlined, RobotOutlined, BarChartOutlined, DashboardOutlined, FolderOpenOutlined, SettingOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ArrowLeftOutlined, InboxOutlined, RobotOutlined, FileTextOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'
 import IngestPanel from './components/IngestPanel.vue'
 import EvalDashboard from './components/EvalDashboard.vue'
 import ConsoleDashboard from './components/ConsoleDashboard.vue'
@@ -11,37 +11,47 @@ import DocPreview from './components/DocPreview.vue'
 import TraceView from './components/TraceView.vue'
 import ComparePanel from './components/ComparePanel.vue'
 import AgentTracePanel from './components/AgentTracePanel.vue'
+import TopTabs from './components/TopTabs.vue'
+import type { MainNavKey } from './components/TopTabs.vue'
 import { useHorizontalSplitter, useIsMobile } from './composables/useSplitter'
 import { initChatState } from './composables/useChatState'
 import type { DocumentInfo } from './api/upload'
 
 const theme = {
   token: {
-    colorPrimary: '#0f766e',
-    colorPrimaryHover: '#065f55',
+    colorPrimary: '#0064fa',
+    colorPrimaryHover: '#1657ff',
     borderRadius: 6,
+    // antd 预设色板对齐 Semi 语义色（a-tag 跟随）
+    colorPurple: '#0064fa',
+    colorGreen: '#3fbf4f',
+    colorRed: '#f93920',
+    colorOrange: '#fbad2d',
+    colorGold: '#fbad2d',
     fontFamily:
       "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
   },
 }
 
 const backendOnline = ref<boolean | null>(null)
-const sidebarCollapsed = ref(false)
 const selectedDoc = ref<DocumentInfo | null>(null)
-
-// 桌面端：预览前记住侧边栏是否折叠，返回时恢复（修复“预览返回后侧边栏一直折叠”的问题）
-const sidebarCollapsedBeforePreview = ref(false)
 
 const isMobile = useIsMobile()
 
-// 移动端：底部 Tab（知识库 / 聊天；对话列表在聊天页左侧抽屉）
-const mobileTab = ref<'docs' | 'chat'>('chat')
+// ── 主区 tab：对话 / 知识库（管理走 #/admin 独立壳，由顶栏第三个 tab 进入）──
+type MainTab = 'chat' | 'knowledge'
+const mainTab = ref<MainTab>(localStorage.getItem('rag_main_tab') === 'knowledge' ? 'knowledge' : 'chat')
+watch(mainTab, v => localStorage.setItem('rag_main_tab', v))
 
-// 桌面端 sidebar 可拖拽改宽（移动端走 Tab，不拖拽）
-const sidebarSplit = useHorizontalSplitter({
-  initial: 360, min: 280, max: 560, storageKey: 'rag_sidebar_w',
-})
-const sidebarWidthStyle = computed(() => `${sidebarSplit.width.value}px`)
+/** 顶部导航统一入口：对话/知识库切主区，管理跳后台 */
+function onMainNav(key: MainNavKey) {
+  if (key === 'admin') {
+    goAdmin()
+    return
+  }
+  mainTab.value = key
+  if (isAdminPage.value) backToHome()
+}
 
 /** simple hash router: #/preview/[docId] → full-page preview; else → normal layout */
 const currentHash = ref(window.location.hash)
@@ -98,19 +108,8 @@ async function pingBackend() {
   }
 }
 
-/** 顶部汉堡按钮：仅桌面端有效（折叠/展开侧边栏） */
-function toggleSidebar() {
-  sidebarCollapsed.value = !sidebarCollapsed.value
-}
-
 function onPreview(doc: DocumentInfo) {
-  // 右侧嵌入预览（保留对话历史）
   selectedDoc.value = doc
-  // 记住桌面端侧边栏原状态，关掉它给预览让位
-  if (!isMobile.value) {
-    sidebarCollapsedBeforePreview.value = sidebarCollapsed.value
-    sidebarCollapsed.value = true
-  }
 }
 
 function onOpenNewTab(doc: DocumentInfo) {
@@ -122,12 +121,8 @@ function closePreview() {
   try { window.close() } catch { window.location.hash = '#/' }
 }
 
-function backToChat() {
+function clearPreview() {
   selectedDoc.value = null
-  // 恢复桌面端侧边栏到预览前的状态
-  if (!isMobile.value) {
-    sidebarCollapsed.value = sidebarCollapsedBeforePreview.value
-  }
 }
 </script>
 
@@ -156,16 +151,15 @@ function backToChat() {
       </div>
     </template>
 
-    <!-- 管理后台：antd 布局（左侧菜单：控制台 / 文档管理 / 评测） -->
+    <!-- 管理后台：与主工作台共用顶栏导航（管理 tab 高亮）+ 左侧二级菜单 -->
     <template v-else-if="isAdminPage">
       <a-layout class="admin-page">
         <a-layout-header class="admin-header">
-          <a-button type="text" class="back-btn" @click="backToHome">
-            <template #icon><ArrowLeftOutlined /></template>
-            返回主页
-          </a-button>
-          <span class="admin-brand">管理后台</span>
-          <span class="admin-sub">springai-rag · 平台管理</span>
+          <TopTabs active="admin" @select="onMainNav">
+            <template #right>
+              <span class="admin-sub">springai-rag · 平台管理</span>
+            </template>
+          </TopTabs>
         </a-layout-header>
         <a-layout>
           <a-layout-sider :width="176" class="admin-sider" theme="light">
@@ -208,122 +202,77 @@ function backToChat() {
       </a-layout>
     </template>
 
-    <!-- 正常布局 -->
+    <!-- 主工作台：顶部导航 tab + 单侧栏 -->
     <template v-else>
       <div class="app">
         <!-- 顶部导航栏 -->
         <header class="app-header">
-          <div class="header-left">
-            <!-- 桌面端：汉堡按钮折叠/展开侧边栏 -->
-            <a-button
-              v-if="!isMobile"
-              type="text"
-              class="sidebar-toggle"
-              @click="toggleSidebar"
-            >
-              <template #icon>
-                <MenuFoldOutlined v-if="!sidebarCollapsed" />
-                <MenuUnfoldOutlined v-else />
-              </template>
-            </a-button>
-
-            <!-- 预览模式：显示返回按钮 -->
-            <template v-if="selectedDoc">
-              <a-button type="text" class="back-btn" @click="backToChat">
-                <template #icon><ArrowLeftOutlined /></template>
-                <span class="back-label">返回</span>
-              </a-button>
-              <div class="breadcrumb">
-                <span class="breadcrumb-label">文档预览</span>
-                <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-name">{{ selectedDoc.name }}</span>
+          <TopTabs :active="mainTab" @select="onMainNav">
+            <template #right>
+              <div class="connection-status" :class="{ connected: backendOnline === true, disconnected: backendOnline === false }">
+                <span class="status-dot"></span>
+                <span class="status-text">
+                  <template v-if="backendOnline === null">检测中…</template>
+                  <template v-else-if="backendOnline">后端在线 :9081</template>
+                  <template v-else>后端离线</template>
+                </span>
               </div>
             </template>
-
-            <template v-else>
-              <div class="brand">
-                <div class="brand-icon"><ApiOutlined /></div>
-                <div class="brand-text">
-                  <span class="brand-name">RAG Workbench</span>
-                  <span class="brand-sub">Spring AI 知识库</span>
-                </div>
-              </div>
-            </template>
-          </div>
-
-          <div class="header-right">
-            <a-button type="text" class="eval-entry-btn" title="管理后台（控制台 / 评测）" @click="goAdmin">
-              <template #icon><SettingOutlined /></template>
-              <span class="eval-entry-label">管理后台</span>
-            </a-button>
-            <div class="connection-status" :class="{ connected: backendOnline === true, disconnected: backendOnline === false }">
-              <span class="status-dot"></span>
-              <span class="status-text">
-                <template v-if="backendOnline === null">检测中…</template>
-                <template v-else-if="backendOnline">后端在线 :9081</template>
-                <template v-else>后端离线</template>
-              </span>
-            </div>
-          </div>
+          </TopTabs>
         </header>
 
         <!-- 主体区域 -->
         <div class="app-body">
-          <!-- ── 桌面端：sidebar + 分割条 + 主内容 ── -->
+          <!-- ── 桌面端 ── -->
           <template v-if="!isMobile">
-            <aside
-              class="sidebar"
-              :class="{ collapsed: sidebarCollapsed || !!selectedDoc }"
-              :style="{ width: (sidebarCollapsed || selectedDoc) ? '0px' : sidebarWidthStyle }"
-            >
-              <div class="sidebar-inner" :style="{ width: sidebarWidthStyle }">
+            <!-- 对话页：会话列表 + 聊天区（ChatPanel 自带可拖拽会话栏） -->
+            <ChatPanel v-if="mainTab === 'chat'" />
+
+            <!-- 知识库页：文档列表 + 预览区 -->
+            <div v-else class="knowledge-layout">
+              <aside class="kb-list">
                 <IngestPanel @preview="onPreview" @open-tab="onOpenNewTab" />
-              </div>
-            </aside>
-
-            <!-- 桌面端拖拽分割条 -->
-            <div
-              v-if="!sidebarCollapsed && !selectedDoc"
-              class="splitter-bar"
-              :class="{ dragging: sidebarSplit.dragging.value }"
-              @pointerdown="sidebarSplit.start"
-            />
-
-            <main class="main-content">
-              <DocPreview
-                v-if="selectedDoc"
-                :doc-id="selectedDoc.docId"
-                :mime-type="selectedDoc.mimeType"
-                :doc-name="selectedDoc.name"
-                :source-location="selectedDoc.sourceLocation"
-                embedded
-                @close="backToChat"
-              />
-              <ChatPanel v-else />
-            </main>
+              </aside>
+              <main class="kb-main">
+                <DocPreview
+                  v-if="selectedDoc"
+                  :doc-id="selectedDoc.docId"
+                  :mime-type="selectedDoc.mimeType"
+                  :doc-name="selectedDoc.name"
+                  :source-location="selectedDoc.sourceLocation"
+                  embedded
+                  @close="clearPreview"
+                />
+                <div v-else class="kb-empty">
+                  <FileTextOutlined class="kb-empty-icon" />
+                  <p class="kb-empty-title">选择文档预览</p>
+                  <p class="kb-empty-desc">点击左侧列表中的文档，在此查看解析后的分块内容</p>
+                </div>
+              </main>
+            </div>
           </template>
 
           <!-- ── 移动端：Tab 内容区 ── -->
           <template v-else>
             <main class="mobile-main">
-              <!-- 预览文档时全屏展示，tab 栏隐藏 -->
-              <template v-if="selectedDoc">
+              <!-- 知识库 tab 内预览文档时全屏展示，tab 栏隐藏 -->
+              <template v-if="selectedDoc && mainTab === 'knowledge'">
                 <DocPreview
                   :doc-id="selectedDoc.docId"
                   :mime-type="selectedDoc.mimeType"
                   :doc-name="selectedDoc.name"
                   :source-location="selectedDoc.sourceLocation"
                   embedded
-                  @close="backToChat"
+                  @close="clearPreview"
                 />
               </template>
 
               <!-- 知识库 tab -->
-              <div v-if="mobileTab === 'docs'" class="mobile-tab-page">
+              <div v-else-if="mainTab === 'knowledge'" class="mobile-tab-page">
                 <IngestPanel @preview="onPreview" @open-tab="onOpenNewTab" />
               </div>
 
-              <!-- 聊天 tab（对话列表在左侧抽屉） -->
+              <!-- 聊天 tab -->
               <div v-else class="mobile-tab-page">
                 <ChatView />
               </div>
@@ -331,13 +280,13 @@ function backToChat() {
           </template>
         </div>
 
-        <!-- 移动端底部 TabBar（预览文档时隐藏） -->
-        <nav v-if="isMobile && !selectedDoc" class="mobile-tabbar">
-          <div class="tab" :class="{ active: mobileTab === 'docs' }" @click="mobileTab = 'docs'">
+        <!-- 移动端底部 TabBar（知识库 tab 预览文档时隐藏） -->
+        <nav v-if="isMobile && !(selectedDoc && mainTab === 'knowledge')" class="mobile-tabbar">
+          <div class="tab" :class="{ active: mainTab === 'knowledge' }" @click="mainTab = 'knowledge'">
             <InboxOutlined class="tab-icon" />
             <span class="tab-label">知识库</span>
           </div>
-          <div class="tab" :class="{ active: mobileTab === 'chat' }" @click="mobileTab = 'chat'">
+          <div class="tab" :class="{ active: mainTab === 'chat' }" @click="mainTab = 'chat'">
             <RobotOutlined class="tab-icon" />
             <span class="tab-label">聊天</span>
           </div>
@@ -384,20 +333,18 @@ function backToChat() {
 .preview-page-label {
   font-size: 13px; color: var(--color-ink-secondary);
 }
+.back-btn { font-size: 16px; color: var(--color-primary); flex-shrink: 0; }
 
 /* ─ Admin Layout（antd a-layout） ─ */
 .admin-page {
   height: 100vh; overflow: hidden; background: var(--color-bg);
 }
 .admin-header {
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 20px; height: 56px; line-height: 56px;
+  display: flex; align-items: center;
+  padding: 0; height: 48px; line-height: 48px;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
-}
-.admin-brand {
-  font-size: 14px; font-weight: 600; color: var(--color-ink);
 }
 .admin-sub {
   font-size: 12px; color: var(--color-ink-tertiary);
@@ -419,47 +366,39 @@ function backToChat() {
   .admin-sub { display: none; }
 }
 
-/* ─ Normal Layout ─ */
+/* ─ Main Layout：顶栏 tab 导航 + 单侧栏 ─ */
 .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .app-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0 20px; height: 56px;
-  background: rgba(255,255,255,0.85); backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  display: flex; align-items: center;
+  padding: 0; height: 48px;
+  background: var(--color-surface);
   border-bottom: 1px solid var(--color-border); z-index: 100; flex-shrink: 0;
 }
-.header-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.sidebar-toggle { font-size: 16px; color: var(--color-ink-secondary); flex-shrink: 0; }
-.back-btn { font-size: 16px; color: var(--color-primary); flex-shrink: 0; }
-.back-label { font-size: 13px; margin-left: 2px; }
-.breadcrumb { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
-.breadcrumb-label { color: var(--color-ink-secondary); flex-shrink: 0; }
-.breadcrumb-sep { color: var(--color-border); flex-shrink: 0; }
-.breadcrumb-name { color: var(--color-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--color-primary), #14b8a6); color: #fff; border-radius: var(--radius-sm); font-size: 16px; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
-.brand-name { font-family: var(--font-display); font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--color-ink); }
-.brand-sub { font-size: 11px; color: var(--color-ink-tertiary); letter-spacing: 0.04em; }
-.header-right { display: flex; align-items: center; gap: 16px; }
 .connection-status { display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 20px; font-size: 12px; background: var(--color-surface-secondary); border: 1px solid var(--color-border-light); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; transition: background 0.3s; }
-.connection-status.connected .status-dot { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.4); }
-.connection-status.disconnected .status-dot { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.4); }
+.connection-status.connected .status-dot { background: var(--color-success); box-shadow: 0 0 6px rgba(63,191,79,0.4); }
+.connection-status.disconnected .status-dot { background: var(--color-danger); box-shadow: 0 0 6px rgba(249,57,32,0.4); }
 .status-text { color: var(--color-ink-secondary); }
 .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; position: relative; }
 
-/* 桌面端侧边栏：宽度由拖拽控制，折叠时收为 0 */
-.sidebar {
-  min-width: 0; border-right: 1px solid var(--color-border);
+/* 知识库页：文档列表 + 预览区 */
+.knowledge-layout { flex: 1; display: flex; min-width: 0; }
+.kb-list {
+  flex-shrink: 0;
+  width: 400px;
+  border-right: 1px solid var(--color-border);
   background: var(--color-surface);
-  transition: width 0.25s ease, opacity 0.25s ease;
-  overflow: hidden; flex-shrink: 0;
+  overflow: hidden;
 }
-.sidebar.collapsed { opacity: 0; border-right: none; }
-.sidebar-inner { height: 100%; overflow-y: auto; position: relative; }
-
-.main-content { flex: 1; min-width: 0; background: var(--color-bg); }
+.kb-main { flex: 1; min-width: 0; background: var(--color-bg); display: flex; flex-direction: column; }
+.kb-empty {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center; padding: 40px 20px;
+}
+.kb-empty-icon { font-size: 28px; color: var(--color-ink-tertiary); margin-bottom: 10px; }
+.kb-empty-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--color-ink); }
+.kb-empty-desc { margin: 0; font-size: 13px; color: var(--color-ink-tertiary); }
 
 /* 移动端：Tab 内容区 + 底部 TabBar */
 .mobile-main { flex: 1; min-width: 0; background: var(--color-bg); display: flex; flex-direction: column; }
@@ -487,9 +426,6 @@ function backToChat() {
 .tab-label { font-size: 11px; }
 
 @media (max-width: 768px) {
-  .app-header { padding: 0 12px; }
-  .brand-sub, .connector-count { display: none; }
-  .back-label { display: none; }
   /* 移动端隐藏连接状态文字，只留圆点，省空间 */
   .status-text { display: none; }
   .connection-status { padding: 4px 8px; }

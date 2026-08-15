@@ -1,5 +1,6 @@
 package com.nageoffer.ai.rag.chat.agent.impl;
 
+import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 import com.nageoffer.ai.rag.chat.agent.AgentRequest;
 import com.nageoffer.ai.rag.chat.agent.AgentRetrievalResult;
 import com.nageoffer.ai.rag.chat.agent.AgentTrace;
@@ -33,6 +34,7 @@ public class NaiveRagAgent implements RagAgent {
     }
 
     @Override
+    @ObservedStep("rag.agent.plan")
     public AgentRetrievalResult planAndRetrieve(AgentRequest req) {
         AgentTrace trace = new AgentTrace("naive");
         long t = System.currentTimeMillis();

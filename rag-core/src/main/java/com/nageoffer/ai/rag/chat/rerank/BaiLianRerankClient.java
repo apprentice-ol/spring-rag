@@ -8,6 +8,7 @@ import com.google.gson.JsonObject;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchChannelType;
 import com.nageoffer.ai.obs.observation.logging.ObsStructuredLog;
+import com.nageoffer.ai.obs.observation.ObsTemplate;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -44,6 +45,7 @@ public class BaiLianRerankClient implements RerankClient {
 
     private final OkHttpClient httpClient;
     private final Gson gson;
+    private final ObsTemplate obsTemplate;
 
     @Value("${rag.rerank.bailian.base-url:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank}")
     private String baseUrl;
@@ -58,9 +60,10 @@ public class BaiLianRerankClient implements RerankClient {
     @Value("${rag.rerank.min-relevance-score:0.0}")
     private double minRelevanceScore;
 
-    public BaiLianRerankClient(OkHttpClient httpClient, Gson gson) {
+    public BaiLianRerankClient(OkHttpClient httpClient, Gson gson, ObsTemplate obsTemplate) {
         this.httpClient = httpClient;
         this.gson = gson;
+        this.obsTemplate = obsTemplate;
     }
 
     @Override
@@ -74,6 +77,9 @@ public class BaiLianRerankClient implements RerankClient {
         if (CollUtil.isEmpty(candidates) || topN <= 0) {
             return List.of();
         }
+
+        // 标注模型名（通用动词，OTel GenAI key 由 obs 收口）
+        obsTemplate.model(model);
 
         // 先按 id 去重
         List<RetrievedChunk> deduped = dedupById(candidates);

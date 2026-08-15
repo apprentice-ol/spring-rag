@@ -25,6 +25,9 @@ public class SpanIoLimitProcessor implements ObservationProcessor {
 
     @Override
     public ObsEvent process(ObsEvent event) {
+        if (!SpanIoLimits.isTruncateEnabled()) {
+            return event;
+        }
         Object data = event.getData();
         if (!(data instanceof CharSequence cs)) {
             return event;  // 非字符串（已摘要的对象），不截断

@@ -1,30 +1,49 @@
-/* ===== Design tokens ===== */
+/* ===== Design tokens =====
+   Semi Design 风格：品牌蓝 #0064fa、浅灰画布 #f6f7f9、白色卡片、
+   大圆角卡片、页头+筛选卡+表格卡的列表页结构。 */
 :root {
-  --color-bg: #f4f5f0;
+  /* 画布与表面 */
+  --color-bg: #f6f7f9;
   --color-bg-elevated: #ffffff;
-  --color-ink: #1a1a1a;
-  --color-ink-secondary: #6b6b6b;
-  --color-ink-tertiary: #9ca3a2;
-  --color-border: #e2e3dd;
-  --color-border-light: #eff0eb;
-  --color-primary: #0f766e;
-  --color-primary-light: #d1fae5;
-  --color-primary-dark: #065f55;
-  --color-signal: #f59e0b;
-  --color-signal-bg: #fef3c7;
   --color-surface: #ffffff;
-  --color-surface-secondary: #fafaf7;
-  --color-danger: #dc2626;
-  --color-danger-bg: #fef2f2;
-  --color-shadow: rgba(0, 0, 0, 0.04);
-  --color-shadow-md: rgba(0, 0, 0, 0.06);
+  --color-surface-secondary: #f2f3f5;
+
+  /* 文字（Semi 中性灰阶） */
+  --color-ink: #161a1e;
+  --color-ink-secondary: #646a73;
+  --color-ink-tertiary: #9da3a9;
+
+  /* 边框 */
+  --color-border: #e6e8eb;
+  --color-border-light: #f0f1f3;
+
+  /* 强调色（Semi 品牌蓝） */
+  --color-primary: #0064fa;
+  --color-primary-light: #e8f1ff;
+  --color-primary-dark: #004fc4;
+
+  /* 信号色（Semi 语义色） */
+  --color-success: #3fbf4f;
+  --color-success-bg: #e8f8ea;
+  --color-signal: #fbad2d;
+  --color-signal-bg: #fdf1d7;
+  --color-danger: #f93920;
+  --color-danger-bg: #fdebe9;
+
+  /* 阴影：只用于浮层，表面不投影 */
+  --color-shadow: rgba(22, 26, 30, 0.04);
+  --color-shadow-md: rgba(22, 26, 30, 0.08);
+
+  /* 字体：body 用系统栈，display/数字用等宽 */
   --font-display: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+
+  /* 圆角：Semi medium=6 / 卡片 10 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 }
 
 * {
@@ -44,6 +63,7 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'tnum';
 }
 
 ::selection {
@@ -53,12 +73,12 @@ body {
 
 /* ===== Ant Design 主题覆盖 ===== */
 
-/* 按钮 */
+/* 按钮：主按钮不投影（扁平），仅 hover 提亮 */
 .ant-btn-primary:not(:disabled) {
-  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.2);
+  box-shadow: none;
 }
 .ant-btn-primary:not(:disabled):hover {
-  box-shadow: 0 2px 6px rgba(15, 118, 110, 0.3);
+  box-shadow: none;
 }
 
 /* 输入框 */
@@ -68,17 +88,94 @@ body {
 .ant-input:focus,
 .ant-input-focused {
   border-color: var(--color-primary) !important;
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1) !important;
+  box-shadow: 0 0 0 2px rgba(91, 91, 214, 0.12) !important;
 }
 
 /* 上传拖拽区 */
 .ant-upload-drag {
   border-radius: var(--radius-md) !important;
-  transition: all 0.25s ease !important;
+  transition: all 0.2s ease !important;
 }
 .ant-upload-drag:hover {
   border-color: var(--color-primary) !important;
 }
+
+/* 表格：Semi 风表头（浅灰底、次级文字、细分割线）+ 行 hover */
+.ant-table-thead > tr > th {
+  font-weight: 500 !important;
+  color: var(--color-ink-secondary) !important;
+  background: var(--color-surface-secondary) !important;
+}
+/* 列宽拖拽:表头单元格占满内容区,承载拖拽把手(把手由指令内联样式创建) */
+.th-cell {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  user-select: none;
+}
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--color-border-light) !important;
+}
+.ant-table-tbody > tr:hover > td {
+  background: #f7f9fb !important;
+}
+
+/* 卡片：细边框，无投影 */
+.ant-card {
+  border-radius: var(--radius-lg);
+}
+
+/* ===== Semi 风格列表页通用骨架（页头 / 筛选卡 / 表格卡） ===== */
+.page-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.page-title {
+  margin: 0; font-size: 20px; font-weight: 600;
+  letter-spacing: -0.01em; line-height: 1.3; color: var(--color-ink);
+}
+.page-desc { margin: 4px 0 0; font-size: 13px; color: var(--color-ink-tertiary); }
+.page-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+
+.filter-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  padding: 14px 20px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.filter-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.filter-item { display: flex; align-items: center; gap: 8px; }
+.filter-label { font-size: 13px; color: var(--color-ink-secondary); white-space: nowrap; }
+.filter-actions { display: flex; gap: 8px; margin-left: auto; }
+
+.table-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
+  display: flex; flex-direction: column;
+  flex: 1; min-height: 0;
+}
+.table-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 20px;
+  border-bottom: 1px solid var(--color-border-light);
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.toolbar-left { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 4px; }
+.toolbar-hint { font-size: 12px; color: var(--color-ink-tertiary); }
+.selected-count {
+  font-size: 12px; color: var(--color-primary);
+  background: var(--color-primary-light);
+  padding: 2px 8px; border-radius: var(--radius-sm);
+}
+.table-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 12px 20px; flex-shrink: 0; flex-wrap: wrap;
+}
+.page-scroll { height: 100%; overflow-y: auto; padding: 24px 24px 32px; display: flex; flex-direction: column; min-height: 0; }
 
 /* 滚动条 */
 ::-webkit-scrollbar {
@@ -89,11 +186,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d0d1cb;
+  background: #d3d5da;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #b0b1ab;
+  background: #b4b8bf;
 }
 
 /* ===== 流式回答样式 ===== */
@@ -132,11 +229,11 @@ body {
 
 /* ===== 淡入动画 ===== */
 .fade-up-enter-active {
-  transition: all 0.3s ease-out;
+  transition: all 0.25s ease-out;
 }
 .fade-up-enter-from {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(6px);
 }
 
 /* ===== 拖拽分割器 ===== */
@@ -165,7 +262,7 @@ body.splitter-dragging * {
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 2px;
+  width: 1px;
   border-radius: 1px;
   background: transparent;
   transition: background 0.15s;

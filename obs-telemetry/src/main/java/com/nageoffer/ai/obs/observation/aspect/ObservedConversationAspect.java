@@ -3,7 +3,7 @@ package com.nageoffer.ai.obs.observation.aspect;
 import com.nageoffer.ai.obs.observation.ObsTemplate;
 import com.nageoffer.ai.obs.observation.annotation.ObservedConversation;
 import com.nageoffer.ai.obs.observation.propagation.ObsConversationAccessor;
-import java.util.UUID;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -11,6 +11,8 @@ import org.aspectj.lang.reflect.MethodSignature;
 import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+
+import java.util.UUID;
 
 /**
  * {@link ObservedConversation} 注解切面：在入口方法（请求线程，HTTP server span 为 current）开启对话 trace。
@@ -26,12 +28,17 @@ import org.springframework.core.annotation.Order;
  */
 @Aspect
 @Order(Ordered.HIGHEST_PRECEDENCE)
-public class ObservedConversationAspect {
+public class ObservedConversationAspect implements Ordered {
 
     private final ObsTemplate obsTemplate;
 
     public ObservedConversationAspect(ObsTemplate obsTemplate) {
         this.obsTemplate = obsTemplate;
+    }
+
+    @Override
+    public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE;
     }
 
     @Around("@annotation(com.nageoffer.ai.obs.observation.annotation.ObservedConversation)")
@@ -47,12 +54,15 @@ public class ObservedConversationAspect {
                 args[tc.conversationIdIndex()] = conversationId;
             }
         }
-        obsTemplate.beginConversation(conversationId, question);
-        try {
-            return pjp.proceed(args);
-        } finally {
-            ObsConversationAccessor.HOLDER.remove();
-            MDC.remove("conversation_id");
+
+        try (io.opentelemetry.context.Scope ignored = obsTemplate.baggage(OtelKeys.SESSION_ID, conversationId)) {
+            obsTemplate.beginConversation(conversationId, question);
+            try {
+                return pjp.proceed(args);
+            } finally {
+                ObsConversationAccessor.HOLDER.remove();
+                MDC.remove(OtelKeys.SESSION_ID);
+            }
         }
     }
 

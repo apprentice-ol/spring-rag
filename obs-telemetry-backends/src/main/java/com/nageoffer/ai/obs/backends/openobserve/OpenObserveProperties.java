@@ -34,6 +34,12 @@ public class OpenObserveProperties {
     /** 日志 stream 名（OpenObserve 实际存储名，下划线）。 */
     private String stream = "springai_rag_logs";
 
+    /** trace stream 名（OTLP traces 默认写入 default）。 */
+    private String traceStream = "default";
+
+    /** 是否注册 OpenObserve 查询客户端（读取侧；false 时业务侧无法注入查询 Bean）。 */
+    private boolean queryEnabled = true;
+
     /** Basic Auth 用户名。 */
     private String username = "admin@openobserve.io";
 

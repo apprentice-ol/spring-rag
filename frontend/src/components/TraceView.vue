@@ -34,13 +34,17 @@ async function copy(text: string) {
 </script>
 
 <template>
-  <div class="trace-page">
-    <!-- 头部 -->
-    <div class="trace-header">
-      <div class="trace-icon"><DeploymentUnitOutlined /></div>
-      <div class="trace-title">
-        <h2>链路追踪</h2>
-        <p>查看请求在 RAG 全链路的 trace —— 检索 / 查询改写 / 意图分类 / Rerank / LLM 生成各步骤的 span 与耗时，定位慢环节与异常。</p>
+  <div class="trace-page page-scroll">
+    <!-- 页头：标题 + 主操作（跳 OpenObserve） -->
+    <div class="page-header">
+      <div class="page-header-text">
+        <h1 class="page-title">链路追踪</h1>
+        <p class="page-desc">查看请求在 RAG 全链路的 trace —— 检索 / 查询改写 / 意图分类 / Rerank / LLM 生成各步骤的 span 与耗时，定位慢环节与异常。</p>
+      </div>
+      <div class="page-actions">
+        <a-button v-if="links" type="primary" :href="links.traceUrl" target="_blank">
+          <template #icon><DeploymentUnitOutlined /></template>打开 OpenObserve
+        </a-button>
       </div>
     </div>
 
@@ -50,94 +54,82 @@ async function copy(text: string) {
     </div>
 
     <template v-else>
-      <!-- 跳转入口 -->
-      <div class="entry-grid">
-        <a class="entry-card" :href="links.traceUrl" target="_blank" rel="noopener">
-          <NodeIndexOutlined class="entry-icon" />
-          <div class="entry-body">
-            <div class="entry-name">链路追踪（Traces）</div>
-            <div class="entry-desc">按 traceId 查整条调用链，看各步骤耗时与父子 span</div>
-          </div>
-        </a>
-        <a class="entry-card" :href="links.logUrl" target="_blank" rel="noopener">
-          <FileSearchOutlined class="entry-icon" />
-          <div class="entry-body">
-            <div class="entry-name">日志检索（Logs）</div>
-            <div class="entry-desc">按 traceId / 关键词反查结构化日志（含步骤、模型、耗时）</div>
-          </div>
-        </a>
-      </div>
-
-      <!-- 只读账号 -->
-      <div class="acct-card">
-        <div class="acct-title">OpenObserve 查看账号</div>
-        <div class="acct-row">
-          <span class="acct-label">组织</span>
-          <code>{{ links.org }}</code>
-        </div>
-        <div class="acct-row">
-          <span class="acct-label">账号</span>
-          <code>{{ links.email }}</code>
-          <a-button type="text" size="small" class="copy-btn" @click="copy(links.email)">
-            <template #icon><CopyOutlined /></template>
-          </a-button>
-        </div>
-        <div class="acct-row">
-          <span class="acct-label">密码</span>
-          <code>{{ pwdVisible ? links.password : '•••••••••' }}</code>
-          <a-button type="link" size="small" @click="pwdVisible = !pwdVisible">{{ pwdVisible ? '隐藏' : '显示' }}</a-button>
-          <a-button type="text" size="small" class="copy-btn" @click="copy(links.password)">
-            <template #icon><CopyOutlined /></template>
-          </a-button>
-        </div>
-        <div class="acct-hint">
-          点击上方卡片在新标签页打开 OpenObserve，首次需用此账号登录（组织选 <code>{{ links.org }}</code>）。
-          <br />注：OO 社区版无只读角色，此账号为 OO 全权账号，仅供查看共享。
+      <!-- 跳转入口卡：双入口磁贴 -->
+      <div class="table-card">
+        <div class="table-toolbar"><span class="card-title">跳转入口</span></div>
+        <div class="entry-grid">
+          <a class="entry-tile" :href="links.traceUrl" target="_blank" rel="noopener">
+            <span class="entry-ico"><NodeIndexOutlined /></span>
+            <div class="entry-body">
+              <div class="entry-name">链路追踪（Traces）</div>
+              <div class="entry-desc">按 traceId 查整条调用链，看各步骤耗时与父子 span</div>
+            </div>
+          </a>
+          <a class="entry-tile" :href="links.logUrl" target="_blank" rel="noopener">
+            <span class="entry-ico"><FileSearchOutlined /></span>
+            <div class="entry-body">
+              <div class="entry-name">日志检索（Logs）</div>
+              <div class="entry-desc">按 traceId / 关键词反查结构化日志（含步骤、模型、耗时）</div>
+            </div>
+          </a>
         </div>
       </div>
 
-      <!-- 如何用 -->
-      <div class="tip-card">
-        <div class="tip-title">如何根据一次对话查链路？</div>
-        <ol>
-          <li>在对话页发起一次问答（日志里每行带 <code>[traceId,spanId]</code>）。</li>
-          <li>复制该次问答的 <code>traceId</code>（控制台日志或 OpenObserve 日志里取）。</li>
-          <li>打开「链路追踪」，在搜索条件 <code>trace_id = &lt;你的 traceId&gt;</code> 即可看到整条链路。</li>
-        </ol>
+      <!-- 只读账号卡 -->
+      <div class="table-card">
+        <div class="table-toolbar"><span class="card-title">OpenObserve 查看账号</span></div>
+        <div class="acct-body">
+          <div class="acct-row">
+            <span class="acct-label">组织</span>
+            <code>{{ links.org }}</code>
+          </div>
+          <div class="acct-row">
+            <span class="acct-label">账号</span>
+            <code>{{ links.email }}</code>
+            <a-button type="text" size="small" class="copy-btn" @click="copy(links.email)">
+              <template #icon><CopyOutlined /></template>
+            </a-button>
+          </div>
+          <div class="acct-row">
+            <span class="acct-label">密码</span>
+            <code>{{ pwdVisible ? links.password : '•••••••••' }}</code>
+            <a-button type="link" size="small" @click="pwdVisible = !pwdVisible">{{ pwdVisible ? '隐藏' : '显示' }}</a-button>
+            <a-button type="text" size="small" class="copy-btn" @click="copy(links.password)">
+              <template #icon><CopyOutlined /></template>
+            </a-button>
+          </div>
+          <div class="acct-hint">
+            点击上方卡片在新标签页打开 OpenObserve，首次需用此账号登录（组织选 <code>{{ links.org }}</code>）。
+            <br />注：OO 社区版无只读角色，此账号为 OO 全权账号，仅供查看共享。
+          </div>
+        </div>
+      </div>
+
+      <!-- 使用说明卡 -->
+      <div class="table-card">
+        <div class="table-toolbar"><span class="card-title">如何根据一次对话查链路？</span></div>
+        <div class="tip-body">
+          <ol>
+            <li>在对话页发起一次问答（日志里每行带 <code>[traceId,spanId]</code>）。</li>
+            <li>复制该次问答的 <code>traceId</code>（控制台日志或 OpenObserve 日志里取）。</li>
+            <li>打开「链路追踪」，在搜索条件 <code>trace_id = &lt;你的 traceId&gt;</code> 即可看到整条链路。</li>
+          </ol>
+        </div>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.trace-page {
-  padding: 24px 28px;
-  max-width: 880px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+/* 卡片统一 12px 节奏（页头自带下边距） */
+.trace-page .table-card {
+  margin-bottom: 12px;
 }
-.trace-header {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.trace-icon {
-  font-size: 30px;
-  color: var(--color-primary);
-  margin-top: 2px;
-}
-.trace-title h2 {
-  margin: 0 0 4px;
-  font-size: 18px;
+/* 卡片工具栏标题 */
+.card-title {
+  font-size: 13px;
   font-weight: 600;
   color: var(--color-ink);
-}
-.trace-title p {
-  margin: 0;
-  font-size: 13px;
-  color: var(--color-ink-tertiary);
-  line-height: 1.6;
 }
 .state {
   padding: 32px;
@@ -146,7 +138,7 @@ async function copy(text: string) {
   color: var(--color-ink-tertiary);
 }
 .state.error {
-  color: #ef4444;
+  color: var(--color-danger);
 }
 .state code {
   background: var(--color-surface-secondary);
@@ -154,33 +146,42 @@ async function copy(text: string) {
   border-radius: 3px;
   font-size: 12px;
 }
+/* 跳转入口磁贴 */
 .entry-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 12px;
+  padding: 16px 20px;
 }
-.entry-card {
+.entry-tile {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 18px 20px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
+  padding: 16px;
+  background: var(--color-surface-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   transition: all 0.15s;
 }
-a.entry-card {
+a.entry-tile {
   color: inherit;
   text-decoration: none;
 }
-.entry-card:hover {
+.entry-tile:hover {
+  background: var(--color-surface);
   border-color: var(--color-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
-.entry-icon {
-  font-size: 26px;
+.entry-ico {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
   color: var(--color-primary);
+  font-size: 17px;
 }
 .entry-name {
   font-size: 14px;
@@ -193,19 +194,9 @@ a.entry-card {
   color: var(--color-ink-tertiary);
   line-height: 1.5;
 }
-.acct-card,
-.tip-card {
-  padding: 16px 20px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-sm);
-}
-.acct-title,
-.tip-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-ink);
-  margin-bottom: 10px;
+/* 账号卡内容 */
+.acct-body {
+  padding: 12px 20px 16px;
 }
 .acct-row {
   display: flex;
@@ -222,7 +213,7 @@ a.entry-card {
   background: var(--color-surface-secondary);
   padding: 1px 8px;
   border-radius: 3px;
-  font-family: var(--font-display, monospace);
+  font-family: var(--font-display);
   color: var(--color-ink);
 }
 .copy-btn {
@@ -236,14 +227,18 @@ a.entry-card {
   color: var(--color-ink-tertiary);
   line-height: 1.7;
 }
-.tip-card ol {
+/* 说明卡内容 */
+.tip-body {
+  padding: 12px 20px 16px;
+}
+.tip-body ol {
   margin: 0;
   padding-left: 20px;
   font-size: 13px;
   color: var(--color-ink-secondary);
   line-height: 1.9;
 }
-.tip-card code {
+.tip-body code {
   background: var(--color-surface-secondary);
   padding: 0 5px;
   border-radius: 3px;

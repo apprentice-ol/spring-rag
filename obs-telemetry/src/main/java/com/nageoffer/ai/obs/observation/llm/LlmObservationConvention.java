@@ -1,5 +1,6 @@
 package com.nageoffer.ai.obs.observation.llm;
 
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
 import io.micrometer.common.KeyValue;
 import io.micrometer.common.KeyValues;
@@ -10,7 +11,7 @@ import io.micrometer.observation.ObservationConvention;
  */
 public class LlmObservationConvention implements ObservationConvention<LlmObservationContext> {
 
-    public static final String NAME = "gen_ai.client.operation";
+    public static final String NAME = OtelKeys.GEN_AI_CLIENT_OPERATION;
 
     private static final LlmObservationConvention INSTANCE = new LlmObservationConvention();
 
@@ -36,30 +37,30 @@ public class LlmObservationConvention implements ObservationConvention<LlmObserv
     @Override
     public KeyValues getLowCardinalityKeyValues(LlmObservationContext ctx) {
         return KeyValues.of(
-                KeyValue.of("gen_ai.operation.name", "chat"),
-                KeyValue.of("gen_ai.system", nullSafe(ctx.getSystem())),
-                KeyValue.of("gen_ai.request.model", nullSafe(ctx.getModel())));
+                KeyValue.of(OtelKeys.GEN_AI_OPERATION_NAME, "chat"),
+                KeyValue.of(OtelKeys.GEN_AI_SYSTEM, nullSafe(ctx.getSystem())),
+                KeyValue.of(OtelKeys.GEN_AI_REQUEST_MODEL, nullSafe(ctx.getModel())));
     }
 
     @Override
     public KeyValues getHighCardinalityKeyValues(LlmObservationContext ctx) {
         KeyValues values = KeyValues.empty();
         if (ctx.getPromptText() != null) {
-            values = values.and(KeyValue.of("gen_ai.prompt", truncate(ctx.getPromptText())));
+            values = values.and(KeyValue.of(OtelKeys.GEN_AI_PROMPT, truncate(ctx.getPromptText())));
         }
         if (ctx.getCompletion() != null) {
-            values = values.and(KeyValue.of("gen_ai.completion", truncate(ctx.getCompletion())));
+            values = values.and(KeyValue.of(OtelKeys.GEN_AI_COMPLETION, truncate(ctx.getCompletion())));
         }
         LlmUsage usage = ctx.getUsage();
         if (usage != null) {
             if (usage.inputTokens() != null) {
-                values = values.and(KeyValue.of("gen_ai.usage.input_tokens", String.valueOf(usage.inputTokens())));
+                values = values.and(KeyValue.of(OtelKeys.GEN_AI_USAGE_INPUT_TOKENS, String.valueOf(usage.inputTokens())));
             }
             if (usage.outputTokens() != null) {
-                values = values.and(KeyValue.of("gen_ai.usage.output_tokens", String.valueOf(usage.outputTokens())));
+                values = values.and(KeyValue.of(OtelKeys.GEN_AI_USAGE_OUTPUT_TOKENS, String.valueOf(usage.outputTokens())));
             }
             if (usage.totalTokens() != null) {
-                values = values.and(KeyValue.of("gen_ai.usage.total_tokens", String.valueOf(usage.totalTokens())));
+                values = values.and(KeyValue.of(OtelKeys.GEN_AI_USAGE_TOTAL_TOKENS, String.valueOf(usage.totalTokens())));
             }
         }
         return values;
@@ -70,6 +71,9 @@ public class LlmObservationConvention implements ObservationConvention<LlmObserv
     }
 
     private String truncate(String s) {
+        if (!SpanIoLimits.isTruncateEnabled()) {
+            return s;
+        }
         return s.length() <= SpanIoLimits.maxSpanIo()
                 ? s
                 : s.substring(0, SpanIoLimits.maxSpanIo()) + "…[truncated]";

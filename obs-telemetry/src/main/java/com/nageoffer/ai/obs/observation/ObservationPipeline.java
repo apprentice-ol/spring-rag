@@ -60,13 +60,21 @@ public class ObservationPipeline {
      */
     public void emit(ObsEvent event, SpanWriter target) {
         for (ObservationProcessor p : processors) {
-            event = p.process(event);
-            if (event == null) {
-                return;  // 被过滤，不流向 exporter
+            try {
+                event = p.process(event);
+                if (event == null) {
+                    return;  // 被过滤，不流向 exporter
+                }
+            } catch (Throwable ignored) {
+                // 观测 processor 永不阻断业务
             }
         }
         for (ObservationExporter e : exporters) {
-            e.export(event, target);
+            try {
+                e.export(event, target);
+            } catch (Throwable ignored) {
+                // 观测 exporter 永不阻断业务
+            }
         }
     }
 }

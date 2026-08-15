@@ -57,7 +57,7 @@ public interface EvalService {
      * 单条重评（保留历史，新增一条 attempt）：对某次运行的某条条目重新检索打分。
      * 可选启用查询改写、可选指定 agent 范式（覆盖原 run 范式）、可填备注，结果以新 attempt 行落库，不污染原 run 聚合。
      *
-     * @param paradigm agent 范式（naive/crag/self_rag/react/plan_execute）；null 用原 run 范式
+     * @param paradigm agent 范式（naive/react）；null 用原 run 范式
      * @return 本次重评的 attempt 序号（1 起）
      */
     int reevaluateItem(Long runId, Long itemId, Boolean rewriteEnabled, String remark, String paradigm);

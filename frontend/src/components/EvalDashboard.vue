@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { BarChartOutlined } from '@ant-design/icons-vue'
 import { listDatasets, type EvalDataset } from '../api/eval'
 import EvalOverviewTab from './EvalOverviewTab.vue'
 import EvalDatasetTab from './EvalDatasetTab.vue'
@@ -46,7 +45,7 @@ function backToList() {
 
 <template>
   <div class="eval-dashboard">
-    <!-- 运行详情独立页 -->
+    <!-- 运行详情独立页（自带整页布局） -->
     <EvalRunDetail
       v-if="detailRunId !== null"
       :run-id="detailRunId"
@@ -54,13 +53,12 @@ function backToList() {
       @back="backToList"
     />
 
-    <!-- Tab 列表 -->
-    <template v-else>
-      <div class="panel-header">
-        <BarChartOutlined class="panel-icon" />
-        <div>
-          <h3 class="panel-title">评测看板</h3>
-          <p class="panel-desc">黄金集 · 检索指标（Recall@k / Precision@k / MRR / nDCG）</p>
+    <!-- Tab 列表：页头 + 下划线式 Tab -->
+    <div v-else class="page-scroll">
+      <div class="page-header">
+        <div class="page-header-text">
+          <h1 class="page-title">评测看板</h1>
+          <p class="page-desc">黄金集 · 检索指标（Recall@k / Precision@k / MRR / nDCG）</p>
         </div>
       </div>
 
@@ -75,43 +73,19 @@ function backToList() {
           <EvalRunTab :datasets="datasets" />
         </a-tab-pane>
       </a-tabs>
-    </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .eval-dashboard {
-  padding: 20px;
-  max-width: 1280px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   height: 100%;
-  overflow-y: auto;
 }
-.panel-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+/* Semi 下划线式 Tab：细 ink-bar、内容区与页头留出间距 */
+.eval-tabs :deep(.ant-tabs-nav) {
+  margin: 0 0 4px;
 }
-.panel-icon {
-  font-size: 20px;
-  color: var(--color-primary);
-}
-.panel-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-ink);
-}
-.panel-desc {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-ink-tertiary);
-}
-.eval-tabs {
-  flex: 1;
-  min-height: 0;
+.eval-tabs :deep(.ant-tabs-content-holder) {
+  padding-top: 12px;
 }
 </style>

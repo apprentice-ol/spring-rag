@@ -59,18 +59,6 @@ services:
       RUSTFS_SECRET_KEY: rustfsadmin
     volumes:
       - rustfs-data:/data
-  # ---- MinIO 备选（与 RustFS 二选一）----
-  # minio:
-  #   image: minio/minio:latest
-  #   container_name: rag-minio
-  #   ports: ["9000:9000"]
-  #   environment:
-  #     MINIO_ROOT_USER: rustfsadmin        # 复用现有 key，代码不动
-  #     MINIO_ROOT_PASSWORD: rustfsadmin
-  #   command: ["server", "/data", "--console-address", ":9001"]
-  #   volumes:
-  #     - minio-data:/data
-
   openobserve:
     image: openobserve/openobserve:latest
     container_name: rag-openobserve

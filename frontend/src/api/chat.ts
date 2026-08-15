@@ -99,7 +99,7 @@ export interface StreamHandlers {
 
 /**
  * 流式问答（SSE GET）。按 SSE 规范解析：event 行决定类型（message→回答块 / trace→agent 轨迹），
- * 一个事件可由多个 data: 行组成，空行结束。agent 参数指定范式（naive/crag/self_rag/react/plan_execute）。
+ * 一个事件可由多个 data: 行组成，空行结束。agent 参数指定范式（naive/react）。
  */
 export async function streamChat(
   question: string,

@@ -68,7 +68,7 @@ import org.springframework.stereotype.Component;
 /**
  * 评测跑批引擎：对某数据集逐条调 {@link RagAgent} 检索，采集召回 doc_ids，计算检索指标，落库 + 聚合。
  *
- * <p><b>走可插拔 agent</b>（stage5 改造）：按 run 参数快照的 paradigm 选范式（naive/crag/...），
+ * <p><b>走可插拔 agent</b>（stage5 改造）：按 run 参数快照的 paradigm 选范式（naive/react），
  * naive 等价改造前的"直接调 retrievalEngine"。agent 内部检索阶段 VectorSearchChannel 自行 embed query，
  * 故本类不预存 query_embedding（字段保留供未来"预计算向量"优化）。</p>
  *
@@ -154,7 +154,7 @@ public class EvalRunner {
             AtomicInteger retrievedItemCount = new AtomicInteger();
             Map<String, List<Double>> scoreAggregate = new ConcurrentHashMap<>();
             // 信号量限流：控制同时跑的 item 数，防止下游（LLM embed / rerank / DB）被打爆。
-            // 并发度由 rag.eval.concurrency 配置（默认 8）；agent 范式越重（react/self_rag 多次 LLM）越要调小
+            // 并发度由 rag.eval.concurrency 配置（默认 8）；agent 范式越重（react 多次 LLM）越要调小
             Semaphore semaphore = new Semaphore(evalProperties.getConcurrency());
 
             try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {

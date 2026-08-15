@@ -4,6 +4,7 @@ import { ReloadOutlined, EyeOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { listRuns, retryRun, type EvalRun } from '../api/eval'
 import { parseAggregate, fmtScore, statusText, paradigmLabel } from './evalShared'
+import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 const props = defineProps<{ datasets: { id: number; name: string }[] }>()
 
@@ -86,7 +87,7 @@ const tableData = computed(() =>
   })),
 )
 
-const columns = [
+const columns = useResizableColumns([
   { title: '运行', dataIndex: 'id', key: 'id', width: 80 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 90 },
   { title: '数据集', dataIndex: 'datasetName', key: 'datasetName', width: 150, ellipsis: true },
@@ -95,7 +96,7 @@ const columns = [
   { title: '关键指标', dataIndex: 'keyMetrics', key: 'keyMetrics', ellipsis: true },
   { title: '时间', dataIndex: 'finishedAt', key: 'finishedAt', width: 160 },
   { title: '操作', key: 'action', width: 100, fixed: 'right' as const },
-]
+])
 
 const STATUS_COLOR: Record<string, string> = {
   DONE: 'green',
@@ -107,64 +108,88 @@ const STATUS_COLOR: Record<string, string> = {
 
 <template>
   <div class="eval-run-tab">
-    <div class="filter-bar">
-      <a-select
-        v-model:value="filterDataset"
-        placeholder="按数据集筛选"
-        allow-clear
-        style="width: 200px"
-        @change="load"
-      >
-        <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.name }}</a-select-option>
-      </a-select>
-      <a-select
-        v-model:value="filterStatus"
-        placeholder="按状态筛选"
-        allow-clear
-        style="width: 140px"
-        @change="load"
-      >
-        <a-select-option value="DONE">完成</a-select-option>
-        <a-select-option value="RUNNING">运行中</a-select-option>
-        <a-select-option value="FAILED">失败</a-select-option>
-      </a-select>
-      <a-button @click="load">
-        <template #icon><ReloadOutlined /></template>刷新
-      </a-button>
+    <!-- 筛选卡：数据集 / 状态 -->
+    <div class="filter-card">
+      <div class="filter-row">
+        <div class="filter-item">
+          <span class="filter-label">数据集</span>
+          <a-select
+            v-model:value="filterDataset"
+            placeholder="全部"
+            allow-clear
+            style="width: 200px"
+            @change="load"
+          >
+            <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.name }}</a-select-option>
+          </a-select>
+        </div>
+        <div class="filter-item">
+          <span class="filter-label">状态</span>
+          <a-select
+            v-model:value="filterStatus"
+            placeholder="全部"
+            allow-clear
+            style="width: 140px"
+            @change="load"
+          >
+            <a-select-option value="DONE">完成</a-select-option>
+            <a-select-option value="RUNNING">运行中</a-select-option>
+            <a-select-option value="FAILED">失败</a-select-option>
+          </a-select>
+        </div>
+        <div class="filter-actions">
+          <a-button type="primary" @click="load">查询</a-button>
+        </div>
+      </div>
     </div>
 
-    <a-table
-      :data-source="tableData"
-      :columns="columns"
-      :loading="loading"
-      :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
-      size="middle"
-      row-key="id"
-      :scroll="{ x: 1010 }"
-    >
-      <template #bodyCell="{ column, record }">
-        <template v-if="column.key === 'id'">
-          <a class="run-id" @click="openDetail(record.id)">#{{ record.id }}</a>
-        </template>
-        <template v-else-if="column.key === 'status'">
-          <a-tag :color="STATUS_COLOR[record.status] || 'default'">{{ statusText(record.status) }}</a-tag>
-        </template>
-        <template v-else-if="column.key === 'paradigm'">
-          <a-tag v-if="record.paradigm" color="teal">{{ paradigmLabel(record.paradigm) }}</a-tag>
-          <span v-else class="muted">-</span>
-        </template>
-        <template v-else-if="column.key === 'done'">{{ record.done }}/{{ record.total ?? '-' }}</template>
-        <template v-else-if="column.key === 'finishedAt'">{{ record.finishedAt || record.startedAt || '—' }}</template>
-        <template v-else-if="column.key === 'action'">
-          <a-button type="link" size="small" @click="openDetail(record.id)">
-            <template #icon><EyeOutlined /></template>详情
+    <!-- 表格卡：工具栏 + 运行列表 -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <span class="toolbar-hint">共 {{ runs.length }} 条运行记录 · 有运行中任务时每 2 秒自动刷新</span>
+        <div class="toolbar-right">
+          <a-button type="text" size="small" title="刷新" @click="load">
+            <template #icon><ReloadOutlined /></template>
           </a-button>
-          <a-button v-if="record.status === 'FAILED'" type="link" size="small" @click="retry(record)">
-            <template #icon><ReloadOutlined /></template>重试
-          </a-button>
+        </div>
+      </div>
+
+      <a-table
+        :data-source="tableData"
+        :columns="columns"
+        :loading="loading"
+        :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
+        size="middle"
+        row-key="id"
+        :scroll="{ x: 1010 }"
+      >
+        <template #headerCell="{ column }">
+          <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="columns">{{ column.title }}</span>
         </template>
-      </template>
-    </a-table>
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'id'">
+            <a class="run-id" @click="openDetail(record.id)">#{{ record.id }}</a>
+          </template>
+          <template v-else-if="column.key === 'status'">
+            <a-tag :color="STATUS_COLOR[record.status] || 'default'">{{ statusText(record.status) }}</a-tag>
+          </template>
+          <template v-else-if="column.key === 'paradigm'">
+            <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
+            <span v-else class="muted">-</span>
+          </template>
+          <template v-else-if="column.key === 'done'">{{ record.done }}/{{ record.total ?? '-' }}</template>
+          <template v-else-if="column.key === 'finishedAt'">{{ record.finishedAt || record.startedAt || '—' }}</template>
+          <template v-else-if="column.key === 'action'">
+            <a-button type="link" size="small" @click="openDetail(record.id)">
+              <template #icon><EyeOutlined /></template>详情
+            </a-button>
+            <a-button v-if="record.status === 'FAILED'" type="link" size="small" @click="retry(record)">
+              <template #icon><ReloadOutlined /></template>重试
+            </a-button>
+          </template>
+        </template>
+      </a-table>
+    </div>
   </div>
 </template>
 
@@ -172,13 +197,10 @@ const STATUS_COLOR: Record<string, string> = {
 .eval-run-tab {
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
-.filter-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
+/* 表格卡内分页贴底（antd 内置分页留白收紧） */
+.eval-run-tab :deep(.ant-pagination) {
+  margin: 8px 16px 12px 8px;
 }
 .run-id {
   color: var(--color-primary);
@@ -189,6 +211,6 @@ const STATUS_COLOR: Record<string, string> = {
   text-decoration: underline;
 }
 .muted {
-  color: #d9d9d9;
+  color: var(--color-ink-tertiary);
 }
 </style>

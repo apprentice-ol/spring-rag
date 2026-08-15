@@ -91,7 +91,7 @@ public class EvalController {
     public static class ReevaluateRequest {
         /** 是否启用查询改写；null/false=裸检索 */
         private Boolean rewriteEnabled;
-        /** agent 范式（naive/crag/self_rag/react/plan_execute）；null 用原 run 范式 */
+        /** agent 范式（naive/react）；null 用原 run 范式 */
         private String paradigm;
         /** 备注（显示在该条重评记录上） */
         private String remark;

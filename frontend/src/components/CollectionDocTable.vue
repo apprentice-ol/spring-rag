@@ -4,8 +4,9 @@ import {message, Modal} from 'ant-design-vue'
 import {EyeOutlined, MinusCircleOutlined} from '@ant-design/icons-vue'
 import {pageDocuments, type DocumentInfo} from '../api/upload'
 import {assignDocs} from '../api/collection'
+import {useResizableColumns, vResize} from '../composables/useResizableColumns'
 
-/** 集合展开后的嵌套文档表（独立分页，不接列宽拖拽）。 */
+/** 集合展开后的嵌套文档表（独立分页，列宽可拖拽）。 */
 const props = defineProps<{ collectionId: number; keyword?: string }>()
 const emit = defineEmits<{ preview: [doc: DocumentInfo]; changed: [] }>()
 
@@ -78,13 +79,13 @@ interface ErrResp {
   response?: { data?: { message?: string } }
 }
 
-const columns = [
+const columns = useResizableColumns([
   {title: '文档', dataIndex: 'name', key: 'name', width: 140, ellipsis: true},
   {title: '类型', dataIndex: 'mimeType', key: 'mimeType', width: 140, ellipsis: true},
   {title: '向量块', dataIndex: 'chunkCount', key: 'chunkCount', width: 70},
   {title: '状态', dataIndex: 'status', key: 'status', width: 80},
   {title: '操作', key: 'action', width: 140},
-]
+])
 
 const STATUS_COLOR: Record<string, string> = {
   DONE: 'green',
@@ -117,7 +118,11 @@ const STATUS_TEXT: Record<string, string> = {
         pageSizeOptions: ['10', '20', '50'],
         showTotal: (t: number) => `共 ${t} 个`,
       }"
+        :scroll="{ x: 620 }"
     >
+      <template #headerCell="{ column }">
+        <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="columns">{{ column.title }}</span>
+      </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
           <a class="doc-name" @click="emit('preview', record)">{{ record.name }}</a>

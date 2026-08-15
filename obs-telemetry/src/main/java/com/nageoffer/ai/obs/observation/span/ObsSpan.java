@@ -1,7 +1,7 @@
 package com.nageoffer.ai.obs.observation.span;
 
 import com.nageoffer.ai.obs.observation.span.SpanSession;
-import com.nageoffer.ai.obs.observation.support.SpanIoLimits;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import com.nageoffer.ai.obs.observation.ObservationPipeline;
 import com.nageoffer.ai.obs.observation.event.ObsEvent;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -43,6 +43,11 @@ public final class ObsSpan implements AutoCloseable {
         this.startMs = System.currentTimeMillis();
     }
 
+    /** 暴露底层 span 写入器，供入口 step 绑定到会话上下文（trace 级 output 双写）。 */
+    public SpanWriter writer() {
+        return backend;
+    }
+
     /** 低基数标签（model/channel/eval.*），产 ATTRIBUTE 事件走 pipeline。 */
     public ObsSpan tag(String key, Object value) {
         ObsEvent event = new ObsEvent(ObsEvent.EventType.ATTRIBUTE, name, spanId, value);
@@ -74,7 +79,7 @@ public final class ObsSpan implements AutoCloseable {
     /** 写 trace 级 input（原文不摘要），供 root handle 标记 trace IO。 */
     public ObsSpan traceInput(Object value) {
         ObsEvent event = new ObsEvent(ObsEvent.EventType.TRACE_IO, name, spanId, value);
-        event.setIoKey(SpanIoLimits.KEY_TRACE_INPUT);
+        event.setIoKey(OtelKeys.TRACE_INPUT);
         pipeline.emit(event, backend);
         return this;
     }
@@ -82,7 +87,7 @@ public final class ObsSpan implements AutoCloseable {
     /** 写 trace 级 output。语义同 {@link #traceInput}。 */
     public ObsSpan traceOutput(Object value) {
         ObsEvent event = new ObsEvent(ObsEvent.EventType.TRACE_IO, name, spanId, value);
-        event.setIoKey(SpanIoLimits.KEY_TRACE_OUTPUT);
+        event.setIoKey(OtelKeys.TRACE_OUTPUT);
         pipeline.emit(event, backend);
         return this;
     }

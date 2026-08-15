@@ -1,23 +1,26 @@
 package com.nageoffer.ai.obs.autoconfigure;
 
+import com.nageoffer.ai.obs.autoconfigure.springai.ChatModelCompletionObservationHandler;
+import com.nageoffer.ai.obs.autoconfigure.springai.SpringAiConversationObservationFilter;
+import com.nageoffer.ai.obs.autoconfigure.springai.SpringAiObsProperties;
 import com.nageoffer.ai.obs.observation.ObsTemplate;
 import com.nageoffer.ai.obs.observation.ObservationPipeline;
 import com.nageoffer.ai.obs.observation.aspect.ObservedConversationAspect;
 import com.nageoffer.ai.obs.observation.aspect.ObservedStepAspect;
-import com.nageoffer.ai.obs.observation.exporter.ObservationExporter;
-import com.nageoffer.ai.obs.observation.exporter.SpanAttributeExporter;
-import com.nageoffer.ai.obs.observation.exporter.StructuredLogExporter;
+import com.nageoffer.ai.obs.observation.exporter.*;
 import com.nageoffer.ai.obs.observation.llm.GenAiLlmTraceHandler;
 import com.nageoffer.ai.obs.observation.llm.LlmTraceHandler;
 import com.nageoffer.ai.obs.observation.processor.ObservationProcessor;
 import com.nageoffer.ai.obs.observation.processor.SpanIoLimitProcessor;
 import com.nageoffer.ai.obs.observation.processor.SummarizeProcessor;
+import com.nageoffer.ai.obs.observation.propagation.BaggageAttributeSpanProcessor;
 import com.nageoffer.ai.obs.observation.propagation.ContextPropagationConfiguration;
-import com.nageoffer.ai.obs.autoconfigure.springai.SpringAiConversationObservationFilter;
-import com.nageoffer.ai.obs.autoconfigure.springai.SpringAiObsProperties;
+import com.nageoffer.ai.obs.observation.propagation.GenAiAttributePropagationSpanProcessor;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import io.opentelemetry.api.OpenTelemetry;
-import java.util.List;
+import io.opentelemetry.sdk.trace.SpanProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.observation.ChatModelObservationContext;
@@ -25,8 +28,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+
+import java.util.List;
 
 /**
  * obs-telemetry 的 Spring Boot 自动装配入口（引入依赖即生效，无需宿主 @ComponentScan）。
@@ -68,13 +74,24 @@ public class ObsAutoConfiguration {
     // ==================== 发：exporter 链（内置两出口） ====================
 
     @Bean
-    public SpanAttributeExporter spanAttributeExporter() {
-        return new SpanAttributeExporter();
+    public SpanAttributeExporter spanAttributeExporter(ObjectProvider<SpanAttributeKeyMapper> keyMappers) {
+        return new SpanAttributeExporter(keyMappers.orderedStream().toList());
     }
 
     @Bean
     public StructuredLogExporter structuredLogExporter() {
         return new StructuredLogExporter();
+    }
+
+    /**
+     * Metrics 支柱：STEP_OUTPUT 打步骤耗时 Timer（{ns}.step.duration，无 OTel 标准名的框架自有指标）。
+     * 宿主带 micrometer-core（actuator）时注册，MeterRegistry bean 缺失时 exporter no-op。
+     */
+    @Bean
+    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnMissingBean
+    public MetricsExporter metricsExporter(ObjectProvider<MeterRegistry> meterRegistry) {
+        return new MetricsExporter(meterRegistry.getIfAvailable());
     }
 
     // ==================== 管线与传播 ====================
@@ -92,21 +109,51 @@ public class ObsAutoConfiguration {
         return new ContextPropagationConfiguration();
     }
 
+    /**
+     * Baggage → span 属性：trace 内所有 span（含框架建的）统一落 baggage 条目 + 后端映射 key。
+     * Spring Boot 自动把 SpanProcessor bean 收进 TracerProvider，与应用出口（collector/直连）无关。
+     * 需要宿主带 OTel SDK（tracing 桥）；{@code obs.propagation.baggage-span-attributes=false} 可停用。
+     */
+    @Bean
+    @ConditionalOnClass(SpanProcessor.class)
+    @ConditionalOnProperty(prefix = "obs.propagation", name = "baggage-span-attributes",
+            havingValue = "true", matchIfMissing = true)
+    public SpanProcessor baggageAttributeSpanProcessor(ObjectProvider<SpanAttributeKeyMapper> keyMappers) {
+        return new BaggageAttributeSpanProcessor(keyMappers.orderedStream().toList());
+    }
+
+    /**
+     * GenAI 关键字段传播：把最内层 LLM generation span 的 model/usage/system 补到 trace 根与入口 step，
+     * 让 OpenObserve 的 traces 列表/详情在根 span 也能直接看到这些列。
+     */
+    @Bean
+    @ConditionalOnClass(SpanProcessor.class)
+    public SpanProcessor genAiAttributePropagationSpanProcessor() {
+        return new GenAiAttributePropagationSpanProcessor();
+    }
+
     // ==================== 门面与切面 ====================
 
     /**
-     * 观测门面。创建时先把 {@code obs.limits.*} 落到 SpanIoLimits/Summarizer 全局值（开任何 span 前）。
+     * 观测门面。创建时先把 {@code obs.limits.*} 与属性命名空间落到全局值（开任何 span 前）。
      *
      * @param registry      Micrometer 观察注册表
      * @param openTelemetry OTel API（由宿主 tracing 桥提供；缺失降级 noop 并 warn）
      * @param pipeline      事件处理与落地管线
      * @param properties    obs 配置
+     * @param env           Spring 环境（命名空间缺省取 spring.application.name）
      */
     @Bean
     @ConditionalOnMissingBean
     public ObsTemplate obsTemplate(ObservationRegistry registry, ObjectProvider<OpenTelemetry> openTelemetry,
-                                   ObservationPipeline pipeline, ObsProperties properties) {
+                                   ObservationPipeline pipeline, ObsProperties properties,
+                                   org.springframework.core.env.Environment env) {
         properties.getLimits().apply();
+        String ns = properties.getAttributeNamespace();
+        if (ns == null || ns.isBlank()) {
+            ns = env.getProperty("spring.application.name");
+        }
+        OtelKeys.configureNamespace(ns);
         OpenTelemetry otel = openTelemetry.getIfAvailable();
         if (otel == null) {
             log.warn("[obs] 容器中无 OpenTelemetry bean（宿主缺 tracing 桥？需要 micrometer-tracing-bridge-otel"
@@ -151,5 +198,16 @@ public class ObsAutoConfiguration {
     @ConditionalOnMissingBean
     public SpringAiConversationObservationFilter springAiConversationObservationFilter() {
         return new SpringAiConversationObservationFilter();
+    }
+
+    /**
+     * Spring AI 1.1.x 的 completion 只写日志不写 span 属性，这里在 stop 时补写 gen_ai.completion。
+     * 作为 ObservationHandler bean 由 Spring Boot 自动注册到 ObservationRegistry。
+     */
+    @Bean
+    @ConditionalOnClass(ChatModelObservationContext.class)
+    @ConditionalOnMissingBean
+    public ChatModelCompletionObservationHandler chatModelCompletionObservationHandler() {
+        return new ChatModelCompletionObservationHandler();
     }
 }

@@ -20,6 +20,7 @@ import {
   CATEGORY_DESC,
   categoryLabel,
 } from './evalShared'
+import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 /** 运行详情独立页（hash 子路由 #/admin/eval/runs/{id}）。 */
 const props = defineProps<{ runId: number; datasets?: { id: number; name: string }[] }>()
@@ -203,6 +204,13 @@ const tableColumns = computed(() => {
   return cols
 })
 
+// 列宽可拖拽:列集合来自上面的 computed(切范式/指标会重建),
+// 用 splice 原地同步进可变数组,保持数组身份不变以配合 v-resize 指令。
+const pivotColumns = useResizableColumns(tableColumns.value)
+watch(tableColumns, (cols) => {
+  pivotColumns.value.splice(0, pivotColumns.value.length, ...cols)
+})
+
 const searchKeyword = ref('')
 const reevalOnly = ref(false)
 const badcaseOnly = ref(false)
@@ -363,7 +371,7 @@ function durMin(): string {
         <a-tag :color="run.status === 'DONE' ? 'green' : run.status === 'FAILED' ? 'red' : 'processing'">
           {{ statusText(run.status) }}
         </a-tag>
-        <a-tag v-if="run.paradigm" color="teal">{{ paradigmLabel(run.paradigm) }}</a-tag>
+        <a-tag v-if="run.paradigm" color="purple">{{ paradigmLabel(run.paradigm) }}</a-tag>
         <span class="run-meta">{{ datasetName }} · {{ run.done }}/{{ run.total ?? '-' }} 题 · {{ durMin() }}</span>
       </template>
       <span class="header-right">
@@ -438,7 +446,7 @@ function durMin(): string {
       <!-- 逐题明细（列头中文 + 排序 + 行展开）；表格内部滚动，表头 + 上方参数条/聚合卡固定 -->
       <div v-if="pivotRows.length" ref="tableWrap" class="table-wrap">
         <a-table
-          :columns="tableColumns"
+          :columns="pivotColumns"
           :data-source="filteredRows"
           :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
           size="middle"
@@ -446,12 +454,15 @@ function durMin(): string {
           :scroll="{ x: 1320, y: tableBodyHeight }"
           class="metric-table"
         >
+        <template #headerCell="{ column }">
+          <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="pivotColumns">{{ column.title }}</span>
+        </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'question'">
             <a-tooltip :title="record.question"><span class="q-cell">{{ record.question }}</span></a-tooltip>
           </template>
           <template v-else-if="column.key === 'paradigm'">
-            <a-tag v-if="record.paradigm" color="teal">{{ paradigmLabel(record.paradigm) }}</a-tag>
+            <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
             <span v-else class="muted">-</span>
           </template>
           <template v-else-if="column.key === 'category'">
@@ -594,21 +605,21 @@ function durMin(): string {
   gap: 12px;
   flex-wrap: wrap;
   padding-bottom: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-light);
   flex-shrink: 0;
 }
 .back-btn {
-  color: #1890ff;
+  color: var(--color-primary);
   font-size: 14px;
 }
 .run-title {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-ink);
 }
 .run-meta {
   font-size: 13px;
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 .header-right {
   margin-left: auto;
@@ -616,7 +627,7 @@ function durMin(): string {
   gap: 8px;
 }
 .guide-btn {
-  color: #1890ff;
+  color: var(--color-primary);
 }
 
 /* 聚合卡片：openobserve 浅色风 */
@@ -626,20 +637,20 @@ function durMin(): string {
   gap: 12px;
 }
 .agg-card {
-  background: #ffffff;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
-  border-top: 3px solid #d9d9d9;
+  border-top: 3px solid var(--color-border);
 }
 .agg-card.tone-good {
-  border-top-color: #52c41a;
+  border-top-color: var(--color-success);
 }
 .agg-card.tone-mid {
-  border-top-color: #faad14;
+  border-top-color: var(--color-signal);
 }
 .agg-card.tone-bad {
-  border-top-color: #f5222d;
+  border-top-color: var(--color-danger);
 }
 .agg-head {
   display: flex;
@@ -649,7 +660,7 @@ function durMin(): string {
 }
 .agg-name {
   font-size: 13px;
-  color: #666;
+  color: var(--color-ink-secondary);
   font-weight: 500;
 }
 .agg-stage {
@@ -658,32 +669,34 @@ function durMin(): string {
   border-radius: 10px;
 }
 .agg-stage.stage-ret {
-  background: #e6f7ff;
-  color: #1890ff;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
 }
 .agg-stage.stage-sort {
-  background: #fff7e6;
-  color: #fa8c16;
+  background: var(--color-signal-bg);
+  color: var(--color-signal);
 }
 .agg-mean {
   font-size: 26px;
   font-weight: 700;
-  color: #333;
+  color: var(--color-ink);
   line-height: 1.2;
+  font-family: var(--font-display);
+  font-feature-settings: 'tnum';
 }
 .agg-card.tone-good .agg-mean {
-  color: #52c41a;
+  color: var(--color-success);
 }
 .agg-card.tone-mid .agg-mean {
-  color: #faad14;
+  color: var(--color-signal);
 }
 .agg-card.tone-bad .agg-mean {
-  color: #f5222d;
+  color: var(--color-danger);
 }
 .agg-bar {
   height: 4px;
   border-radius: 2px;
-  background: #f5f5f5;
+  background: var(--color-surface-secondary);
   margin: 8px 0 6px;
   overflow: hidden;
 }
@@ -693,17 +706,17 @@ function durMin(): string {
   border-radius: 2px;
 }
 .agg-card.tone-good .agg-bar span {
-  background: #52c41a;
+  background: var(--color-success);
 }
 .agg-card.tone-mid .agg-bar span {
-  background: #faad14;
+  background: var(--color-signal);
 }
 .agg-card.tone-bad .agg-bar span {
-  background: #f5222d;
+  background: var(--color-danger);
 }
 .agg-detail {
   font-size: 11px;
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 
 /* 工具栏 */
@@ -714,12 +727,12 @@ function durMin(): string {
   flex-wrap: wrap;
 }
 .op {
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 .filter-count {
   margin-left: auto;
   font-size: 12px;
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 
 /* 逐题表 */
@@ -731,36 +744,36 @@ function durMin(): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #333;
+  color: var(--color-ink);
 }
 .cell-tone-good {
-  color: #52c41a;
+  color: var(--color-success);
   font-weight: 600;
 }
 .cell-tone-bad {
-  color: #f5222d;
+  color: var(--color-danger);
 }
 .expand {
   font-size: 12px;
-  color: #666;
+  color: var(--color-ink-secondary);
   padding: 4px 8px;
   line-height: 1.8;
 }
 .docs {
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 
 /* 解读抽屉 */
 .guide-tip-top {
   font-size: 12px;
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-bottom: 12px;
 }
 .guide-row {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border-light);
   padding-top: 10px;
   margin-top: 10px;
 }
@@ -778,38 +791,38 @@ function durMin(): string {
 .g-name {
   font-weight: 600;
   font-size: 13px;
-  color: #333;
+  color: var(--color-ink);
 }
 .g-stage,
 .g-dir {
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 8px;
-  background: #f5f5f5;
-  color: #666;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-secondary);
+  color: var(--color-ink-secondary);
 }
 .g-value {
   margin-left: auto;
   font-size: 11px;
-  color: #1890ff;
+  color: var(--color-primary);
   font-weight: 600;
 }
 .g-desc,
 .g-judge {
   font-size: 12px;
-  color: #666;
+  color: var(--color-ink-secondary);
   line-height: 1.7;
   margin-top: 2px;
 }
 .g-judge {
-  color: #333;
+  color: var(--color-ink);
 }
 .g-tip {
-  border-top: 1px dashed #f0f0f0;
+  border-top: 1px dashed var(--color-border-light);
   padding-top: 10px;
   margin-top: 12px;
   font-size: 12px;
-  color: #999;
+  color: var(--color-ink-tertiary);
   line-height: 1.7;
 }
 
@@ -820,40 +833,40 @@ function durMin(): string {
   gap: 18px;
   flex-wrap: wrap;
   padding: 10px 16px;
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
   margin-bottom: 14px;
   font-size: 13px;
 }
 .param-title {
   font-weight: 600;
-  color: #333;
+  color: var(--color-ink);
 }
 .param-item {
-  color: #666;
+  color: var(--color-ink-secondary);
 }
 .param-item b {
-  color: #1890ff;
+  color: var(--color-primary);
   margin-left: 3px;
 }
 
 .empty {
   text-align: center;
   padding: 24px;
-  color: #999;
+  color: var(--color-ink-tertiary);
   font-size: 13px;
 }
 
 /* 改写开关着色 */
 .param-item b.on {
-  color: #52c41a;
+  color: var(--color-success);
 }
 .param-item b.off {
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 .muted {
-  color: #d9d9d9;
+  color: var(--color-ink-tertiary);
 }
 .remark-chip {
   display: inline-block;
@@ -862,34 +875,34 @@ function durMin(): string {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
   padding: 1px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 /* 重评历史（展开行内） */
 .reevals {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px dashed #f0f0f0;
+  border-top: 1px dashed var(--color-border-light);
 }
 .reevals-title {
   font-size: 12px;
-  color: #1890ff;
+  color: var(--color-primary);
   margin-bottom: 6px;
   font-weight: 600;
 }
 .reeval-item {
   font-size: 12px;
-  color: #666;
+  color: var(--color-ink-secondary);
   padding: 4px 0;
   line-height: 1.8;
 }
 .rv-attempt {
   display: inline-block;
   font-weight: 600;
-  color: #333;
+  color: var(--color-ink);
   margin-right: 6px;
 }
 .rv-tag {
@@ -897,27 +910,27 @@ function durMin(): string {
 }
 .rv-hit {
   margin-right: 8px;
-  color: #333;
+  color: var(--color-ink);
 }
 .rv-score {
   margin-right: 8px;
 }
 .rv-exp {
   display: block;
-  color: #1890ff;
+  color: var(--color-primary);
 }
 .rv-docs {
   display: block;
-  color: #999;
+  color: var(--color-ink-tertiary);
 }
 .rv-error {
-  color: #f5222d;
+  color: var(--color-danger);
 }
 .rv-remark {
-  color: #333;
-  background: #fffbe6;
+  color: var(--color-ink);
+  background: var(--color-signal-bg);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-block;
   margin-top: 2px;
 }
@@ -925,10 +938,10 @@ function durMin(): string {
 /* 重评弹窗问题预览 */
 .reeval-q {
   font-size: 13px;
-  color: #333;
-  background: #fafafa;
+  color: var(--color-ink);
+  background: var(--color-surface-secondary);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-bottom: 12px;
   line-height: 1.6;
 }

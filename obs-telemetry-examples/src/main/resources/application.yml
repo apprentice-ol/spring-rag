@@ -1,0 +1,19 @@
+# 后端客户端示例配置：与主应用相同的后端地址/凭据约定。
+# 只读演示：OBS_EXAMPLE_ENABLED=true OBS_EXAMPLE_DATASET=liveRAG OBS_EXAMPLE_TRACE_ID=<traceId>
+obs:
+  langfuse:
+    url: ${LANGFUSE_URL:http://localhost:3000}
+    auth: ${LANGFUSE_AUTH:}
+    public-key: ${LANGFUSE_PUBLIC_KEY:}
+    secret-key: ${LANGFUSE_SECRET_KEY:}
+  openobserve:
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}
+    username: ${OO_USERNAME:admin@openobserve.io}
+    password: ${OO_PASSWORD:OpenObserve@2026}
+    stream: springai_rag_logs
+    trace-stream: default
+  example:
+    enabled: ${OBS_EXAMPLE_ENABLED:false}
+    dataset: ${OBS_EXAMPLE_DATASET:}
+    trace-id: ${OBS_EXAMPLE_TRACE_ID:}
+    limit: 3

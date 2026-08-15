@@ -4,9 +4,6 @@ import com.nageoffer.ai.obs.observation.ObsTemplate;
 import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
 import com.nageoffer.ai.obs.observation.span.ObsSpan;
 import com.nageoffer.ai.obs.observation.support.Summarizer;
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -16,6 +13,9 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import reactor.core.publisher.Flux;
+
+import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 
 /**
  * {@link ObservedStep} 注解切面：自动为标注方法开 span、摘要输入输出、记录耗时与异常，按返回类型自动分派生命周期。
@@ -31,12 +31,17 @@ import reactor.core.publisher.Flux;
 @Slf4j
 @Aspect
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
-public class ObservedStepAspect {
+public class ObservedStepAspect implements Ordered {
 
     private final ObsTemplate obsTemplate;
 
     public ObservedStepAspect(ObsTemplate obsTemplate) {
         this.obsTemplate = obsTemplate;
+    }
+
+    @Override
+    public int getOrder() {
+        return Ordered.HIGHEST_PRECEDENCE + 1;
     }
 
     @Around("@annotation(com.nageoffer.ai.obs.observation.annotation.ObservedStep)")
@@ -75,10 +80,10 @@ public class ObservedStepAspect {
                 ? obsTemplate.openTrace(name)
                 : obsTemplate.openStep(name);
         handle.input(input);
+        obsTemplate.bindStepWriter(handle.writer());
 
         try {
             Object ret = pjp.proceed();
-
             if (ret instanceof Flux<?> flux) {
                 return obsTemplate.decorateFlux(handle, flux, traceStep.captureOutput());
             }
@@ -90,6 +95,8 @@ public class ObservedStepAspect {
 
             handle.output(ret);
             handle.close();
+            // 返回值类型命中已注册的维度提取器时，自动提取 trace 级维度（intent/agent 等业务零感知）
+            obsTemplate.extractDimensions(ret);
             return ret;
         } catch (Throwable e) {
             handle.error(e);
@@ -125,15 +132,17 @@ public class ObservedStepAspect {
         if (target == null) {
             return prefix;
         }
-        try {
-            Method getName = target.getClass().getMethod("getName");
-            Object n = getName.invoke(target);
-            if (n != null && !n.toString().isBlank()) {
-                return prefix + "." + n;
+        for (String suffixMethod : new String[]{"getName", "getType"}) {
+            try {
+                Method m = target.getClass().getMethod(suffixMethod);
+                Object n = m.invoke(target);
+                if (n != null && !n.toString().isBlank()) {
+                    return prefix + "." + n;
+                }
+            } catch (Exception e) {
+                // 绝大多数目标类两个方法都没有（属正常路径），仅 debug 记录
+                log.debug("resolveName {} missing on {}", suffixMethod, target.getClass().getName(), e);
             }
-        } catch (Exception e) {
-            // 绝大多数目标类没有 getName()（属正常路径），仅 debug 记录，绝不逐调用刷 INFO
-            log.debug("resolveName fallback to prefix on {}", target.getClass().getName(), e);
         }
         return prefix;
     }

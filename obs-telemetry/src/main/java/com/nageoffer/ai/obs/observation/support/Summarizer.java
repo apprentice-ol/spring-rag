@@ -23,12 +23,17 @@ public final class Summarizer {
     private static volatile int maxString = 200;
     private static volatile int maxPreview = 3;
     private static volatile int maxMapEntries = 10;
+    private static volatile boolean summarizeEnabled = true;
 
     private Summarizer() {
     }
 
-    /** 覆盖摘要粒度（启动期配置一次；非正值忽略）。 */
-    public static void configure(int newMaxString, int newMaxPreview, int newMaxMapEntries) {
+    public static boolean isSummarizeEnabled() {
+        return summarizeEnabled;
+    }
+
+    /** 覆盖摘要粒度与开关（启动期配置一次；非正值忽略）。 */
+    public static void configure(int newMaxString, int newMaxPreview, int newMaxMapEntries, boolean newSummarizeEnabled) {
         if (newMaxString > 0) {
             maxString = newMaxString;
         }
@@ -38,9 +43,13 @@ public final class Summarizer {
         if (newMaxMapEntries > 0) {
             maxMapEntries = newMaxMapEntries;
         }
+        summarizeEnabled = newSummarizeEnabled;
     }
 
     public static Object summarize(Object o) {
+        if (!summarizeEnabled) {
+            return o;
+        }
         if (o == null) {
             return null;
         }
@@ -75,6 +84,15 @@ public final class Summarizer {
             return null;
         }
         Map<String, Object> out = new LinkedHashMap<>();
+        if (!summarizeEnabled) {
+            for (int i = 0; i < args.length; i++) {
+                String name = (paramNames != null && i < paramNames.length
+                        && paramNames[i] != null && !paramNames[i].isBlank())
+                        ? paramNames[i] : "arg" + i;
+                out.put(name, args[i]);
+            }
+            return out;
+        }
         for (int i = 0; i < args.length; i++) {
             String name = (paramNames != null && i < paramNames.length
                     && paramNames[i] != null && !paramNames[i].isBlank())

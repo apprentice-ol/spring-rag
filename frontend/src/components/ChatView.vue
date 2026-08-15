@@ -240,7 +240,7 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 .log-bottom { height:4px; flex-shrink:0; }
 
 .empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 20px; }
-.empty-illustration { width:56px; height:56px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,rgba(15,118,110,.08),rgba(20,184,166,.08)); border-radius:50%; font-size:24px; color:var(--color-primary); margin-bottom:12px; }
+.empty-illustration { width:56px; height:56px; display:flex; align-items:center; justify-content:center; background:var(--color-primary-light); border:1px solid var(--color-border-light); border-radius:var(--radius-lg); font-size:24px; color:var(--color-primary); margin-bottom:12px; }
 .empty-title { margin:0 0 6px; font-size:16px; font-weight:600; }
 .empty-desc { margin:0 0 16px; font-size:13px; color:var(--color-ink-secondary); }
 .empty-suggestions { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; }
@@ -249,11 +249,11 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 .msg { display:flex; gap:10px; align-items:flex-start; max-width:85%; }
 .msg.user { align-self:flex-end; flex-direction:row-reverse; }
 .avatar { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; flex-shrink:0; }
-.avatar-ai { background:linear-gradient(135deg,var(--color-primary),#14b8a6); color:#fff; }
-.avatar-user { background:#f0f0ed; color:var(--color-ink-secondary); }
-.bubble { padding:10px 14px; border-radius:12px; font-size:14px; line-height:1.6; min-width:36px; }
+.avatar-ai { background:var(--color-primary); color:#fff; }
+.avatar-user { background:var(--color-surface-secondary); color:var(--color-ink-secondary); }
+.bubble { padding:10px 14px; border-radius:var(--radius-lg); font-size:14px; line-height:1.6; min-width:36px; }
 .msg.assistant .bubble { background:var(--color-surface); border:1px solid var(--color-border); border-top-left-radius:4px; }
-.msg.user .bubble { background:linear-gradient(135deg,var(--color-primary),#0d9488); color:#fff; border-top-right-radius:4px; }
+.msg.user .bubble { background:var(--color-primary); color:#fff; border-top-right-radius:4px; }
 .user-text { white-space:pre-wrap; word-break:break-word; }
 .stream-cursor { color:var(--color-signal); animation:blink .9s step-end infinite; font-weight:bold; }
 @keyframes blink { 50%{opacity:0} }
@@ -264,8 +264,8 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
 
 .markdown-body { font-family:var(--font-body); font-size:14px; line-height:1.7; color:var(--color-ink); background:transparent; }
-.markdown-body :deep(pre){ background:#f5f5f0!important; border-radius:6px; padding:10px 14px!important; overflow-x:auto; font-size:13px; border:1px solid #e2e3dd; }
-.markdown-body :deep(code:not(pre code)){ font-family:var(--font-display); font-size:13px; background:#f0f0ed; padding:1px 4px; border-radius:3px; }
+.markdown-body :deep(pre){ background:var(--color-surface-secondary)!important; border-radius:var(--radius-md); padding:10px 14px!important; overflow-x:auto; font-size:13px; border:1px solid var(--color-border-light); }
+.markdown-body :deep(code:not(pre code)){ font-family:var(--font-display); font-size:13px; background:var(--color-surface-secondary); padding:1px 4px; border-radius:3px; }
 .markdown-body :deep(pre code){ background:transparent!important; padding:0!important; }
 .markdown-body :deep(p){ margin:0 0 6px; }
 .markdown-body :deep(table){ border-collapse:collapse; margin:6px 0; width:100%; font-size:13px; }
@@ -275,7 +275,7 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 
 .composer { padding:12px 20px; border-top:1px solid var(--color-border); background:var(--color-surface); flex-shrink:0; }
 .composer-bar { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.bar-label { font-size:12px; color:var(--color-ink-tertiary); }
+.bar-label { font-family:var(--font-display); font-size:11px; letter-spacing:0.05em; text-transform:uppercase; color:var(--color-ink-tertiary); }
 .bar-select { width:210px; }
 .composer-inner { display:flex; gap:8px; align-items:center; }
 .composer-input { flex:1; }

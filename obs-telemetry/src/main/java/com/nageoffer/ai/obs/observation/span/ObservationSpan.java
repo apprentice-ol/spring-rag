@@ -2,6 +2,7 @@ package com.nageoffer.ai.obs.observation.span;
 
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import io.opentelemetry.api.trace.Span;
 import org.slf4j.MDC;
 
@@ -39,15 +40,15 @@ public final class ObservationSpan implements SpanSession {
     /** 开一个挂当前父的 step span 并 openScope（makeCurrent + 写 MDC step/step_id，旧值保存供恢复）。 */
     public static ObservationSpan createAndOpen(String name, ObservationRegistry registry) {
         Observation observation = Observation.createNotStarted(name, registry)
-                .lowCardinalityKeyValue("step", name)
+                .lowCardinalityKeyValue(OtelKeys.step(), name)
                 .start();
         Observation.Scope scope = observation.openScope();
         Span span = Span.current();
         String spanId = span.getSpanContext().getSpanId();
-        String prevStep = MDC.get("step");
-        String prevStepId = MDC.get("step_id");
-        MDC.put("step", name);
-        MDC.put("step_id", spanId);
+        String prevStep = MDC.get(OtelKeys.step());
+        String prevStepId = MDC.get(OtelKeys.stepId());
+        MDC.put(OtelKeys.step(), name);
+        MDC.put(OtelKeys.stepId(), spanId);
         return new ObservationSpan(observation, span, spanId, scope, prevStep, prevStepId);
     }
 
@@ -92,8 +93,8 @@ public final class ObservationSpan implements SpanSession {
         } catch (Exception ignored) {
         }
         // 恢复外层的 step/step_id（嵌套场景直接 remove 会把外层键一起清掉）；外层无值才真正移除
-        restoreMdc("step", prevStep);
-        restoreMdc("step_id", prevStepId);
+        restoreMdc(OtelKeys.step(), prevStep);
+        restoreMdc(OtelKeys.stepId(), prevStepId);
     }
 
     private static void restoreMdc(String key, String prev) {

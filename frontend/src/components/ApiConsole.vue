@@ -191,21 +191,12 @@ function clearResult(ep: Endpoint) {
 
 <style scoped>
 .api {
-  --slate-900: #0f172a;
-  --slate-700: #334155;
-  --slate-500: #64748b;
-  --slate-400: #94a3b8;
-  --slate-200: #e2e8f0;
-  --slate-100: #f1f5f9;
-  --slate-50: #f8fafc;
-  --teal: #0f766e;
-
   padding: 24px 28px 48px;
   max-width: 1100px;
   margin: 0 auto;
-  background: #fafafa;
+  background: var(--color-bg);
   min-height: 100%;
-  color: var(--slate-700);
+  color: var(--color-ink-secondary);
   font-feature-settings: 'tnum';
 }
 
@@ -214,15 +205,15 @@ function clearResult(ep: Endpoint) {
 }
 .api-title {
   margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--slate-900);
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
 }
 .api-sub {
   margin: 5px 0 0;
   font-size: 13px;
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
 }
 
 .api-groups {
@@ -231,16 +222,16 @@ function clearResult(ep: Endpoint) {
   gap: 16px;
 }
 .api-card {
-  background: #fff;
-  border-radius: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 .api-group-title {
   margin: 0 0 12px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--slate-700);
+  color: var(--color-ink);
 }
 
 .api-eps {
@@ -249,10 +240,10 @@ function clearResult(ep: Endpoint) {
   gap: 10px;
 }
 .ep {
-  border: 1px solid var(--slate-100);
-  border-radius: 10px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
-  background: var(--slate-50);
+  background: var(--color-surface-secondary);
 }
 .ep-head {
   display: flex;
@@ -264,20 +255,21 @@ function clearResult(ep: Endpoint) {
   width: 52px;
   text-align: center;
   padding: 3px 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 700;
   font-family: var(--font-display);
   color: #fff;
 }
+/* HTTP 方法语义色：GET 成功绿 / POST 靛蓝 / DELETE 危险红 */
 .ep-method.get {
-  background: #10b981;
+  background: var(--color-success);
 }
 .ep-method.post {
-  background: #3b82f6;
+  background: var(--color-primary);
 }
 .ep-method.delete {
-  background: #ef4444;
+  background: var(--color-danger);
 }
 .ep-meta {
   flex: 1;
@@ -289,13 +281,13 @@ function clearResult(ep: Endpoint) {
 .ep-label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--slate-900);
+  color: var(--color-ink);
   flex-shrink: 0;
 }
 .ep-path {
   font-size: 12px;
   font-family: var(--font-display);
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -303,17 +295,17 @@ function clearResult(ep: Endpoint) {
 .ep-btn {
   flex-shrink: 0;
   padding: 5px 14px;
-  border-radius: 7px;
-  border: 1px solid var(--teal);
-  background: #fff;
-  color: var(--teal);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primary);
+  background: var(--color-surface);
+  color: var(--color-primary);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .ep-btn:hover:not(:disabled) {
-  background: var(--teal);
+  background: var(--color-primary);
   color: #fff;
 }
 .ep-btn:disabled {
@@ -335,7 +327,7 @@ function clearResult(ep: Endpoint) {
 .ep-param-key {
   font-size: 11px;
   font-family: var(--font-display);
-  color: var(--slate-500);
+  color: var(--color-ink-secondary);
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -343,31 +335,31 @@ function clearResult(ep: Endpoint) {
 .ep-param-key em {
   font-style: normal;
   font-size: 9px;
-  color: var(--slate-400);
-  border: 1px solid var(--slate-200);
-  border-radius: 3px;
+  color: var(--color-ink-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
   padding: 0 3px;
 }
 .ep-input {
   height: 30px;
   width: 180px;
   padding: 0 10px;
-  border: 1px solid var(--slate-200);
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
   font-size: 12px;
   font-family: var(--font-display);
-  color: var(--slate-900);
+  color: var(--color-ink);
   outline: none;
   transition: border-color 0.15s;
 }
 .ep-input:focus {
-  border-color: var(--teal);
+  border-color: var(--color-primary);
 }
 
 .ep-result {
   margin-top: 10px;
-  border-top: 1px dashed var(--slate-200);
+  border-top: 1px dashed var(--color-border-light);
   padding-top: 9px;
 }
 .ep-result-head {
@@ -384,38 +376,38 @@ function clearResult(ep: Endpoint) {
   border-radius: 999px;
 }
 .ep-status.ok {
-  background: #d1fae5;
-  color: #059669;
+  background: var(--color-success);
+  color: #fff;
 }
 .ep-status.err {
-  background: #fee2e2;
-  color: #dc2626;
+  background: var(--color-danger);
+  color: #fff;
 }
 .ep-clear {
   font-size: 11px;
-  color: var(--slate-400);
+  color: var(--color-ink-tertiary);
   background: none;
   border: none;
   cursor: pointer;
 }
 .ep-clear:hover {
-  color: var(--slate-700);
+  color: var(--color-ink-secondary);
 }
 .ep-err {
   margin: 0 0 6px;
   padding: 8px 10px;
-  background: #fef2f2;
-  border-radius: 6px;
+  background: var(--color-danger-bg);
+  border-radius: var(--radius-sm);
   font-size: 12px;
-  color: #dc2626;
+  color: var(--color-danger);
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ep-json {
   margin: 0;
   padding: 10px 12px;
-  background: #0f172a;
-  border-radius: 8px;
+  background: var(--color-ink);
+  border-radius: var(--radius-md);
   font-size: 11.5px;
   line-height: 1.55;
   font-family: var(--font-display);

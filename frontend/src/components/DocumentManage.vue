@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted, type Directive } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import {
   UploadOutlined,
   InboxOutlined,
@@ -26,6 +26,7 @@ import {
 import DocPreview from './DocPreview.vue'
 import CollectionDocTable from './CollectionDocTable.vue'
 import CollectionPickerModal from './CollectionPickerModal.vue'
+import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 // ── 查询条件（仅作用于独立文件段）──
 const keyword = ref('')
@@ -119,8 +120,8 @@ const rowSelection = computed(() => ({
 }))
 const selectedDocIds = computed(() => selectedKeys.value.filter((k) => k.startsWith('doc-')).map((k) => k.slice(4)))
 
-// ── 列宽拖拽（antdv v4 无 setColumnWidth API，改列对象 width + 刷新 columns 引用触发重渲染）──
-const columns = ref([
+// ── 列定义（可拖宽：v-resize 指令 + headerCell 插槽，见 composables/useResizableColumns）──
+const columns = useResizableColumns([
   { title: '名称', dataIndex: 'name', key: 'name', width: 280, ellipsis: true },
   { title: '类型', dataIndex: 'mimeType', key: 'mimeType', width: 150, ellipsis: true },
   { title: '来源', dataIndex: 'sourceType', key: 'sourceType', width: 100 },
@@ -129,41 +130,6 @@ const columns = ref([
   { title: '时间', dataIndex: 'time', key: 'time', width: 165 },
   { title: '操作', key: 'action', width: 180, fixed: 'center' as const },
 ])
-
-function resizeColumn(key: string, width: number) {
-  const col = columns.value.find((c) => c.key === key)
-  if (!col) return
-  col.width = width
-  columns.value = [...columns.value]
-}
-
-const vResize: Directive<HTMLElement> = {
-  mounted(el, binding) {
-    const handle = document.createElement('span')
-    handle.style.cssText = 'position:absolute;top:0;right:-7px;bottom:0;width:14px;cursor:col-resize;z-index:1'
-    el.appendChild(handle)
-    handle.addEventListener('mousedown', (e: MouseEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      const th = el.parentElement as HTMLElement
-      const startX = e.clientX
-      const startWidth = th.getBoundingClientRect().width
-      const onMove = (ev: MouseEvent) => {
-        resizeColumn(binding.arg as string, Math.max(60, startWidth + ev.clientX - startX))
-      }
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-      }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    })
-  },
-}
 
 const SOURCE_LABEL: Record<string, string> = {
   FILE: '文件上传',
@@ -423,142 +389,169 @@ interface ErrResp {
 </script>
 
 <template>
-  <div class="doc-manage">
-    <!-- 查询条件 -->
-    <div class="query-bar">
-      <a-input
-        v-model:value="keyword"
-        placeholder="文件名关键词"
-        allow-clear
-        style="width: 220px"
-        @press-enter="doSearch"
-      >
-        <template #prefix><SearchOutlined /></template>
-      </a-input>
-      <a-select v-model:value="status" placeholder="入库状态" allow-clear style="width: 140px">
-        <a-select-option v-for="(label, v) in STATUS_TEXT" :key="v" :value="v">{{ label }}</a-select-option>
-      </a-select>
-      <a-button type="primary" @click="doSearch">
-        <template #icon><SearchOutlined /></template>查询
-      </a-button>
-      <a-button @click="doReset">
-        <template #icon><ReloadOutlined /></template>重置
-      </a-button>
-    </div>
-
-    <!-- 功能按钮 -->
-    <div class="action-bar">
-      <a-button type="primary" @click="openCreateCol">
-        <template #icon><FolderAddOutlined /></template>新建文件集
-      </a-button>
-      <a-button @click="openUpload">
-        <template #icon><UploadOutlined /></template>上传文档
-      </a-button>
-      <template v-if="selectedDocIds.length > 0">
-        <a-button @click="openBatchAssign">
-          <template #icon><SwapOutlined /></template>移入集合（{{ selectedDocIds.length }}）
+  <div class="doc-manage page-scroll">
+    <!-- 页头：标题 + 主操作 -->
+    <div class="page-header">
+      <div class="page-header-text">
+        <h1 class="page-title">文档管理</h1>
+        <p class="page-desc">文件集与独立文件的入库状态、归集与删除</p>
+      </div>
+      <div class="page-actions">
+        <a-button @click="openCreateCol">
+          <template #icon><FolderAddOutlined /></template>新建文件集
         </a-button>
-        <a-button danger @click="batchDelete">
-          <template #icon><DeleteOutlined /></template>批量删除（{{ selectedDocIds.length }}）
+        <a-button type="primary" @click="openUpload">
+          <template #icon><UploadOutlined /></template>上传文档
         </a-button>
-      </template>
+      </div>
     </div>
 
-    <!-- 异构表：集合行（可展开）在上、独立文件行在下 -->
-    <div ref="tableWrap" class="table-wrap">
-      <a-table
-        :key="tableKey"
-        :data-source="topRows"
-        :columns="columns"
-        :loading="loading"
-        :pagination="false"
-        size="middle"
-        :row-key="rowKey"
-        :row-class-name="(r: ColRow | DocRow) => (r._type === 'col' ? 'row-collection' : '')"
-        :row-selection="rowSelection"
-        v-model:expandedRowKeys="expandedKeys"
-        :scroll="{ x: 1000, y: tableBodyHeight }"
-      >
-        <template #headerCell="{ column }">
-          <!-- 仅业务列渲染自定义表头；antdv 内部展开列的 title 是数组占位 ['']，
-               走文本插值会被 Vue JSON.stringify 成 [""]，须过滤掉 -->
-          <span v-if="typeof column.title === 'string'" class="th-cell" v-resize:[column.key]="column">{{ column.title }}</span>
-        </template>
-        <template #bodyCell="{ column, record }">
-          <!-- 集合行 -->
-          <template v-if="record._type === 'col'">
-            <template v-if="column.key === 'name'">
-              <span class="col-name"><FolderOutlined class="col-icon" />{{ record.name }}</span>
-            </template>
-            <template v-else-if="column.key === 'count'">
-              <span class="col-count">{{ record.docCount }} 个文档</span>
-            </template>
-            <template v-else-if="column.key === 'time'">{{ fmtTime(record.createTime) }}</template>
-            <template v-else-if="column.key === 'action'">
-              <a-button type="link" size="small" @click="openRenameCol(record)"><EditOutlined />改名</a-button>
-              <a-button type="link" size="small" danger @click="confirmDeleteCol(record)"><DeleteOutlined />删除</a-button>
-            </template>
-            <template v-else>—</template>
-          </template>
-          <!-- 独立文件行 -->
-          <template v-else>
-            <template v-if="column.key === 'name'">
-              <a class="doc-name" @click="openPreview(record)">
-                <FileTextOutlined class="doc-name-icon" />{{ record.name }}
-              </a>
-            </template>
-            <template v-else-if="column.key === 'count'">{{ record.chunkCount }}</template>
-            <template v-else-if="column.key === 'time'">{{ fmtTime(record.createdAt) }}</template>
-            <template v-else-if="column.key === 'sourceType'">
-              {{ SOURCE_LABEL[record.sourceType] || record.sourceType || '—' }}
-            </template>
-            <template v-else-if="column.key === 'status'">
-              <a-tag :color="STATUS_COLOR[record.status] || 'default'">{{ STATUS_TEXT[record.status] || record.status }}</a-tag>
-            </template>
-            <template v-else-if="column.key === 'action'">
-              <a-button type="link" size="small" @click="openPreview(record)"><EyeOutlined />预览</a-button>
-              <a-button type="link" size="small" @click="openAssignOne(record)"><SwapOutlined />归集</a-button>
-              <a-button type="link" size="small" danger @click="confirmDeleteDoc(record)"><DeleteOutlined />删除</a-button>
-            </template>
-          </template>
-        </template>
-        <!-- 仅集合行显示展开图标（独立文件行不渲染），用 slot 精确控制 -->
-        <template #expandIcon="{ expanded, onExpand, record }">
-          <button
-            v-if="record._type === 'col'"
-            type="button"
-            :class="['ant-table-row-expand-icon', expanded ? 'ant-table-row-expand-icon-expanded' : 'ant-table-row-expand-icon-collapsed']"
-            :aria-label="expanded ? 'Collapse row' : 'Expand row'"
-            @click="onExpand(record, $event)"
-          />
-        </template>
-        <!-- 集合展开：嵌套分页表 -->
-        <template #expandedRowRender="{ record }">
-          <CollectionDocTable
-            v-if="record._type === 'col'"
-            :collection-id="record.id"
-            :keyword="keyword"
-            @preview="openPreview"
-            @changed="reloadAll"
-          />
-        </template>
-        <template #emptyText><a-empty description="暂无文件集或独立文件" /></template>
-      </a-table>
+    <!-- 查询条件卡 -->
+    <div class="filter-card">
+      <div class="filter-row">
+        <div class="filter-item">
+          <span class="filter-label">关键词</span>
+          <a-input
+            v-model:value="keyword"
+            placeholder="文件名关键词"
+            allow-clear
+            style="width: 220px"
+            @press-enter="doSearch"
+          >
+            <template #prefix><SearchOutlined /></template>
+          </a-input>
+        </div>
+        <div class="filter-item">
+          <span class="filter-label">入库状态</span>
+          <a-select v-model:value="status" placeholder="全部" allow-clear style="width: 140px">
+            <a-select-option v-for="(label, v) in STATUS_TEXT" :key="v" :value="v">{{ label }}</a-select-option>
+          </a-select>
+        </div>
+        <div class="filter-actions">
+          <a-button type="primary" @click="doSearch">查询</a-button>
+          <a-button @click="doReset">重置</a-button>
+        </div>
+      </div>
     </div>
 
-    <!-- 分页（仅控制独立文件段）-->
-    <div class="pager">
-      <span class="pager-hint">文件集 {{ collections.length }} 个 · 独立文件 {{ total }} 个</span>
-      <a-pagination
-        :current="page"
-        :page-size="size"
-        :total="total"
-        :show-total="(t: number) => `独立文件共 ${t} 条`"
-        :show-size-changer="true"
-        :page-size-options="['10', '20', '50']"
-        :show-quick-jumper="true"
-        @change="onPage"
-      />
+    <!-- 表格卡：工具栏（批量操作）+ 异构表 + 分页 -->
+    <div class="table-card">
+      <div class="table-toolbar">
+        <div class="toolbar-left">
+          <template v-if="selectedDocIds.length > 0">
+            <span class="selected-count">已选 {{ selectedDocIds.length }} 项</span>
+            <a-button size="small" @click="openBatchAssign">
+              <template #icon><SwapOutlined /></template>移入集合
+            </a-button>
+            <a-button size="small" danger @click="batchDelete">
+              <template #icon><DeleteOutlined /></template>批量删除
+            </a-button>
+          </template>
+          <span v-else class="toolbar-hint">文件集 {{ collections.length }} 个 · 独立文件 {{ total }} 个</span>
+        </div>
+        <div class="toolbar-right">
+          <a-button type="text" size="small" title="刷新" @click="reloadAll">
+            <template #icon><ReloadOutlined /></template>
+          </a-button>
+        </div>
+      </div>
+
+      <!-- 异构表：集合行（可展开）在上、独立文件行在下 -->
+      <div ref="tableWrap" class="table-wrap">
+        <a-table
+          :key="tableKey"
+          :data-source="topRows"
+          :columns="columns"
+          :loading="loading"
+          :pagination="false"
+          size="middle"
+          :row-key="rowKey"
+          :row-class-name="(r: ColRow | DocRow) => (r._type === 'col' ? 'row-collection' : '')"
+          :row-selection="rowSelection"
+          v-model:expandedRowKeys="expandedKeys"
+          :scroll="{ x: 1000, y: tableBodyHeight }"
+        >
+          <template #headerCell="{ column }">
+            <!-- 仅业务列渲染自定义表头；antdv 内部展开列的 title 是数组占位 ['']，
+                 走文本插值会被 Vue JSON.stringify 成 [""]，须过滤掉 -->
+            <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="columns">{{ column.title }}</span>
+          </template>
+          <template #bodyCell="{ column, record }">
+            <!-- 集合行 -->
+            <template v-if="record._type === 'col'">
+              <template v-if="column.key === 'name'">
+                <span class="col-name"><FolderOutlined class="col-icon" />{{ record.name }}</span>
+              </template>
+              <template v-else-if="column.key === 'count'">
+                <span class="col-count">{{ record.docCount }} 个文档</span>
+              </template>
+              <template v-else-if="column.key === 'time'">{{ fmtTime(record.createTime) }}</template>
+              <template v-else-if="column.key === 'action'">
+                <a-button type="link" size="small" @click="openRenameCol(record)"><EditOutlined />改名</a-button>
+                <a-button type="link" size="small" danger @click="confirmDeleteCol(record)"><DeleteOutlined />删除</a-button>
+              </template>
+              <template v-else>—</template>
+            </template>
+            <!-- 独立文件行 -->
+            <template v-else>
+              <template v-if="column.key === 'name'">
+                <a class="doc-name" @click="openPreview(record)">
+                  <FileTextOutlined class="doc-name-icon" />{{ record.name }}
+                </a>
+              </template>
+              <template v-else-if="column.key === 'count'">{{ record.chunkCount }}</template>
+              <template v-else-if="column.key === 'time'">{{ fmtTime(record.createdAt) }}</template>
+              <template v-else-if="column.key === 'sourceType'">
+                {{ SOURCE_LABEL[record.sourceType] || record.sourceType || '—' }}
+              </template>
+              <template v-else-if="column.key === 'status'">
+                <a-tag :color="STATUS_COLOR[record.status] || 'default'">{{ STATUS_TEXT[record.status] || record.status }}</a-tag>
+              </template>
+              <template v-else-if="column.key === 'action'">
+                <a-button type="link" size="small" @click="openPreview(record)"><EyeOutlined />预览</a-button>
+                <a-button type="link" size="small" @click="openAssignOne(record)"><SwapOutlined />归集</a-button>
+                <a-button type="link" size="small" danger @click="confirmDeleteDoc(record)"><DeleteOutlined />删除</a-button>
+              </template>
+            </template>
+          </template>
+          <!-- 仅集合行显示展开图标（独立文件行不渲染），用 slot 精确控制 -->
+          <template #expandIcon="{ expanded, onExpand, record }">
+            <button
+              v-if="record._type === 'col'"
+              type="button"
+              :class="['ant-table-row-expand-icon', expanded ? 'ant-table-row-expand-icon-expanded' : 'ant-table-row-expand-icon-collapsed']"
+              :aria-label="expanded ? 'Collapse row' : 'Expand row'"
+              @click="onExpand(record, $event)"
+            />
+          </template>
+          <!-- 集合展开：嵌套分页表 -->
+          <template #expandedRowRender="{ record }">
+            <CollectionDocTable
+              v-if="record._type === 'col'"
+              :collection-id="record.id"
+              :keyword="keyword"
+              @preview="openPreview"
+              @changed="reloadAll"
+            />
+          </template>
+          <template #emptyText><a-empty description="暂无文件集或独立文件" /></template>
+        </a-table>
+      </div>
+
+      <!-- 分页（仅控制独立文件段）-->
+      <div class="table-footer">
+        <span class="toolbar-hint">独立文件共 {{ total }} 条</span>
+        <a-pagination
+          :current="page"
+          :page-size="size"
+          :total="total"
+          :show-total="(t: number) => `共 ${t} 条`"
+          :show-size-changer="true"
+          :page-size-options="['10', '20', '50']"
+          :show-quick-jumper="true"
+          @change="onPage"
+        />
+      </div>
     </div>
 
     <!-- 预览抽屉 -->
@@ -668,24 +661,7 @@ interface ErrResp {
 
 <style scoped>
 .doc-manage {
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  height: 100%;
-  overflow-y: auto;
-}
-
-/* ── 功能按钮行 ── */
-.action-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--color-border-light);
+  gap: 0;
 }
 
 /* ── 上传 dialog 内容 ── */
@@ -741,7 +717,7 @@ interface ErrResp {
   gap: 8px;
   padding: 6px 10px;
   background: var(--color-primary-light);
-  border: 1px solid rgba(15, 118, 110, 0.15);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   font-size: 12px;
 }
@@ -780,18 +756,7 @@ interface ErrResp {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-}
-.th-cell {
-  position: relative;
-  display: inline-block;
-  width: 100%;
-  user-select: none;
-}
-.query-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
+  padding: 0 8px;
 }
 .col-name {
   display: inline-flex;
@@ -801,7 +766,7 @@ interface ErrResp {
   color: var(--color-ink);
 }
 .col-icon {
-  color: #f59e0b;
+  color: var(--color-primary);
 }
 .col-count {
   color: var(--color-primary);
@@ -824,17 +789,6 @@ interface ErrResp {
 .doc-name-icon {
   color: var(--color-ink-tertiary);
   flex-shrink: 0;
-}
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 16px;
-}
-.pager-hint {
-  font-size: 12px;
-  color: var(--color-ink-tertiary);
-  margin-right: auto;
 }
 /* 集合行隐藏勾选框（批量操作只对文档生效，集合行勾选无意义） */
 :deep(.row-collection .ant-table-selection-column) {

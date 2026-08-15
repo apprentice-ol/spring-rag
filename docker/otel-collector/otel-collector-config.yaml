@@ -1,6 +1,7 @@
 # OTel Collector：接收 springai-rag 的 OTLP/HTTP trace，按后端拆分 pipeline 扇出。
-# 应用侧只写通用 OTel 语义属性（gen_ai.* / rag.trace.* / rag.step 等），不感知任何后端；
-# 后端专属映射（如 Langfuse 的 langfuse.observation.*）只在本文件的 transform processor 里做。
+# 本文件只做"转发 + 通用处理"（噪声过滤、批处理）——后端专属属性映射（rag.* → langfuse.*）
+# 已上收到应用侧（obs-telemetry-backends 的 LangfuseAttributeKeyMapper，obs.langfuse.attribute-mapping 开关），
+# collector 在场与否两种模式下后端收到的字段完全一致，本组件完全可被绕过（obs.collector.enabled=false）。
 # 新增/替换展示后端 = 在 exporters 加一个 otlphttp，并在 service.pipelines 加一条即可，应用零改动。
 #
 # 由 docker-compose.yml 的 otel-collector 服务挂载本文件。
@@ -21,22 +22,13 @@ receivers:
 
 processors:
   # 丢弃纯 HTTP GET 噪声 trace（前端拉会话列表 /chat/conversations、Knife4j 文档 /docs/* 等）。
-  # /chat/stream 是 POST，根 span 不匹配 "^http get "；且其子 span 带 rag.*/gen_ai.*，不会被误删。
+  # /chat/stream 是 POST，根 span 不匹配 "^http get "；对话 trace 内所有 span（含 GET 子 span）
+  # 经 baggage 带 session.id / gen_ai.* 属性，不会被误删。
   filter/drop-noise:
     error_mode: ignore
     traces:
       span:
-        - 'IsMatch(name, "^http get ") and not IsMatch(name, "chat/stream") and attributes["gen_ai.system"] == nil and attributes["rag.step"] == nil'
-
-  # Langfuse 专属语义映射：应用写的通用 key → Langfuse 认识的 key（trace 级 input/output）。
-  # 应用零 Langfuse 知识；其他后端可按同样方式加自己的 transform，或直接用通用 key。
-  transform/langfuse:
-    error_mode: ignore
-    trace_statements:
-      - context: span
-        statements:
-          - set(attributes["langfuse.observation.input"], attributes["rag.trace.input"]) where attributes["rag.trace.input"] != nil
-          - set(attributes["langfuse.observation.output"], attributes["rag.trace.output"]) where attributes["rag.trace.output"] != nil
+        - 'IsMatch(name, "^http get ") and not IsMatch(name, "chat/stream") and attributes["gen_ai.system"] == nil and attributes["session.id"] == nil'
 
   batch:
     timeout: 5s
@@ -88,7 +80,7 @@ service:
       exporters: [otlphttp/openobserve]
     traces/langfuse:
       receivers: [otlp]
-      processors: [filter/drop-noise, transform/langfuse, batch]
+      processors: [filter/drop-noise, batch]
       exporters: [otlphttp/langfuse]
     logs/openobserve:
       receivers: [otlp]

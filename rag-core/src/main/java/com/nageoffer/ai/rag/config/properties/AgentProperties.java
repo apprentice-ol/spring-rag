@@ -15,23 +15,14 @@ import org.springframework.context.annotation.Configuration;
 @ConfigurationProperties(prefix = "rag.chat.agent")
 public class AgentProperties {
 
-    /** 默认 agent 范式（naive / crag / self_rag / react / plan_execute） */
+    /** 默认 agent 范式（naive / react） */
     private String paradigm = "naive";
-
-    /** CRAG/Self-RAG 检索不足时的重试次数上限 */
-    private int maxRetries = 1;
 
     /** grade 相关性阈值：chunk score >= 该值视为 relevant */
     private double gradeThreshold = 0.5;
 
-    /** 最小命中条数：少于该值视为检索不足（触发重试/兜底） */
-    private int minHits = 2;
-
     /** ReAct 最大循环步数（防死循环的硬上限） */
     private int reactMaxSteps = 6;
-
-    /** 是否启用 web 搜索兜底（WebSearchChannel 为 stub 时该开关无效，CRAG 退化为重试改写） */
-    private boolean enableWebFallback = false;
 
     /** 解析 paradigm 字段为枚举，非法值回退 NAIVE。 */
     public RagParadigm paradigmEnum() {

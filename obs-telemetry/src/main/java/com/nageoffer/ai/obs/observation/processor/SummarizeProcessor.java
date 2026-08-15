@@ -22,6 +22,9 @@ public class SummarizeProcessor implements ObservationProcessor {
 
     @Override
     public ObsEvent process(ObsEvent event) {
+        if (!Summarizer.isSummarizeEnabled()) {
+            return event;
+        }
         if (event.isRaw()) {
             return event;  // 原样输出（流式完整回答），跳过摘要
         }

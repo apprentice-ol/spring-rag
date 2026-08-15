@@ -1,6 +1,7 @@
 package com.nageoffer.ai.obs.observation.span;
 
 import io.opentelemetry.api.OpenTelemetry;
+import com.nageoffer.ai.obs.observation.support.OtelKeys;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.StatusCode;
 import org.slf4j.MDC;
@@ -45,11 +46,11 @@ public final class RootSpan implements SpanSession {
         io.opentelemetry.context.Scope scope = span.makeCurrent();
         String spanId = span.getSpanContext().getSpanId();
         String traceId = span.getSpanContext().getTraceId();
-        String prevStep = MDC.get("step");
-        String prevStepId = MDC.get("step_id");
+        String prevStep = MDC.get(OtelKeys.step());
+        String prevStepId = MDC.get(OtelKeys.stepId());
         String prevTraceId = MDC.get("traceId");
-        MDC.put("step", name);
-        MDC.put("step_id", spanId);
+        MDC.put(OtelKeys.step(), name);
+        MDC.put(OtelKeys.stepId(), spanId);
         MDC.put("traceId", traceId);
         return new RootSpan(span, spanId, scope, prevStep, prevStepId, prevTraceId);
     }
@@ -97,8 +98,8 @@ public final class RootSpan implements SpanSession {
         } catch (Exception ignored) {
         }
         // 恢复外层键（ROOT 开在已有请求/step 内时不误清外层 traceId）；外层无值才真正移除
-        restoreMdc("step", prevStep);
-        restoreMdc("step_id", prevStepId);
+        restoreMdc(OtelKeys.step(), prevStep);
+        restoreMdc(OtelKeys.stepId(), prevStepId);
         restoreMdc("traceId", prevTraceId);
     }
 

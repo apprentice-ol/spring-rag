@@ -27,7 +27,7 @@ public class EvalRunEntity {
     /** 运行状态：PENDING / RUNNING / DONE / FAILED */
     private String status;
 
-    /** agent 范式（naive/crag/...，冗余自 param_snapshot 便于列表筛选） */
+    /** agent 范式（naive/react，冗余自 param_snapshot 便于列表筛选） */
     private String paradigm;
 
     /** 条目总数 */

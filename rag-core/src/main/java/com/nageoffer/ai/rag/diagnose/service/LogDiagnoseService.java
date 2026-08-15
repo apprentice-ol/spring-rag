@@ -7,14 +7,14 @@ import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievalBudget;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
+import com.nageoffer.ai.obs.backends.openobserve.OpenObserveQueryClient;
+import com.nageoffer.ai.obs.backends.openobserve.dto.TraceLogEntry;
 import com.nageoffer.ai.obs.backends.openobserve.OpenObserveProperties;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.rag.diagnose.client.OpenObserveQueryClient;
 import com.nageoffer.ai.rag.diagnose.dto.DiagnosePreview;
 import com.nageoffer.ai.rag.diagnose.dto.DiagnoseResponse;
 import com.nageoffer.ai.rag.diagnose.dto.MatchResult;
 import com.nageoffer.ai.rag.diagnose.dto.RelatedDoc;
-import com.nageoffer.ai.rag.diagnose.dto.TraceLogEntry;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -87,7 +87,7 @@ public class LogDiagnoseService {
      */
     public DiagnosePreview preview(String traceId) {
         log.info("[诊断][preview] traceId={}", traceId);
-        List<TraceLogEntry> descLogs = logClient.searchByTraceId(traceId, ooProperties.getMaxLogs());
+        List<TraceLogEntry> descLogs = logClient.searchLogsByTraceId(traceId, ooProperties.getMaxLogs());
         if (descLogs.isEmpty()) {
             return new DiagnosePreview(traceId, List.of(), List.of(), null);
         }

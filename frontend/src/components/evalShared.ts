@@ -191,13 +191,10 @@ export function categoryLabel(v: string | null | undefined): string {
   return CATEGORY_LABEL[v] ?? v
 }
 
-/** agent 范式选项（与后端 RagAgent 范式对齐：naive/crag/self_rag/react/plan_execute） */
+/** agent 范式选项（与后端 RagAgent 范式对齐：naive/react） */
 export const PARADIGMS: { value: string; label: string; desc: string }[] = [
   { value: 'naive', label: 'Naive', desc: '单次检索' },
-  { value: 'crag', label: 'CRAG', desc: '纠正重试' },
-  { value: 'self_rag', label: 'Self-RAG', desc: '密集反思' },
   { value: 'react', label: 'ReAct', desc: '自主循环' },
-  { value: 'plan_execute', label: 'Plan-Execute', desc: '规划执行' },
 ]
 
 /** 范式 value → 中文标签；未知值原样返回，空值返回 '-' */
