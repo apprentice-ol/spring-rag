@@ -1,0 +1,62 @@
+# ====================================================================
+# 可观测性配置 —— 服务器版（docker-compose.server.yml 用）
+#
+# 与本地版 application-telemetry.yaml 的区别：
+#   - 去掉 telemetry.collector：app 直连 OpenObserve，服务器不部署 otel-collector 扇出
+#   - 去掉 telemetry.langfuse：服务器不部署 Langfuse
+#
+# 加载方式：docker-compose.server.yml 的 app 段设环境变量
+#   TELEMETRY_CONFIG=application-telemetry-server.yaml
+# （application.yaml 的 import 用 ${TELEMETRY_CONFIG:application-telemetry.yaml} 按名加载）
+# ====================================================================
+
+telemetry:
+  # ---------------------------------------------------------------
+  # 1. 埋点与采样（llm-observability 核心）
+  # ---------------------------------------------------------------
+  tracer-name: springai-rag            # OTel tracer 名（离线 eval 等无父根 trace 用）
+  sampling:
+    probability: 1.0                   # 服务器全采样（部署可经 MANAGEMENT_TRACING_SAMPLING_PROBABILITY 调低）
+
+  # 内容捕获与摘要限额（与本地版一致）
+  limits:
+    summarize: false                 # 保留完整输入/输出 JSON
+    truncate: false
+    max-span-io: 100000000
+    summarize-max-string: 100000000
+    summarize-max-preview: 1000000
+    summarize-max-map-entries: 1000000
+
+  # ---------------------------------------------------------------
+  # 2. Collector：服务器不用 collector，必须显式 false（默认 true 会连 localhost:4318）
+  #    只保留开关段；无 base-url/endpoint（直连走下方 openobserve 推导）
+  # ---------------------------------------------------------------
+  collector:
+    enabled: false
+
+  # ---------------------------------------------------------------
+  # 3. OpenObserve：OTLP 日志/指标入口 + trace 直连 + 日志诊断读取凭据
+  #    collector.enabled=false 时：
+  #      - trace 直连端点 = openobserve.url + /v1/traces（OpenObserveOtlpAutoConfiguration 推导）
+  #      - 日志端点       = openobserve.url + /v1/logs
+  #      即服务器只需 OPENOBSERVE_URL=http://openobserve:5080/api/default
+  # ---------------------------------------------------------------
+  openobserve:
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 根地址（到组织 default）
+    web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}       # Web UI（前端链路追踪页跳转）
+    username: ${OO_USERNAME:admin@openobserve.io}               # 账号（生产务必覆盖）
+    password: ${OO_PASSWORD:OpenObserve@2026}                   # 密码（生产务必覆盖）
+    stream: springai_rag_logs                                   # 日志流（OpenObserve 规范化为下划线）
+    trace-stream: default                                       # trace 流（OTLP traces 默认写入 default）
+    query-enabled: true                                         # 日志/span 查询客户端（诊断读取侧）
+
+  # ---------------------------------------------------------------
+  # 4. （已移除 Langfuse：服务器不部署，OTLP trace 只发 OpenObserve）
+  # ---------------------------------------------------------------
+
+  # ---------------------------------------------------------------
+  # 5. Spring AI 内容捕获（telemetry.springai.* 桥接到 spring.ai.chat.observations.*）
+  # ---------------------------------------------------------------
+  springai:
+    log-prompt: true
+    log-completion: true

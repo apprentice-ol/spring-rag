@@ -17,8 +17,8 @@ services:
     container_name: rag-postgres
     environment:
       POSTGRES_DB: springai_rag
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}           # 账号密码从 .env 注入（服务器 .env 需同步）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     # 宿主端口映射已移除（容器间通信用服务名 postgres:5432）；服务器已有 PG 占 5432 时不冲突。
     # 需要宿主机访问（Navicat 运维）时取消下行注释并视冲突改端口：
     # ports: ["5433:5432"]
@@ -49,8 +49,8 @@ services:
     # 宿主端口映射保留（浏览器访问图片）。9000 被占时：export RUSTFS_PORT=9001 并把 RUSTFS_PUBLIC_URL 同步改 http://<ip>:9001
     ports: ["${RUSTFS_PORT:-9000}:9000"]
     environment:
-      RUSTFS_ACCESS_KEY: rustfsadmin
-      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}   # 账号密码从 .env 注入（服务器 .env 需同步）
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
     volumes:
       - rustfs-data:/data
 
@@ -58,8 +58,8 @@ services:
     image: openobserve/openobserve:latest
     container_name: rag-openobserve
     environment:
-      ZO_ROOT_USER_EMAIL: admin@openobserve.io
-      ZO_ROOT_USER_PASSWORD: OpenObserve@2026
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@openobserve.io}       # OO 管理员账号从 .env 注入（服务器 .env 需同步）
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-OpenObserve@2026}
     ports: ["5080:5080"]
     volumes:
       - oo-data:/data
@@ -81,8 +81,8 @@ services:
     environment:
       # ---- 数据库 ----
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/springai_rag
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       # ---- Redis ----
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
@@ -93,20 +93,22 @@ services:
       #    图片 URL = http://<SERVER_IP>/storage/springai-rag-assets/{key}
       #    SERVER_IP 从 .env 读取；换服务器/Nginx 路径时改 .env 的 SERVER_IP 或此处
       RAG_STORAGE_S3_PUBLIC_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}/storage
-      RUSTFS_ACCESS_KEY: rustfsadmin
-      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       # ---- MQ：redis（2核4G 不跑 RocketMQ）----
       RAG_MQ_TYPE: redis
       SPRING_AUTOCONFIGURE_EXCLUDE: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
       # ---- 模型 API key（从 .env 读取，未配置则启动报错）----
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 配置 DEEPSEEK_API_KEY}
       BAILIAN_API_KEY: ${BAILIAN_API_KEY:?请在 .env 配置 BAILIAN_API_KEY}
-      # ---- OpenObserve 日志推送 + 诊断 ----
+      # ---- 可观测性：服务器版配置（直连 OpenObserve，无 collector / langfuse）----
+      # 加载 application-telemetry-server.yaml：collector.enabled=false，
+      # trace 直连 = OPENOBSERVE_URL + /v1/traces、日志 = + /v1/logs（无需再设 OBSERVE_OTLP_ENDPOINT）
+      TELEMETRY_CONFIG: application-telemetry-server.yaml
       OPENOBSERVE_URL: http://openobserve:5080/api/default
       # OO Web UI 浏览器可达地址（前端「链路追踪」页跳转用；容器内 openobserve:5080 浏览器访问不到，故用服务器外网 IP）
       OPENOBSERVE_WEB_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}:5080
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
-      OBSERVE_OTLP_ENDPOINT: http://openobserve:5080/api/default/v1/traces
       # ---- 关键词检索：bm25（pg_search，postgres 为自定义镜像）----
       RAG_SEARCH_CHANNELS_KEYWORD_MODE: bm25
       # ---- VLM 图片描述（图片块入库时生成 description，否则图片不可检索）----

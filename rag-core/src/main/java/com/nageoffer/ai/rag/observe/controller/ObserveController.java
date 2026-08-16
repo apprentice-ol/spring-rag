@@ -3,6 +3,7 @@ package com.nageoffer.ai.rag.observe.controller;
 import com.nageoffer.ai.llmobservability.backends.openobserve.OpenObserveProperties;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,6 +20,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class ObserveController {
 
     private final OpenObserveProperties openobserveProperties;
+
+    /** 前端「链路追踪」页展示的 OO 只读账号（供查看 trace/logs 登录用；生产务必覆盖默认值） */
+    @Value("${OO_VIEWER_EMAIL:viewer@springai-rag.com}")
+    private String viewerEmail;
+
+    @Value("${OO_VIEWER_PASSWORD:Viewer@rag2026}")
+    private String viewerPassword;
 
     /** 链路追踪跳转链接 + 只读账号（前端 TraceView 调用） */
     @GetMapping("/links")
@@ -38,8 +46,8 @@ public class ObserveController {
                         + "&stream=" + openobserveProperties.getTraceStream()
                         + "&trace_id={traceId}&from={from}&to={to}",
                 "org", org,
-                "email", "viewer@springai-rag.com",
-                "password", "Viewer@rag2026"
+                "email", viewerEmail,
+                "password", viewerPassword
         );
     }
 }

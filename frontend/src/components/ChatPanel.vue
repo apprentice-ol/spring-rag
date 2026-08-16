@@ -45,7 +45,8 @@ function toggleConv() {
 </template>
 
 <style scoped>
-.chat-layout { display:flex; height:100%; }
+/* flex:1 撑满 app-body（否则宽度靠内容 fit-content——答案窄/消息少时整个布局收缩变窄） */
+.chat-layout { display:flex; height:100%; flex:1; min-width:0; }
 .conv-shell {
   flex-shrink:0; min-width:0; overflow:hidden;
   border-right:1px solid var(--color-border);

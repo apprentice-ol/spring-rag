@@ -10,7 +10,9 @@ spring:
     import:
       - "optional:file:.env[.properties]"
       - "optional:file:../.env[.properties]"
-      - "optional:classpath:application-telemetry.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
+      # 可观测性配置文件名可切换：服务器部署（docker-compose.server.yml）设 TELEMETRY_CONFIG=application-telemetry-server.yaml
+      # （直连 OpenObserve、无 collector / langfuse）；本地默认 application-telemetry.yaml
+      - "optional:classpath:${TELEMETRY_CONFIG:application-telemetry.yaml}"
   application:
     name: springai-rag
 
@@ -20,10 +22,10 @@ spring:
       max-request-size: 60MB      # 单次请求最大 60MB
 
   datasource:
-    # springai-rag 独立库，已含 pgvector 扩展
+    # springai-rag 独立库，已含 pgvector 扩展；账号密码从 .env 注入（compose 经 SPRING_DATASOURCE_* 覆盖）
     url: jdbc:postgresql://localhost:5432/springai_rag
-    username: postgres
-    password: ${DB_PASSWORD:postgres}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
 
   data:
