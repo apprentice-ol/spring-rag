@@ -100,15 +100,21 @@ services:
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       # ---- MQ：redis（2核4G 不跑 RocketMQ）----
       RAG_MQ_TYPE: redis
-      SPRING_AUTOCONFIGURE_EXCLUDE: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration
+      # 排除 RocketMQ 与 Langfuse 直连导出器（服务器无 Langfuse；LangfuseOtlpAutoConfiguration 在 collector=false 时默认启用且指向 localhost:3000）
+      SPRING_AUTOCONFIGURE_EXCLUDE: org.apache.rocketmq.spring.autoconfigure.RocketMQAutoConfiguration,com.jjx.ai.llmobservability.backends.langfuse.LangfuseOtlpAutoConfiguration
       # ---- 模型 API key（从 .env 读取，未配置则启动报错）----
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 配置 DEEPSEEK_API_KEY}
       BAILIAN_API_KEY: ${BAILIAN_API_KEY:?请在 .env 配置 BAILIAN_API_KEY}
+      # MinerU 结构化解析（PDF/Word/PPT；未配置时自动回退 Tika 解析）
+      MINERU_API_KEY: ${MINERU_API_KEY:-}
       # ---- 可观测性：服务器版配置（直连 OpenObserve，无 collector / langfuse）----
       # 加载 application-telemetry-server.yaml：collector.enabled=false，
       # trace 直连 = OPENOBSERVE_URL + /v1/traces、日志 = + /v1/logs（无需再设 OBSERVE_OTLP_ENDPOINT）
       TELEMETRY_CONFIG: application-telemetry-server.yaml
       OPENOBSERVE_URL: http://openobserve:5080/api/default
+      # OTLP 日志/指标/链路写入与读取认证（必须与 OO 实际账号一致，否则日志导出 401）
+      OO_USERNAME: ${OO_USERNAME:?请在 .env 配置 OO_USERNAME}
+      OO_PASSWORD: ${OO_PASSWORD:?请在 .env 配置 OO_PASSWORD}
       # OO Web UI 浏览器可达地址（前端「链路追踪」页跳转用；容器内 openobserve:5080 浏览器访问不到，故用服务器外网 IP）
       OPENOBSERVE_WEB_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}:5080
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
