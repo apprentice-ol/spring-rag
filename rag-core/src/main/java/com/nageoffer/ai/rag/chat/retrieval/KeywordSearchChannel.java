@@ -12,7 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 关键词检索通道（metadata.keywords + 文档名路由）。

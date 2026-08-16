@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.diagnose.dto;
 
-import com.nageoffer.ai.llmobservability.backends.openobserve.dto.TraceLogEntry;
+import com.jjx.ai.llmobservability.backends.openobserve.dto.TraceLogEntry;
 import java.util.List;
 
 /**

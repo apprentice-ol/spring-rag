@@ -1,7 +1,7 @@
 package com.nageoffer.ai.rag.chat.service;
 
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.ai.chat.client.ChatClient;

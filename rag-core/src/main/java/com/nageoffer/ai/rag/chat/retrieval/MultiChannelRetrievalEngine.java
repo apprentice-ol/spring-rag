@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 多通道检索引擎。

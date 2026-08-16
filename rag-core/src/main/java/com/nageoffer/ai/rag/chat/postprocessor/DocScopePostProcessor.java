@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 文档作用域收敛后处理器（dedup 之后、fusion 之前）。

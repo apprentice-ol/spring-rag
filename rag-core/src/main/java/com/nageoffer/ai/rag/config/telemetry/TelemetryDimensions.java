@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.config.telemetry;
 
-import com.nageoffer.ai.llmobservability.observation.TelemetryTemplate;
+import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import com.nageoffer.ai.rag.chat.agent.AgentRetrievalResult;
 import com.nageoffer.ai.rag.chat.intent.IntentResult;
 import org.springframework.context.annotation.Configuration;

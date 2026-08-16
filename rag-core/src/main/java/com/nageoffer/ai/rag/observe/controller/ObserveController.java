@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.observe.controller;
 
-import com.nageoffer.ai.llmobservability.backends.openobserve.OpenObserveProperties;
+import com.jjx.ai.llmobservability.backends.openobserve.OpenObserveProperties;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;

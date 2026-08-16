@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.chat.agent.impl;
 
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import com.nageoffer.ai.rag.chat.agent.AgentRequest;
 import com.nageoffer.ai.rag.chat.agent.AgentRetrievalResult;
 import com.nageoffer.ai.rag.chat.agent.AgentTrace;

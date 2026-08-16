@@ -22,7 +22,7 @@ import org.springframework.util.StringUtils;
  *
  * <p><b>LLM 埋点不在此处理</b>——Spring AI 每次调用自动建 ChatModel observation，
  * gen_ai.* 内容与 token 用量由 Spring AI 原生输出；会话/pipeline 关联由 llm-observability 的
- * {@link com.nageoffer.ai.llmobservability.autoconfigure.springai.SpringAiConversationObservationFilter} 挂到原生 span。
+ * {@link com.jjx.ai.llmobservability.autoconfigure.springai.SpringAiConversationObservationFilter} 挂到原生 span。
  * 本类只装配 ChatClient，不挂任何 Advisor。</p>
  *
  * @see com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine

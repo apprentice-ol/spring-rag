@@ -14,7 +14,7 @@ import com.nageoffer.ai.rag.chat.retrieval.WebSearchChannel;
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.properties.AgentProperties;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;

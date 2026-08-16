@@ -7,8 +7,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchChannelType;
-import com.nageoffer.ai.llmobservability.observation.logging.TelemetryStructuredLog;
-import com.nageoffer.ai.llmobservability.observation.TelemetryTemplate;
+import com.jjx.ai.llmobservability.observation.logging.TelemetryStructuredLog;
+import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -24,7 +24,7 @@ import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 百炼 Rerank 客户端。
