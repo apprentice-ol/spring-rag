@@ -1,7 +1,21 @@
 # springai-rag
-cd /d/04_projects/20_springai-rag && bash build-local.sh
 
-基于 **Spring AI 1.1** 的 RAG 平台 —— [`15_ragent`](../15_ragent) 的 Spring AI 重写版，**完整迁移**原 ragent 的入库 + 查询能力（节点引擎 / 结构化解析 / 多通道检索 / 重排 / 流式生成）。
+基于 **Spring AI 1.1** 的 RAG 平台：文档入库 + 多通道检索 + Rerank 精排 + 流式问答。
+
+## 项目说明（学习复刻 demo）
+
+本项目的**检索与文档入库**能力复刻自 **[ragent](https://gitee.com/nageoffer/ragent.git)** 项目，用 **Spring AI 生态**（ChatClient / EmbeddingModel / VectorStore / ChatMemory / Advisor）替代原 ragent 的 infra-ai 层（屏蔽模型供应商），是对 ragent 检索管线与入库编排的学习实践。
+
+- **原项目仓库**：
+  - Gitee：https://gitee.com/nageoffer/ragent.git
+  - GitHub：https://github.com/nageoffer/ragent.git
+- **定位**：本项目为**学习复刻的 demo**，非 ragent 官方版本；采用 Spring AI 技术栈重写，代码结构与编排方式与原项目不同。
+
+## 构建
+
+```bash
+cd /d/04_projects/20_springai-rag && bash build-local.sh
+```
 
 ## 模块结构（自包含）
 
