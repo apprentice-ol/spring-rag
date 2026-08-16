@@ -105,8 +105,10 @@ async function openTrace(m: Msg) {
     if (rec) {
       drawerTrace.value = toAgentTrace(rec)
       m.trace = drawerTrace.value
-      // 历史消息顺带补 traceId——「链路」按钮随之可用
+      // 历史消息顺带补 traceId 与时间——「链路」按钮随之可用；ts 用轨迹 createTime
+      // （后端带时区偏移序列化，new Date 解析不受浏览器时区影响，OO 深链窗口不错位）
       if (!m.traceId && rec.traceId) m.traceId = rec.traceId
+      if (rec.createTime) m.ts = new Date(rec.createTime).getTime()
     }
   } catch {
     /* 保持空态 */

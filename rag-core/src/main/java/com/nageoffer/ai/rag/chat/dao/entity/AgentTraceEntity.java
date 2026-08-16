@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.nageoffer.ai.rag.ingestion.utils.JsonbTypeHandler;
+import com.nageoffer.ai.rag.observe.support.LocalDateTimeTzSerializer;
 import java.time.LocalDateTime;
 import lombok.Data;
 
@@ -46,5 +48,7 @@ public class AgentTraceEntity {
     /** 检索编排总耗时（ms） */
     private Long totalLatencyMs;
 
+    /** 带 JVM 时区偏移序列化（前端 new Date 解析不受浏览器时区影响，OO 深链窗口不错位） */
+    @JsonSerialize(using = LocalDateTimeTzSerializer.class)
     private LocalDateTime createTime;
 }

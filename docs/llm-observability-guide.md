@@ -1,6 +1,6 @@
 # telemetry 埋点指南（典型情况）
 
-> 适用 llm-observability 模块（`com.nageoffer.ai.llmobservability`）。所有示例均来自本仓库真实代码，可直接对照。
+> 适用 llm-observability 模块（`com.jjx.ai.llmobservability`）。所有示例均来自本仓库真实代码，可直接对照。
 > 日志层面的一般规范（级别/前缀/占位符/MDC）见 [logging-guide.md](logging-guide.md)（注意：该文旧命名未刷新，埋点部分以本文为准）。
 
 ## 0. 心智模型

@@ -96,6 +96,8 @@ services:
       rustfs:   { condition: service_started }
       otel-collector: { condition: service_started }
     environment:
+      # 业务时区（与浏览器一致）：容器默认 UTC 导致 createTime 无时区被前端按本地时区解析偏移
+      TZ: Asia/Shanghai
       # ---- 数据库 ----
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/springai_rag
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
