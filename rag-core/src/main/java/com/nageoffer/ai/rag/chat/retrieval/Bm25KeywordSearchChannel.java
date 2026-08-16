@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 关键词检索通道（pg_bm25 扩展版，Tantivy 内核真 BM25）。
@@ -121,7 +121,7 @@ public class Bm25KeywordSearchChannel implements SearchChannel {
     }
 
     @Override
-    @ObservedStep("rag.channel")
+    @TelemetryStep("rag.channel")
     public SearchChannelResult search(SearchContext context) {
         long t0 = System.currentTimeMillis();
         if (!available) {

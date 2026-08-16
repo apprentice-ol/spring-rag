@@ -20,15 +20,14 @@
 
     <modules>
         <module>rag-common</module>
-        <module>obs-telemetry</module>
-        <module>obs-telemetry-backends</module>
-        <module>obs-telemetry-examples</module>
         <module>rag-core</module>
     </modules>
 
     <properties>
         <java.version>21</java.version>
         <spring-ai.version>1.1.2</spring-ai.version>
+        <!-- OpenTelemetry instrumentation 组件（logback appender 等）版本统一收口；不引 BOM 以免覆盖 Boot 管理的 OTel 核心版本 -->
+        <opentelemetry.instrumentation.version>2.15.0-alpha</opentelemetry.instrumentation.version>
         <mybatis-plus.version>3.5.14</mybatis-plus.version>
         <rocketmq-spring.version>2.3.5</rocketmq-spring.version>
         <knife4j.version>4.5.0</knife4j.version>
@@ -51,16 +50,6 @@
             <dependency>
                 <groupId>com.nageoffer.ai</groupId>
                 <artifactId>rag-common</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.nageoffer.ai</groupId>
-                <artifactId>obs-telemetry</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.nageoffer.ai</groupId>
-                <artifactId>obs-telemetry-backends</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -90,15 +90,23 @@ export interface AgentTrace {
   totalLatencyMs?: number
 }
 
+/** SSE meta 事件（流末尾）：消息/链路元信息，前端绑定到 assistant 气泡（轨迹回看 + OO 深链） */
+export interface StreamMeta {
+  messageId: number | null
+  traceId: string | null
+  paradigm: string | null
+}
+
 export interface StreamHandlers {
   onContent: (chunk: string) => void
   onTrace?: (trace: AgentTrace) => void
+  onMeta?: (meta: StreamMeta) => void
   onError: (err: unknown) => void
   onDone: () => void
 }
 
 /**
- * 流式问答（SSE GET）。按 SSE 规范解析：event 行决定类型（message→回答块 / trace→agent 轨迹），
+ * 流式问答（SSE GET）。按 SSE 规范解析：event 行决定类型（message→回答块 / trace→agent 轨迹 / meta→消息元信息），
  * 一个事件可由多个 data: 行组成，空行结束。agent 参数指定范式（naive/react）。
  */
 export async function streamChat(
@@ -139,6 +147,15 @@ export async function streamChat(
               handlers.onTrace(JSON.parse(raw) as AgentTrace)
             } catch {
               /* 忽略损坏的 trace */
+            }
+          }
+        } else if (currentEvent === 'meta') {
+          // meta 事件（messageId/traceId/paradigm，流末尾一次）：同 trace，无处理器静默丢弃
+          if (handlers.onMeta) {
+            try {
+              handlers.onMeta(JSON.parse(raw) as StreamMeta)
+            } catch {
+              /* 忽略损坏的 meta */
             }
           }
         } else {

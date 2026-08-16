@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { ArrowLeftOutlined, InboxOutlined, RobotOutlined, FileTextOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'
-import IngestPanel from './components/IngestPanel.vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ArrowLeftOutlined, RobotOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'
 import EvalDashboard from './components/EvalDashboard.vue'
 import ConsoleDashboard from './components/ConsoleDashboard.vue'
 import DocumentManage from './components/DocumentManage.vue'
@@ -15,7 +14,6 @@ import TopTabs from './components/TopTabs.vue'
 import type { MainNavKey } from './components/TopTabs.vue'
 import { useHorizontalSplitter, useIsMobile } from './composables/useSplitter'
 import { initChatState } from './composables/useChatState'
-import type { DocumentInfo } from './api/upload'
 
 const theme = {
   token: {
@@ -34,22 +32,15 @@ const theme = {
 }
 
 const backendOnline = ref<boolean | null>(null)
-const selectedDoc = ref<DocumentInfo | null>(null)
 
 const isMobile = useIsMobile()
 
-// ── 主区 tab：对话 / 知识库（管理走 #/admin 独立壳，由顶栏第三个 tab 进入）──
-type MainTab = 'chat' | 'knowledge'
-const mainTab = ref<MainTab>(localStorage.getItem('rag_main_tab') === 'knowledge' ? 'knowledge' : 'chat')
-watch(mainTab, v => localStorage.setItem('rag_main_tab', v))
-
-/** 顶部导航统一入口：对话/知识库切主区，管理跳后台 */
+/** 顶部导航统一入口：管理跳后台；对话（含点品牌）确保回到主页 */
 function onMainNav(key: MainNavKey) {
   if (key === 'admin') {
     goAdmin()
     return
   }
-  mainTab.value = key
   if (isAdminPage.value) backToHome()
 }
 
@@ -108,21 +99,9 @@ async function pingBackend() {
   }
 }
 
-function onPreview(doc: DocumentInfo) {
-  selectedDoc.value = doc
-}
-
-function onOpenNewTab(doc: DocumentInfo) {
-  window.open('/#/preview/' + doc.docId, '_blank')
-}
-
 function closePreview() {
   // 全屏预览页：尝试关闭标签页；失败则回主页 hash
   try { window.close() } catch { window.location.hash = '#/' }
-}
-
-function clearPreview() {
-  selectedDoc.value = null
 }
 </script>
 
@@ -202,12 +181,12 @@ function clearPreview() {
       </a-layout>
     </template>
 
-    <!-- 主工作台：顶部导航 tab + 单侧栏 -->
+    <!-- 主工作台：顶部导航 + 对话区（文档浏览/上传在管理后台「文档管理」） -->
     <template v-else>
       <div class="app">
         <!-- 顶部导航栏 -->
         <header class="app-header">
-          <TopTabs :active="mainTab" @select="onMainNav">
+          <TopTabs active="chat" @select="onMainNav">
             <template #right>
               <div class="connection-status" :class="{ connected: backendOnline === true, disconnected: backendOnline === false }">
                 <span class="status-dot"></span>
@@ -221,76 +200,15 @@ function clearPreview() {
           </TopTabs>
         </header>
 
-        <!-- 主体区域 -->
+        <!-- 主体区域：桌面端 ChatPanel（自带可拖拽会话栏）/ 移动端 ChatView -->
         <div class="app-body">
-          <!-- ── 桌面端 ── -->
-          <template v-if="!isMobile">
-            <!-- 对话页：会话列表 + 聊天区（ChatPanel 自带可拖拽会话栏） -->
-            <ChatPanel v-if="mainTab === 'chat'" />
-
-            <!-- 知识库页：文档列表 + 预览区 -->
-            <div v-else class="knowledge-layout">
-              <aside class="kb-list">
-                <IngestPanel @preview="onPreview" @open-tab="onOpenNewTab" />
-              </aside>
-              <main class="kb-main">
-                <DocPreview
-                  v-if="selectedDoc"
-                  :doc-id="selectedDoc.docId"
-                  :mime-type="selectedDoc.mimeType"
-                  :doc-name="selectedDoc.name"
-                  :source-location="selectedDoc.sourceLocation"
-                  embedded
-                  @close="clearPreview"
-                />
-                <div v-else class="kb-empty">
-                  <FileTextOutlined class="kb-empty-icon" />
-                  <p class="kb-empty-title">选择文档预览</p>
-                  <p class="kb-empty-desc">点击左侧列表中的文档，在此查看解析后的分块内容</p>
-                </div>
-              </main>
+          <ChatPanel v-if="!isMobile" />
+          <main v-else class="mobile-main">
+            <div class="mobile-tab-page">
+              <ChatView />
             </div>
-          </template>
-
-          <!-- ── 移动端：Tab 内容区 ── -->
-          <template v-else>
-            <main class="mobile-main">
-              <!-- 知识库 tab 内预览文档时全屏展示，tab 栏隐藏 -->
-              <template v-if="selectedDoc && mainTab === 'knowledge'">
-                <DocPreview
-                  :doc-id="selectedDoc.docId"
-                  :mime-type="selectedDoc.mimeType"
-                  :doc-name="selectedDoc.name"
-                  :source-location="selectedDoc.sourceLocation"
-                  embedded
-                  @close="clearPreview"
-                />
-              </template>
-
-              <!-- 知识库 tab -->
-              <div v-else-if="mainTab === 'knowledge'" class="mobile-tab-page">
-                <IngestPanel @preview="onPreview" @open-tab="onOpenNewTab" />
-              </div>
-
-              <!-- 聊天 tab -->
-              <div v-else class="mobile-tab-page">
-                <ChatView />
-              </div>
-            </main>
-          </template>
+          </main>
         </div>
-
-        <!-- 移动端底部 TabBar（知识库 tab 预览文档时隐藏） -->
-        <nav v-if="isMobile && !(selectedDoc && mainTab === 'knowledge')" class="mobile-tabbar">
-          <div class="tab" :class="{ active: mainTab === 'knowledge' }" @click="mainTab = 'knowledge'">
-            <InboxOutlined class="tab-icon" />
-            <span class="tab-label">知识库</span>
-          </div>
-          <div class="tab" :class="{ active: mainTab === 'chat' }" @click="mainTab = 'chat'">
-            <RobotOutlined class="tab-icon" />
-            <span class="tab-label">聊天</span>
-          </div>
-        </nav>
       </div>
     </template>
   </a-config-provider>
@@ -381,49 +299,9 @@ function clearPreview() {
 .status-text { color: var(--color-ink-secondary); }
 .app-body { flex: 1; display: flex; min-height: 0; overflow: hidden; position: relative; }
 
-/* 知识库页：文档列表 + 预览区 */
-.knowledge-layout { flex: 1; display: flex; min-width: 0; }
-.kb-list {
-  flex-shrink: 0;
-  width: 400px;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
-  overflow: hidden;
-}
-.kb-main { flex: 1; min-width: 0; background: var(--color-bg); display: flex; flex-direction: column; }
-.kb-empty {
-  flex: 1; display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  text-align: center; padding: 40px 20px;
-}
-.kb-empty-icon { font-size: 28px; color: var(--color-ink-tertiary); margin-bottom: 10px; }
-.kb-empty-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--color-ink); }
-.kb-empty-desc { margin: 0; font-size: 13px; color: var(--color-ink-tertiary); }
-
-/* 移动端：Tab 内容区 + 底部 TabBar */
+/* 移动端：聊天内容区 */
 .mobile-main { flex: 1; min-width: 0; background: var(--color-bg); display: flex; flex-direction: column; }
 .mobile-tab-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.mobile-tabbar {
-  display: flex;
-  height: 56px;
-  padding-bottom: env(safe-area-inset-bottom);
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  flex-shrink: 0;
-  z-index: 100;
-}
-.tab {
-  flex: 1;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  color: var(--color-ink-tertiary);
-  cursor: pointer;
-  transition: color 0.15s;
-  -webkit-tap-highlight-color: transparent;
-  user-select: none;
-}
-.tab.active { color: var(--color-primary); }
-.tab-icon { font-size: 20px; }
-.tab-label { font-size: 11px; }
 
 @media (max-width: 768px) {
   /* 移动端隐藏连接状态文字，只留圆点，省空间 */

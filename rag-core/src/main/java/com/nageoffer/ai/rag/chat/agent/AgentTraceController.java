@@ -38,6 +38,12 @@ public class AgentTraceController {
         return agentTraceService.stats();
     }
 
+    /** 按关联的 assistant 消息 id 查最近一条轨迹（对话页气泡「查看轨迹」用），无关联返回 null。 */
+    @GetMapping("/by-message")
+    public AgentTraceEntity getByMessage(@RequestParam Long messageId) {
+        return agentTraceService.getByMessageId(messageId);
+    }
+
     /** 单条详情（含 steps）。 */
     @GetMapping("/{id}")
     public AgentTraceEntity get(@PathVariable Long id) {

@@ -3,12 +3,17 @@ import { ref, nextTick, watch, computed } from 'vue'
 import {
   SendOutlined, UserOutlined, RobotOutlined,
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
+  ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined,
 } from '@ant-design/icons-vue'
-import { streamChat } from '../api/chat'
+import { streamChat, type AgentTrace } from '../api/chat'
+import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
+import { traceDetailUrl } from '../api/eval'
+import { copyWithToast } from '../composables/useClipboard'
 import { PARADIGMS } from './evalShared'
 import { messages, activeId, currentTitle, type Msg } from '../composables/useChatState'
 import { useIsMobile } from '../composables/useSplitter'
 import ConversationList from './ConversationList.vue'
+import AgentTraceTree from './AgentTraceTree.vue'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 
@@ -74,9 +79,47 @@ async function send() {
       if (!contentRaf) contentRaf=requestAnimationFrame(()=>flushPending())
       scheduleScroll()
     },
-    onError:()=>{ flushPending(); ans.streaming=false; ans.content+='\n\n> **生成失败**'; sending.value=false },
-    onDone:()=>{ flushPending(); ans.streaming=false; sending.value=false; scrollToBottomIfStuck() },
+    onTrace:(t)=>{ ans.trace = t },
+    onMeta:(meta)=>{
+      if (meta.messageId != null) ans.id = meta.messageId
+      if (meta.traceId) ans.traceId = meta.traceId
+    },
+    onError:()=>{ flushPending(); ans.streaming=false; ans.ts=Date.now(); ans.content+='\n\n> **生成失败**'; sending.value=false },
+    onDone:()=>{ flushPending(); ans.streaming=false; ans.ts=Date.now(); sending.value=false; scrollToBottomIfStuck() },
   }, agent.value)
+}
+
+// ── 消息轨迹回看（assistant 气泡「轨迹」入口：本轮内存态 / 历史按 messageId 拉取） ──
+const traceDrawerOpen = ref(false)
+const drawerTrace = ref<AgentTrace | null>(null)
+const traceLoading = ref(false)
+
+async function openTrace(m: Msg) {
+  traceDrawerOpen.value = true
+  if (m.trace) { drawerTrace.value = m.trace; return }
+  drawerTrace.value = null
+  if (!m.id) return
+  traceLoading.value = true
+  try {
+    const rec = await getAgentTraceByMessage(m.id)
+    if (rec) {
+      drawerTrace.value = toAgentTrace(rec)
+      m.trace = drawerTrace.value
+      // 历史消息顺带补 traceId——「链路」按钮随之可用
+      if (!m.traceId && rec.traceId) m.traceId = rec.traceId
+    }
+  } catch {
+    /* 保持空态 */
+  } finally {
+    traceLoading.value = false
+  }
+}
+
+// ── OpenObserve 深链（eval.ts 模块级缓存模板；按消息时间生成 ±10min 查询窗口） ──
+function openObsLink(m: Msg) {
+  if (!m.traceId) return
+  const url = traceDetailUrl(m.traceId, m.ts)
+  if (url) window.open(url, '_blank')
 }
 
 // ── 滚动跟随 ──
@@ -158,6 +201,21 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
           <div v-else-if="m.role==='user'" class="msg-text user-text">{{ m.content }}</div>
           <div v-else class="markdown-body" v-html="renderMarkdown(m.content)"></div>
           <span v-if="m.streaming&&m.content" class="stream-cursor">▍</span>
+          <!-- 操作条：轨迹回看 + traceId（完整展示可复制）+ OpenObserve 全链路（流式结束后） -->
+          <div v-if="m.role==='assistant' && !m.streaming && (m.id || m.trace)" class="msg-actions">
+            <button class="action-btn" @click="openTrace(m)">
+              <ApartmentOutlined />轨迹
+            </button>
+            <template v-if="m.traceId">
+              <span class="trace-id-full" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
+              <button class="action-btn" title="复制 traceId" @click="copyWithToast(m.traceId)">
+                <CopyOutlined />
+              </button>
+              <button class="action-btn" title="查看 OpenObserve 完整链路" @click="openObsLink(m)">
+                <DeploymentUnitOutlined />链路
+              </button>
+            </template>
+          </div>
         </div>
         <div v-if="m.role==='user'" class="avatar avatar-user"><UserOutlined /></div>
       </div>
@@ -189,6 +247,19 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
         </a-button>
       </div>
     </div>
+
+    <!-- 轨迹回看抽屉（复用 Agent 对照面板的轨迹树） -->
+    <a-drawer
+      :open="traceDrawerOpen"
+      :width="560"
+      title="Agent 执行轨迹"
+      @update:open="(v: boolean) => (traceDrawerOpen = v)"
+    >
+      <a-spin :spinning="traceLoading">
+        <AgentTraceTree v-if="drawerTrace" :trace="drawerTrace" />
+        <a-empty v-else-if="!traceLoading" description="该消息无 agent 轨迹（闲聊/诊断分支，或早于本功能的数据）" />
+      </a-spin>
+    </a-drawer>
   </div>
 </template>
 
@@ -262,6 +333,22 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 .typing-indicator span:nth-child(2){animation-delay:.2s}
 .typing-indicator span:nth-child(3){animation-delay:.4s}
 @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+
+/* 气泡操作条（轨迹 / traceId / OO 链路） */
+.msg-actions { display:flex; align-items:center; gap:2px; flex-wrap:wrap; margin-top:8px; padding-top:6px; border-top:1px dashed var(--color-border-light); }
+.action-btn { display:inline-flex; align-items:center; gap:4px; border:none; background:none; padding:2px 8px; font-size:12px; color:var(--color-ink-tertiary); cursor:pointer; border-radius:var(--radius-sm); transition:color .15s, background .15s; }
+.action-btn:hover { color:var(--color-primary); background:var(--color-primary-light); }
+/* traceId 完整展示：等宽小字，可选中整段，允许换行 */
+.trace-id-full {
+  font-family: var(--font-display);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-ink-tertiary);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+  max-width: 100%;
+}
 
 .markdown-body { font-family:var(--font-body); font-size:14px; line-height:1.7; color:var(--color-ink); background:transparent; }
 .markdown-body :deep(pre){ background:var(--color-surface-secondary)!important; border-radius:var(--radius-md); padding:10px 14px!important; overflow-x:auto; font-size:13px; border:1px solid var(--color-border-light); }

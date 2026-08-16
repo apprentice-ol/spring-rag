@@ -195,15 +195,18 @@ async function reloadAll() {
   await Promise.all([loadCollections(), load()])
 }
 
-// ── 上传入库（dialog，含分块路线选择）──
+// ── 上传入库（dialog，含目标文件集 + 分块路线选择）──
 const uploadModalOpen = ref(false)
 const uploading = ref(false)
 const picked = ref<File | null>(null)
+/** 目标文件集：不选 = 独立文件（上传后仍可在列表中归集） */
+const uploadCollectionId = ref<number | undefined>(undefined)
 /** 分块路线：false=语义感知（block-aware，默认）；true=纯文本（不保 block 元数据） */
 const plainTextRoute = ref(false)
 
 function openUpload() {
   picked.value = null
+  uploadCollectionId.value = undefined
   uploadModalOpen.value = true
 }
 function beforeUpload(file: File) {
@@ -217,8 +220,9 @@ async function doUpload() {
   if (!picked.value) return
   uploading.value = true
   try {
-    const res = await uploadDocument(picked.value, undefined, plainTextRoute.value)
-    message.success(`已入库 ${res.chunkCount} 段（${plainTextRoute.value ? '纯文本' : '语义感知'}）`)
+    const res = await uploadDocument(picked.value, uploadCollectionId.value, plainTextRoute.value)
+    const colName = collections.value.find((c) => c.id === uploadCollectionId.value)?.name
+    message.success(`已入库 ${res.chunkCount} 段${colName ? ` → ${colName}` : '（独立文件）'}（${plainTextRoute.value ? '纯文本' : '语义感知'}）`)
     picked.value = null
     uploadModalOpen.value = false
     await reloadAll()
@@ -621,6 +625,20 @@ interface ErrResp {
         </a-upload-dragger>
 
         <div class="route-row">
+          <span class="route-label">目标文件集</span>
+          <a-select
+            v-model:value="uploadCollectionId"
+            placeholder="独立文件（不归集）"
+            allow-clear
+            style="flex: 1"
+          >
+            <a-select-option v-for="c in collections" :key="c.id" :value="c.id">
+              {{ c.name }}（{{ c.docCount }} 个文档）
+            </a-select-option>
+          </a-select>
+        </div>
+
+        <div class="route-row">
           <span class="route-label">分块路线</span>
           <a-radio-group v-model:value="plainTextRoute" button-style="solid" size="small">
             <a-radio-button :value="false">语义感知</a-radio-button>
@@ -701,6 +719,8 @@ interface ErrResp {
   gap: 10px;
 }
 .route-label {
+  width: 72px;
+  flex-shrink: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--color-ink);

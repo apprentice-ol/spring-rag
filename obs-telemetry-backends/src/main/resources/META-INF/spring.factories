@@ -1,1 +1,0 @@
-org.springframework.boot.env.EnvironmentPostProcessor=com.nageoffer.ai.obs.backends.openobserve.OpenObserveEnvironmentPostProcessor

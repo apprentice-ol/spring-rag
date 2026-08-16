@@ -6,9 +6,9 @@ import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.ConversationMapper;
 import com.nageoffer.ai.rag.chat.dao.mapper.MessageMapper;
 import com.nageoffer.ai.rag.chat.service.ChatService;
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
-import com.nageoffer.ai.obs.observation.annotation.ObservedConversation;
-import com.nageoffer.ai.obs.observation.propagation.ContextPropagator;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryConversation;
+import com.nageoffer.ai.llmobservability.observation.propagation.ContextPropagator;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -47,8 +47,8 @@ public class ChatController {
 
 
 
-    @ObservedStep("rag.chat")
-    @ObservedConversation
+    @TelemetryStep("rag.chat")
+    @TelemetryConversation
     @RequestMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE,
                     method = {RequestMethod.GET, RequestMethod.POST})
     public SseEmitter stream(@RequestParam String question,

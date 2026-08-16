@@ -26,7 +26,7 @@ public class AgentTraceServiceImpl implements AgentTraceService {
     private final JdbcTemplate jdbcTemplate;
 
     @Override
-    public void record(String conversationId, Long messageId, String paradigm, String question, AgentTrace trace) {
+    public void record(String conversationId, Long messageId, String paradigm, String question, AgentTrace trace, String traceId) {
         if (trace == null) {
             return;
         }
@@ -34,6 +34,7 @@ public class AgentTraceServiceImpl implements AgentTraceService {
             AgentTraceEntity e = new AgentTraceEntity();
             e.setConversationId(conversationId);
             e.setMessageId(messageId);
+            e.setTraceId(traceId);
             e.setParadigm(paradigm);
             e.setQuestion(question);
             e.setSteps(objectMapper.writeValueAsString(trace.getSteps()));
@@ -45,6 +46,17 @@ public class AgentTraceServiceImpl implements AgentTraceService {
             // 轨迹落库失败不影响对话主流程
             log.warn("[AgentTrace] 落库失败（不影响对话）: {}", ex.getMessage());
         }
+    }
+
+    @Override
+    public AgentTraceEntity getByMessageId(Long messageId) {
+        if (messageId == null) {
+            return null;
+        }
+        return agentTraceMapper.selectOne(new LambdaQueryWrapper<AgentTraceEntity>()
+                .eq(AgentTraceEntity::getMessageId, messageId)
+                .orderByDesc(AgentTraceEntity::getId)
+                .last("LIMIT 1"));
     }
 
     @Override

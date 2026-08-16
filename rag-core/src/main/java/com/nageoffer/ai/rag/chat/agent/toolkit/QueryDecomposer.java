@@ -2,7 +2,7 @@ package com.nageoffer.ai.rag.chat.agent.toolkit;
 
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -36,7 +36,7 @@ public class QueryDecomposer {
      *
      * @return 子查询列表；单跳/异常时返回 {@code List.of(query)}（永不返回空、永阻断检索）
      */
-    @ObservedStep("rag.query.decompose")
+    @TelemetryStep("rag.query.decompose")
     public List<String> decompose(String query) {
         if (!StringUtils.hasText(query)) {
             return List.of();

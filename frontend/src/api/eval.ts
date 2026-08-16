@@ -172,6 +172,8 @@ export async function reevaluateItem(
 export interface ObserveLinks {
   traceUrl: string
   logUrl: string
+  /** trace 详情深链模板（含 {traceId} 占位符）：消息气泡「OO 链路」按此跳转 */
+  traceDetailUrlTemplate: string
   org: string
   email: string
   password: string
@@ -181,4 +183,19 @@ export interface ObserveLinks {
 export async function getObserveLinks(): Promise<ObserveLinks> {
   const { data } = await http.get<ObserveLinks>('/observe/links')
   return data
+}
+
+// ── OO trace 详情深链构建（对话气泡「链路」/ 轨迹列表 traceId 共用） ──
+// 模板模块级缓存一次（import 即预取）；OO 要求 from/to 微秒时间戳，缺省会重定向到列表页
+let ooTraceTpl = ''
+getObserveLinks().then((l) => { ooTraceTpl = l.traceDetailUrlTemplate || '' }).catch(() => {})
+
+/** 生成 trace 详情深链：tsMs 为消息时间（ms），窗口 ±10min；模板未就绪返回空串。 */
+export function traceDetailUrl(traceId: string, tsMs?: number): string {
+  if (!ooTraceTpl) return ''
+  const base = tsMs ?? Date.now()
+  return ooTraceTpl
+    .replace('{traceId}', traceId)
+    .replace('{from}', String((base - 10 * 60_000) * 1000))
+    .replace('{to}', String((base + 10 * 60_000) * 1000))
 }

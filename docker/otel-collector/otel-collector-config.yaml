@@ -1,7 +1,7 @@
 # OTel Collector：接收 springai-rag 的 OTLP/HTTP trace，按后端拆分 pipeline 扇出。
 # 本文件只做"转发 + 通用处理"（噪声过滤、批处理）——后端专属属性映射（rag.* → langfuse.*）
-# 已上收到应用侧（obs-telemetry-backends 的 LangfuseAttributeKeyMapper，obs.langfuse.attribute-mapping 开关），
-# collector 在场与否两种模式下后端收到的字段完全一致，本组件完全可被绕过（obs.collector.enabled=false）。
+# 已上收到应用侧（llm-observability-backends 的 LangfuseAttributeKeyMapper，telemetry.langfuse.attribute-mapping 开关），
+# collector 在场与否两种模式下后端收到的字段完全一致，本组件完全可被绕过（telemetry.collector.enabled=false）。
 # 新增/替换展示后端 = 在 exporters 加一个 otlphttp，并在 service.pipelines 加一条即可，应用零改动。
 #
 # 由 docker-compose.yml 的 otel-collector 服务挂载本文件。

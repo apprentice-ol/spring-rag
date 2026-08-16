@@ -172,7 +172,7 @@ MDC 字段由 logback 的 `OpenTelemetryAppender` 捕获为日志属性、随 OT
 
 ## 8. OpenObserve 查询
 
-- **日志流**：`springai_rag_logs`（**下划线**；collector 的 openobserve-logs exporter / `obs.openobserve.stream` 指定，查询必须用下划线）
+- **日志流**：`springai_rag_logs`（**下划线**；collector 的 openobserve-logs exporter / `telemetry.openobserve.stream` 指定，查询必须用下划线）
 - **按事件过滤**：`_event=llm.request` / `_event=step.output`
 - **按步骤过滤**：`rag_step=rag.retrieve`
 - **按 trace 反查**：`trace_id=<32位hex>`（对话诊断里用户发 traceId 即走此路）
@@ -182,7 +182,7 @@ MDC 字段由 logback 的 `OpenTelemetryAppender` 捕获为日志属性、随 OT
 
 ## 9. 配置
 
-- **`logback-spring.xml`**：CONSOLE + OPEN_TELEMETRY 双 appender；OTLP 端点由 `application-obs.yaml` 的 `obs.collector.*` 桥接，OpenObserve 凭据走环境变量（`OPENOBSERVE_URL` / `OO_USERNAME` / `OO_PASSWORD`）
+- **`logback-spring.xml`**：CONSOLE + OPEN_TELEMETRY 双 appender；OTLP 端点由 `application-telemetry.yaml` 的 `telemetry.collector.*` 桥接，OpenObserve 凭据走环境变量（`OPENOBSERVE_URL` / `OO_USERNAME` / `OO_PASSWORD`）
 - **`application.yaml`**：`logging.level` 控制级别。当前开发期：`com.nageoffer.ai.rag: DEBUG`、`org.springframework.ai: DEBUG`、`DispatcherServlet: DEBUG`、`ibatis: DEBUG`
 - **trace 采样**：`management.tracing.sampling.probability: 1.0`（全采样，开发期；生产可调低）
 

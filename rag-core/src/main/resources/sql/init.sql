@@ -270,6 +270,11 @@ CREATE INDEX IF NOT EXISTS idx_sa_agent_trace_para ON sa_agent_trace (paradigm);
 COMMENT ON TABLE  sa_agent_trace IS 'Agent 执行轨迹（线上 chat 落库，分析多步决策反哺 naive）';
 COMMENT ON COLUMN sa_agent_trace.steps IS 'AgentStep 数组（action/thought/inputSummary/outputSummary/latencyMs），jsonb';
 
+-- sa_agent_trace 演进：trace_id（OTel traceId，对话页跳 OpenObserve 全链路）+ message_id 索引（按消息查轨迹）
+ALTER TABLE sa_agent_trace ADD COLUMN IF NOT EXISTS trace_id VARCHAR(64);
+CREATE INDEX IF NOT EXISTS idx_sa_agent_trace_msg ON sa_agent_trace (message_id);
+COMMENT ON COLUMN sa_agent_trace.trace_id IS '本次请求的 OpenTelemetry traceId（32 位 hex，跳 OpenObserve 全链路），可空';
+
 -- ===== 文档集合（文件集）=====
 
 CREATE TABLE IF NOT EXISTS sa_doc_collection (

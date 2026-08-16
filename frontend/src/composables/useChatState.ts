@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import {
   listConversations, getMessages, deleteConversation,
-  type ConversationItem,
+  type ConversationItem, type AgentTrace,
 } from '../api/chat'
 
 /**
@@ -13,6 +13,14 @@ export interface Msg {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
+  /** 后端 sa_message.id（meta 事件/历史加载获得；历史消息按它查 agent 轨迹） */
+  id?: number
+  /** 本次请求 OTel traceId（meta 事件获得；跳 OpenObserve 全链路） */
+  traceId?: string
+  /** 消息时间（ms；OO 深链查询窗口用） */
+  ts?: number
+  /** 本轮 SSE trace 事件携带的 agent 轨迹（仅本次会话内存态；历史消息走 by-message 接口拉取） */
+  trace?: AgentTrace
 }
 
 export const conversations = ref<ConversationItem[]>([])
@@ -43,7 +51,13 @@ export async function initChatState() {
 async function loadMessages(convId: string) {
   try {
     const msgs = await getMessages(convId)
-    messages.value = msgs.map(m => ({ role: m.role, content: m.content }))
+    // 保留 id/ts：assistant 气泡按 messageId 查 agent 轨迹，ts 供 OO 深链生成查询窗口
+    messages.value = msgs.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      ts: m.createdAt ? new Date(m.createdAt).getTime() : undefined,
+    }))
   } catch {
     messages.value = []
   }

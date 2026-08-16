@@ -21,15 +21,17 @@
             <groupId>com.nageoffer.ai</groupId>
             <artifactId>rag-common</artifactId>
         </dependency>
-        <!-- 公共可观测组件（@TraceStep/Telemetry/ObsLogger/sink链/传播，Starter 自动装配） -->
+        <!-- 公共可观测组件（@TraceStep/Telemetry/TelemetryLogger/sink链/传播，Starter 自动装配） -->
         <dependency>
             <groupId>com.nageoffer.ai</groupId>
-            <artifactId>obs-telemetry</artifactId>
+            <artifactId>llm-observability</artifactId>
+            <version>0.1.0-SNAPSHOT</version>
         </dependency>
         <!-- 具体后端适配：OpenObserve + Langfuse 配置、直连 exporter 与 OTLP bridge -->
         <dependency>
             <groupId>com.nageoffer.ai</groupId>
-            <artifactId>obs-telemetry-backends</artifactId>
+            <artifactId>llm-observability-backends</artifactId>
+            <version>0.1.0-SNAPSHOT</version>
         </dependency>
 
         <!-- Web（MVC + SseEmitter 流式输出） -->
@@ -96,11 +98,11 @@
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
 
-        <!-- OpenTelemetry logback appender：日志统一走 OTLP Logs，而不是自定义 OpenObserveAppender -->
+        <!-- OpenTelemetry logback appender：日志统一走 OTLP Logs（版本统一收口在根 pom 的 opentelemetry.instrumentation.version） -->
         <dependency>
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-logback-appender-1.0</artifactId>
-            <version>2.15.0-alpha</version>
+            <version>${opentelemetry.instrumentation.version}</version>
         </dependency>
 
         <!-- AOP：@TraceStep 注解切面（spring-boot-starter-web 不带，需显式引入） -->

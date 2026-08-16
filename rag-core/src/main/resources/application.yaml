@@ -10,7 +10,7 @@ spring:
     import:
       - "optional:file:.env[.properties]"
       - "optional:file:../.env[.properties]"
-      - "optional:classpath:application-obs.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
+      - "optional:classpath:application-telemetry.yaml"   # 可观测性配置集中管理（trace/log/LLM/OO/Langfuse）
   application:
     name: springai-rag
 
@@ -67,7 +67,7 @@ rocketmq:
     group: rag-producer
     send-message-timeout: 5000
 
-# 项目自有配置（可观测性配置已移至 application-obs.yaml）
+# 项目自有配置（可观测性配置已移至 application-telemetry.yaml）
 rag:
   mq:
     type: rocketmq            # rocketmq | redis（切换 MQ 实现；redis 走 RedisStreamMqProducer + RedisStreamIngestionConsumer）

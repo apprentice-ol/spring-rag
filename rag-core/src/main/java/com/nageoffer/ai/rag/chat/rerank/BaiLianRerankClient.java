@@ -7,8 +7,8 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchChannelType;
-import com.nageoffer.ai.obs.observation.logging.ObsStructuredLog;
-import com.nageoffer.ai.obs.observation.ObsTemplate;
+import com.nageoffer.ai.llmobservability.observation.logging.TelemetryStructuredLog;
+import com.nageoffer.ai.llmobservability.observation.TelemetryTemplate;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -24,7 +24,7 @@ import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 百炼 Rerank 客户端。
@@ -45,7 +45,7 @@ public class BaiLianRerankClient implements RerankClient {
 
     private final OkHttpClient httpClient;
     private final Gson gson;
-    private final ObsTemplate obsTemplate;
+    private final TelemetryTemplate obsTemplate;
 
     @Value("${rag.rerank.bailian.base-url:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank}")
     private String baseUrl;
@@ -60,7 +60,7 @@ public class BaiLianRerankClient implements RerankClient {
     @Value("${rag.rerank.min-relevance-score:0.0}")
     private double minRelevanceScore;
 
-    public BaiLianRerankClient(OkHttpClient httpClient, Gson gson, ObsTemplate obsTemplate) {
+    public BaiLianRerankClient(OkHttpClient httpClient, Gson gson, TelemetryTemplate obsTemplate) {
         this.httpClient = httpClient;
         this.gson = gson;
         this.obsTemplate = obsTemplate;
@@ -72,13 +72,13 @@ public class BaiLianRerankClient implements RerankClient {
     }
 
     @Override
-    @ObservedStep("rag.rerank.call")
+    @TelemetryStep("rag.rerank.call")
     public List<RetrievedChunk> rerank(String query, List<RetrievedChunk> candidates, int topN) {
         if (CollUtil.isEmpty(candidates) || topN <= 0) {
             return List.of();
         }
 
-        // 标注模型名（通用动词，OTel GenAI key 由 obs 收口）
+        // 标注模型名（通用动词，OTel GenAI key 由 telemetry 收口）
         obsTemplate.model(model);
 
         // 先按 id 去重
@@ -223,8 +223,8 @@ public class BaiLianRerankClient implements RerankClient {
             }
         }
 
-        // 逐条 relevance_score 埋点：与 @ObservedStep("rag.rerank.call") 的 span 用 step_id 关联（emit 自动取 MDC）
-        ObsStructuredLog.emit("rerank.scores",
+        // 逐条 relevance_score 埋点：与 @TelemetryStep("rag.rerank.call") 的 span 用 step_id 关联（emit 自动取 MDC）
+        TelemetryStructuredLog.emit("rerank.scores",
                 Map.of("model", model, "min_relevance_score", minRelevanceScore,
                         "kept", reranked.size(), "dropped", dropped, "scores", scores));
         return reranked;

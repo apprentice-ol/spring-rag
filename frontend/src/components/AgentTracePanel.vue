@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ReloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons-vue'
-import { listAgentTraces, agentTraceStats, parseSteps, type AgentTraceRecord, type AgentTraceStat } from '../api/agentTrace'
+import { ReloadOutlined, SearchOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons-vue'
+import { listAgentTraces, agentTraceStats, parseSteps, toAgentTrace, type AgentTraceRecord, type AgentTraceStat } from '../api/agentTrace'
+import { traceDetailUrl } from '../api/eval'
+import { copyWithToast } from '../composables/useClipboard'
 import { PARADIGMS, paradigmLabel } from './evalShared'
 import type { AgentTrace } from '../api/chat'
 import AgentTraceTree from './AgentTraceTree.vue'
@@ -59,12 +61,15 @@ function fmtLatency(ms: number | null): string {
   return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's'
 }
 function openDetail(r: AgentTraceRecord) {
-  selected.value = {
-    paradigm: r.paradigm,
-    steps: parseSteps(r.steps),
-    llmCallCount: r.llmCallCount ?? 0,
-    startTimeMs: 0,
-  } as AgentTrace
+  selected.value = toAgentTrace(r)
+}
+
+/** 点击 traceId 跳 OpenObserve 该次请求完整链路（按轨迹落库时间生成 ±10min 窗口） */
+function openObs(r: AgentTraceRecord) {
+  if (!r.traceId) return
+  const ts = r.createTime ? new Date(r.createTime).getTime() : undefined
+  const url = traceDetailUrl(r.traceId, ts)
+  if (url) window.open(url, '_blank')
 }
 function onPage(p: number, s: number) {
   page.value = p
@@ -89,6 +94,7 @@ const columns = useResizableColumns([
   { title: '改写轨迹（retrieve 的 query 序列）', key: 'trail', ellipsis: true },
   { title: 'LLM', key: 'llm', width: 60, align: 'center' as const },
   { title: '耗时', key: 'latency', width: 80 },
+  { title: 'traceId', dataIndex: 'traceId', key: 'traceId', width: 250, ellipsis: true },
   { title: '时间', dataIndex: 'createTime', key: 'time', width: 160 },
   { title: '操作', key: 'action', width: 80 },
 ])
@@ -168,6 +174,17 @@ const columns = useResizableColumns([
           </template>
           <template v-else-if="column.key === 'llm'">{{ record.llmCallCount ?? '-' }}</template>
           <template v-else-if="column.key === 'latency'">{{ fmtLatency(record.totalLatencyMs) }}</template>
+          <template v-else-if="column.key === 'traceId'">
+            <template v-if="record.traceId">
+              <a-tooltip :title="'点击查看 OpenObserve 完整链路\n' + record.traceId">
+                <a class="trace-id" @click="openObs(record)">{{ record.traceId }}</a>
+              </a-tooltip>
+              <a-button type="text" size="small" class="trace-copy" title="复制 traceId" @click="copyWithToast(record.traceId)">
+                <template #icon><CopyOutlined /></template>
+              </a-button>
+            </template>
+            <span v-else class="trace-id-muted">—</span>
+          </template>
           <template v-else-if="column.key === 'time'">{{ record.createTime?.replace('T', ' ').slice(0, 19) }}</template>
           <template v-else-if="column.key === 'action'">
             <a-button type="link" size="small" @click="openDetail(record)"><EyeOutlined />查看</a-button>
@@ -225,4 +242,15 @@ const columns = useResizableColumns([
 }
 .stat-avg { font-size: 11px; color: var(--color-ink-tertiary); }
 .trail { color: var(--color-ink-secondary); font-size: 12px; }
+.trace-id {
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+  word-break: break-all;
+}
+.trace-id:hover { text-decoration: underline; }
+.trace-copy { color: var(--color-ink-tertiary); }
+.trace-copy:hover { color: var(--color-primary); }
+.trace-id-muted { color: var(--color-ink-tertiary); }
 </style>

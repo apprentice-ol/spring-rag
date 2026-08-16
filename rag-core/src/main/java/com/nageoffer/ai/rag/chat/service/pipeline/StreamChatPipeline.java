@@ -2,8 +2,8 @@ package com.nageoffer.ai.rag.chat.service.pipeline;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.nageoffer.ai.obs.observation.ObsTemplate;
-import com.nageoffer.ai.obs.observation.logging.ObsLogger;
+import com.nageoffer.ai.llmobservability.observation.TelemetryTemplate;
+import com.nageoffer.ai.llmobservability.observation.logging.TelemetryLogger;
 import com.nageoffer.ai.rag.chat.agent.*;
 import com.nageoffer.ai.rag.chat.dao.entity.ConversationEntity;
 import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
@@ -23,7 +23,8 @@ import com.nageoffer.ai.rag.config.properties.AgentProperties;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
 import com.nageoffer.ai.rag.diagnose.dto.*;
 import com.nageoffer.ai.rag.diagnose.service.LogDiagnoseService;
-import com.nageoffer.ai.obs.backends.openobserve.dto.TraceLogEntry;
+import com.nageoffer.ai.llmobservability.backends.openobserve.dto.TraceLogEntry;
+import io.opentelemetry.api.trace.Span;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.util.Strings;
 import org.springframework.stereotype.Service;
@@ -58,7 +59,7 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class StreamChatPipeline {
 
-    private static final ObsLogger log = ObsLogger.of(StreamChatPipeline.class);
+    private static final TelemetryLogger log = TelemetryLogger.of(StreamChatPipeline.class);
 
     private final IntentClassifier intentClassifier;
     private final AgentRegistry agentRegistry;
@@ -72,7 +73,7 @@ public class StreamChatPipeline {
     private final LogDiagnoseService logDiagnoseService;
     private final AgentTraceService agentTraceService;
     private final RagAnswerStreamService ragAnswerStreamService;
-    private final ObsTemplate obsTemplate;
+    private final TelemetryTemplate obsTemplate;
 
     /**
      * 执行流式对话管道。
@@ -85,6 +86,9 @@ public class StreamChatPipeline {
         ensureConversation(conversationId, question);
         saveMessage(conversationId, "user", question);
         long t0 = System.currentTimeMillis();
+        // 当前请求的 OTel traceId（rag.chat 根 span）：须在业务线程取好传下去——
+        // 流式回调跑在 reactor-netty 线程，ambient context 不保证恢复；span 结束后 SpanContext 仍可读
+        String otelTraceId = currentTraceId();
         // 0. 查询归一化：① 规则式（去噪 + 疑问→陈述）→ ② LLM 改写（带历史上下文消解指代词）
         // QueryNormalizer 是 rag-common 静态工具（AOP 够不到），手动开 step 埋点
         String ruleNormalized = obsTemplate.step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
@@ -105,14 +109,14 @@ public class StreamChatPipeline {
         String traceId = TraceIdExtractor.extract(question);
         if (traceId != null || intent.isNeedsDiagnose()) {
             log.info("[对话管道] 命中诊断分支: traceId={}, needsDiagnose={}", traceId, intent.isNeedsDiagnose());
-            handleDiagnose(traceId, conversationId, emitter);
+            handleDiagnose(traceId, conversationId, emitter, otelTraceId);
             return;
         }
 
         // ========== 2. 非查询类短路由 ==========
         if (!intent.isNeedsRetrieval()) {
             log.info("[对话管道] 非查询意图，走闲聊回复");
-            handleNonQuery(question, conversationId, emitter);
+            handleNonQuery(question, conversationId, emitter, otelTraceId);
             return;
         }
 
@@ -142,7 +146,7 @@ public class StreamChatPipeline {
         RagAgent ragAgent = StringUtils.hasText(agent)
                 ? agentRegistry.require(agent)
                 : agentRegistry.defaultAgent();
-        // trace 维度（intent/agent 范式）由 ObsDimensions 从 step 返回值自动提取，此处零观测调用
+        // trace 维度（intent/agent 范式）由 TelemetryDimensions 从 step 返回值自动提取，此处零观测调用
         AgentRequest agentReq = new AgentRequest(question, historyForRewrite, intent, searchCtx, agentProperties, null);
         AgentRetrievalResult agentResult = ragAgent.planAndRetrieve(agentReq);
         log.info("[对话管道] agent={} 完成: verdict={}, 最终块={}条, 检索耗时={}ms, llm调用={}次",
@@ -157,14 +161,14 @@ public class StreamChatPipeline {
         // ========== 4. 空检索处理 ==========
         if (agentResult.verdict() == RetrievalVerdict.EMPTY || agentResult.isEmpty()) {
             log.warn("[对话管道] 检索结果为空(verdict={})，返回降级提示", agentResult.verdict());
-            handleRetrievalEmpty(question, conversationId, emitter);
-            agentTraceService.record(conversationId, null, ragAgent.getType(), question, agentResult.trace());
+            Long emptyMsgId = handleRetrievalEmpty(question, conversationId, emitter, otelTraceId);
+            agentTraceService.record(conversationId, emptyMsgId, ragAgent.getType(), question, agentResult.trace(), otelTraceId);
             return;
         }
 
         // ========== 5. 构建上下文 + 流式回答 ==========
         log.info("[对话管道] 开始流式回答, 上下文共 {} 条", agentResult.finalChunks().size());
-        streamRagResponse(question, conversationId, agentResult.finalChunks(), emitter, t0, ragAgent.getType(), agentResult.trace());
+        streamRagResponse(question, conversationId, agentResult.finalChunks(), emitter, t0, ragAgent.getType(), agentResult.trace(), otelTraceId);
     }
 
     // ==================== 日志诊断分支 ====================
@@ -174,14 +178,15 @@ public class StreamChatPipeline {
      * <p>复用 {@link LogDiagnoseService#diagnose}（查 OpenObserve 日志 → 提报错 → 检索知识库 → LLM 建议）。
      * <p>诊断含 LLM 调用（约 10–30s），先发即时提示再分段输出结果。
      */
-    private void handleDiagnose(String traceId, String conversationId, SseEmitter emitter) {
+    private void handleDiagnose(String traceId, String conversationId, SseEmitter emitter, String otelTraceId) {
         // traceId 缺失 → 反问
         if (traceId == null) {
             String ask = "请提供要排查的 traceId（从应用日志的 `[traceId,spanId]` 复制，32 位十六进制）。";
             log.info("[对话管道] 诊断缺 traceId，反问用户");
-            saveMessage(conversationId, "assistant", ask);
+            Long msgId = saveMessage(conversationId, "assistant", ask);
             log.conversationOutput(ask);
             sendEvent(emitter, ask);
+            sendMetaEvent(emitter, msgId, otelTraceId, null);
             completeEmitter(emitter);
             return;
         }
@@ -201,9 +206,10 @@ public class StreamChatPipeline {
                         + "」，和你问的「" + userContext + "」看起来不是同一回事。\n\n"
                         + "要继续排查这个 traceId 吗？还是换一个和「" + userContext + "」相关的 traceId？";
                 log.info("[对话管道] 诊断匹配校验不通过，反问: brief={}", brief);
-                saveMessage(conversationId, "assistant", ask);
+                Long msgId = saveMessage(conversationId, "assistant", ask);
                 log.conversationOutput(ask);
                 sendEvent(emitter, ask);
+                sendMetaEvent(emitter, msgId, otelTraceId, null);
                 completeEmitter(emitter);
                 return;
             }
@@ -213,11 +219,12 @@ public class StreamChatPipeline {
         // ③ 完整诊断（检索+建议）+ 分段流式
         DiagnoseResponse resp = logDiagnoseService.complete(preview);
         String answer = formatDiagnose(resp);
-        saveMessage(conversationId, "assistant", answer);
+        Long msgId = saveMessage(conversationId, "assistant", answer);
         log.conversationOutput(answer);
         for (String segment : splitSegments(answer)) {
             sendEvent(emitter, segment);
         }
+        sendMetaEvent(emitter, msgId, otelTraceId, null);
         completeEmitter(emitter);
     }
 
@@ -320,7 +327,7 @@ public class StreamChatPipeline {
     /**
      * 处理问候/闲聊（不检索，直接回答）。
      */
-    private void handleNonQuery(String question, String conversationId, SseEmitter emitter) {
+    private void handleNonQuery(String question, String conversationId, SseEmitter emitter, String otelTraceId) {
         log.info("[对话管道] 走闲聊回复: question=\"{}\"", question);
 
         StringBuilder fullAnswer = new StringBuilder();
@@ -345,24 +352,29 @@ public class StreamChatPipeline {
                         },
                         () -> {
                             String answer = fullAnswer.toString();
-                            saveMessage(conversationId, "assistant", answer);
+                            Long msgId = saveMessage(conversationId, "assistant", answer);
                             outputSink.accept(answer);
+                            sendMetaEvent(emitter, msgId, otelTraceId, null);
                             completeEmitter(emitter);
                         });
     }
 
     /**
      * 处理检索无结果的情况——直接回复降级消息，不走 LLM。
+     *
+     * @return 降级 assistant 消息 id（供调用处关联 agent trace 落库；内容为空时为 null）
      */
-    private void handleRetrievalEmpty(String question, String conversationId, SseEmitter emitter) {
+    private Long handleRetrievalEmpty(String question, String conversationId, SseEmitter emitter, String otelTraceId) {
         log.info("[对话管道] 检索为空，直接返回降级提示: 会话ID={}", conversationId);
         String fallbackMsg = StringUtils.hasText(chatProperties.getEmptyRetrievalMsg())
                 ? chatProperties.getEmptyRetrievalMsg()
                 : promptStore.raw("chat/pipeline/empty-retrieval");
-        saveMessage(conversationId, "assistant", fallbackMsg);
+        Long msgId = saveMessage(conversationId, "assistant", fallbackMsg);
         log.conversationOutput(fallbackMsg);
         sendEvent(emitter, fallbackMsg);
+        sendMetaEvent(emitter, msgId, otelTraceId, null);
         completeEmitter(emitter);
+        return msgId;
     }
 
     /**
@@ -372,12 +384,12 @@ public class StreamChatPipeline {
      * （prompts/chat/pipeline/rag-answer-system.md），此处只把检索资料与用户问题组装进
      * user message——避免把每次都变的资料拼进 system 而破坏 prompt cache，也让规则稳定可缓存。</p>
      *
-     * <p>流式 LLM 调用已抽到 {@link RagAnswerStreamService#answer}（{@code @ObservedStep} 自动埋点），
+     * <p>流式 LLM 调用已抽到 {@link RagAnswerStreamService#answer}（{@code @TelemetryStep} 自动埋点），
      * 此处只写 SSE 副作用（sendEvent / saveMessage / completeEmitter）与 trace 级 output。</p>
      */
     private void streamRagResponse(String question, String conversationId,
                                     List<RetrievedChunk> chunks, SseEmitter emitter, long t0,
-                                    String paradigm, AgentTrace trace) {
+                                    String paradigm, AgentTrace trace, String otelTraceId) {
         String contextText = buildContextText(chunks);
 
         int docCount = contextText.split("<content ref=\"", -1).length - 1;
@@ -427,12 +439,14 @@ public class StreamChatPipeline {
                                 log.warn("[ObservationPipeline] 写最终 trace output 失败", t);
                             }
                             try {
-                                agentTraceService.record(conversationId, msgId, paradigm, question, trace);
+                                agentTraceService.record(conversationId, msgId, paradigm, question, trace, otelTraceId);
                             } catch (Throwable t) {
                                 log.warn("[对话管道] 记录 agent trace 失败", t);
                             }
                             log.info("========== [对话管道] 完成 ========== 会话ID={}, 耗时={}ms",
                                     conversationId, System.currentTimeMillis() - t0);
+                            // meta（messageId/traceId/paradigm）须在 complete 前 send：complete 后 emitter 关闭
+                            sendMetaEvent(emitter, msgId, otelTraceId, paradigm);
                             completeEmitter(emitter);
                         });
     }
@@ -501,6 +515,28 @@ public class StreamChatPipeline {
             emitter.send(SseEmitter.event().name("trace").data(json));
         } catch (Exception e) {
             log.debug("[ObservationPipeline] trace 事件发送失败（忽略）: {}", e.getMessage());
+        }
+    }
+
+    /** 当前请求的 OTel traceId（{@code rag.chat} 根 span）；仅业务线程内有效，无有效 span 时返回 null。 */
+    private static String currentTraceId() {
+        var ctx = Span.current().getSpanContext();
+        return ctx.isValid() ? ctx.getTraceId() : null;
+    }
+
+    /**
+     * 发送消息元信息（SSE meta 事件，流末尾）：messageId（关联 sa_message）/ traceId（跳 OpenObserve 全链路）/ paradigm。
+     * 前端把它绑定到 assistant 气泡，实现"消息 ↔ 轨迹 ↔ OO 链路"三方关联。
+     */
+    private void sendMetaEvent(SseEmitter emitter, Long messageId, String traceId, String paradigm) {
+        try {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("messageId", messageId);
+            meta.put("traceId", traceId);
+            meta.put("paradigm", paradigm);
+            emitter.send(SseEmitter.event().name("meta").data(objectMapper.writeValueAsString(meta)));
+        } catch (Exception e) {
+            log.debug("[ObservationPipeline] meta 事件发送失败（忽略）: {}", e.getMessage());
         }
     }
 

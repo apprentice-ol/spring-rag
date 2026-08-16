@@ -1,23 +1,22 @@
 package com.nageoffer.ai.rag.ingestion.service;
 
-import com.nageoffer.ai.rag.common.exception.ServiceException;
-import com.nageoffer.ai.rag.ingestion.engine.fetcher.DocumentSource;
-import com.nageoffer.ai.rag.ingestion.engine.IngestionContext;
-import com.nageoffer.ai.rag.ingestion.engine.NodeLog;
-import com.nageoffer.ai.rag.ingestion.engine.enums.IngestionStatus;
-import com.nageoffer.ai.rag.ingestion.engine.PipelineDefinition;
-import com.nageoffer.ai.rag.ingestion.engine.IngestionEngine;
-import com.nageoffer.ai.rag.ingestion.service.IngestionResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
 import com.nageoffer.ai.rag.ingestion.domain.entity.IngestionTaskNodeEntity;
+import com.nageoffer.ai.rag.ingestion.engine.IngestionContext;
+import com.nageoffer.ai.rag.ingestion.engine.IngestionEngine;
+import com.nageoffer.ai.rag.ingestion.engine.NodeLog;
+import com.nageoffer.ai.rag.ingestion.engine.PipelineDefinition;
+import com.nageoffer.ai.rag.ingestion.engine.enums.IngestionStatus;
+import com.nageoffer.ai.rag.ingestion.engine.fetcher.DocumentSource;
 import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
 import com.nageoffer.ai.rag.ingestion.mapper.IngestionTaskNodeMapper;
-import java.util.UUID;
-
 import com.nageoffer.ai.rag.storage.domian.dto.StoredFileDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import java.util.UUID;
 
 /**
  * 入库引擎服务：封装 engine.execute + 任务状态落库（新旧链路整合的枢纽）。
@@ -103,7 +102,7 @@ public class IngestionEngineService {
         if (context.getLogs() == null) {
             return;
         }
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        ObjectMapper mapper = new ObjectMapper();
         for (NodeLog log : context.getLogs()) {
             IngestionTaskNodeEntity node = new IngestionTaskNodeEntity();
             node.setTaskId(taskId);

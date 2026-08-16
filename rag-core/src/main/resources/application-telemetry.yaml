@@ -1,0 +1,111 @@
+# ====================================================================
+# 可观测性连接与开关（统一收敛到 telemetry.* 命名空间）
+#
+# 统一走 OTLP：trace 走 OTLP Traces，日志走 OTLP Logs。
+#
+# 两种运行模式：
+#   telemetry.collector.enabled=true（默认，推荐）
+#     app --OTLP--> otel-collector --+--> OpenObserve
+#                                    `--> Langfuse
+#     应用只连接 collector，后端扇出、采样、脱敏由 collector 负责。
+#
+#   telemetry.collector.enabled=false
+#     app --OTLP traces--> Langfuse
+#     app --OTLP traces--> OpenObserve
+#     app --OTLP logs  --> OpenObserve
+#     应用直连后端，少一个 collector 进程，但后端地址/凭据变更需要改应用。
+#
+# 无论哪种模式，日志都进入 OpenObserve；Langfuse 主要接收 trace/LLM observation。
+# ====================================================================
+
+telemetry:
+  # ---------------------------------------------------------------
+  # 1. 埋点与采样（llm-observability 核心）
+  # ---------------------------------------------------------------
+  tracer-name: springai-rag            # OTel tracer 名（离线 eval 等无父根 trace 用）
+  # 无 OTel 标准的框架属性（trace.tags / trace.metadata.* / release / first_token_at / step）
+  # 的命名空间前缀；未配置时取 spring.application.name（本项目即 springai-rag.trace.tags 形态）
+  # attribute-namespace: myapp
+  sampling:
+    probability: 1.0                   # 开发期全采样；生产建议调低降量
+
+  # 传播与 span 属性增强（BaggageAttributeSpanProcessor）
+  # propagation:
+  #   baggage-span-attributes: true    # false 时 baggage 不落 span（Langfuse 会话分组等随之失效）
+
+  # 内容捕获与摘要限额（启动期一次性生效，默认值见 TelemetryProperties.Limits，按需覆盖）
+  limits:
+    summarize: false                 # 测试阶段关闭摘要，保留完整输入/输出 JSON
+    truncate: false                  # 测试阶段关闭截断，保留完整输入/输出
+    max-span-io: 100000000           # 兜底字符上限；truncate=false 时不生效
+    summarize-max-string: 100000000  # 测试阶段大值，避免摘要字符串截断
+    summarize-max-preview: 1000000   # 测试阶段大值，避免集合/数组只留预览
+    summarize-max-map-entries: 1000000 # 测试阶段大值，避免 Map 只留前几条
+
+  # ---------------------------------------------------------------
+  # 2. OTel Collector：可选开关
+  #    enabled=true  应用只发 collector
+  #    enabled=false 应用直连下方 OpenObserve / Langfuse OTLP 入口
+  # ---------------------------------------------------------------
+  collector:
+    enabled: ${TELEMETRY_COLLECTOR_ENABLED:true}
+    base-url: ${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}
+    traces-endpoint: ${TELEMETRY_COLLECTOR_TRACES_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/traces}
+    logs-endpoint: ${TELEMETRY_COLLECTOR_LOGS_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/logs}
+    metrics-endpoint: ${TELEMETRY_COLLECTOR_METRICS_ENDPOINT:${OBSERVE_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics}
+    headers:
+      # collector 开启鉴权时再配置；一般本地开发留空
+      Authorization: ${TELEMETRY_COLLECTOR_AUTHORIZATION:}
+
+  # ---------------------------------------------------------------
+  # 3. OpenObserve：OTLP 日志/指标入口 + 日志诊断读取凭据
+  #    collector.enabled=false 时，日志端点自动由 url 推导：
+  #      url + /v1/logs
+  #      url + /v1/metrics
+  #    trace 直连端点由 llm-observability-backends 的 OpenObserveOtlpAutoConfiguration 使用。
+  # ---------------------------------------------------------------
+  openobserve:
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 根地址（到组织 default）
+    web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}       # Web UI（前端链路追踪页跳转）
+    username: ${OO_USERNAME:admin@openobserve.io}               # 账号
+    password: ${OO_PASSWORD:OpenObserve@2026}                   # 密码
+    stream: springai_rag_logs                                   # 日志流（OpenObserve 规范化为下划线）
+    trace-stream: default                                       # trace 流（OTLP traces 默认写入 default）
+    query-enabled: true                                         # 是否注册日志/span 查询客户端（读取侧）
+    # trace 级输入/输出由 llm-observability 直接写 OTel GenAI 标准属性 gen_ai.input/output.messages，
+    # OpenObserve 原生识别（LLM 视图 gen_ai_input/output_messages 列），无需任何映射。
+    # 如需覆盖自动推导的直连端点，可显式打开：
+    # otlp-base-url: ${OPENOBSERVE_OTLP_BASE_URL:}
+    # otlp-traces-endpoint: ${OPENOBSERVE_OTLP_TRACES_ENDPOINT:}
+    # otlp-logs-endpoint: ${OPENOBSERVE_OTLP_LOGS_ENDPOINT:}
+    # otlp-metrics-endpoint: ${OPENOBSERVE_OTLP_METRICS_ENDPOINT:}
+
+  # ---------------------------------------------------------------
+  # 4. Langfuse：LLM / trace 可视化
+  #    collector.enabled=true  由 collector 转发
+  #    collector.enabled=false 应用直连 otlp-traces-endpoint
+  #    OTLP Basic Auth = base64(public-key:secret-key)，真实值放 .env
+  #
+  #    属性映射（rag.* → langfuse.*，会话分组/trace tags/TTFT 等）在应用侧完成
+  #    （llm-observability-backends 的 LangfuseAttributeKeyMapper），与 collector 是否在场无关。
+  #
+  #    数据集/评分 API 客户端（llm-observability-backends 的 LangfuseApiClient）：
+  #    优先用 auth=base64(pk:sk)，未配置时回退 public-key+secret-key；
+  #    两者都未配置时该 Bean 不注册（不影响 OTLP 采集）。
+  # ---------------------------------------------------------------
+  langfuse:
+    url: ${LANGFUSE_URL:http://localhost:3000}                  # Web UI
+    public-key: ${LANGFUSE_PUBLIC_KEY:}                         # pk-lf-...
+    secret-key: ${LANGFUSE_SECRET_KEY:}                         # sk-lf-...
+    auth: ${LANGFUSE_AUTH:}                                     # base64(pk:sk)，数据集 API 优先使用
+    otlp-traces-endpoint: ${LANGFUSE_OTLP_TRACES_ENDPOINT:${LANGFUSE_URL:http://localhost:3000}/api/public/otel/v1/traces}
+    # attribute-mapping:
+    #   enabled: true            # false 时 Langfuse 只收 gen_ai.* 原生字段，不展示会话/TTFT 等
+
+  # ---------------------------------------------------------------
+  # 5. Spring AI 内容捕获（telemetry.springai.* 桥接到 spring.ai.chat.observations.*）
+  #    LLM 的 gen_ai span / token 用量由 Spring AI 原生输出，这里只控制 prompt/completion 是否落库。
+  # ---------------------------------------------------------------
+  springai:
+    log-prompt: true
+    log-completion: true

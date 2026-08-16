@@ -27,6 +27,9 @@ public class AgentTraceEntity {
     /** 关联的 assistant 消息 id（sa_message.id），可空 */
     private Long messageId;
 
+    /** 本次请求的 OpenTelemetry traceId（32 位 hex，跳转 OpenObserve 全链路用），可空 */
+    private String traceId;
+
     /** 范式：naive/react */
     private String paradigm;
 

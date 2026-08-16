@@ -328,7 +328,7 @@ interface ErrResp {
   response?: { data?: { message?: string } }
 }
 
-// ── 表格高度自适应：滚动表格数据时，表头 + 上方参数条/聚合卡固定不动 ──
+// ── 表格高度自适应：滚动表格数据时，表头 + 上方参数卡/聚合卡固定不动 ──
 const tableWrap = ref<HTMLElement>()
 const tableBodyHeight = ref<number | undefined>(undefined)
 let resizeObserver: ResizeObserver | undefined
@@ -338,7 +338,9 @@ function measure() {
   if (!el) return
   const wrapH = el.getBoundingClientRect().height
   const headH = el.querySelector('.ant-table-thead')?.getBoundingClientRect().height ?? 47
-  tableBodyHeight.value = Math.max(160, Math.floor(wrapH - headH))
+  // 分页条也占容器高度（含上下留白的 margin 补偿），不减会溢出裁掉分页
+  const pageH = el.querySelector('.ant-pagination')?.getBoundingClientRect().height ?? 48
+  tableBodyHeight.value = Math.max(160, Math.floor(wrapH - headH - pageH - 24))
 }
 
 watch(tableWrap, (el) => {
@@ -361,44 +363,52 @@ function durMin(): string {
 
 <template>
   <div class="run-detail">
-    <!-- 顶部：返回 + 概览 + 解读入口 + 删除 -->
+    <!-- 页头：返回 + 运行概要 + 操作 -->
     <div class="detail-header">
-      <a-button type="text" class="back-btn" @click="goBack">
-        <template #icon><ArrowLeftOutlined /></template>返回运行记录
-      </a-button>
-      <template v-if="run">
-        <span class="run-title">运行 #{{ run.id }}</span>
-        <a-tag :color="run.status === 'DONE' ? 'green' : run.status === 'FAILED' ? 'red' : 'processing'">
-          {{ statusText(run.status) }}
-        </a-tag>
-        <a-tag v-if="run.paradigm" color="purple">{{ paradigmLabel(run.paradigm) }}</a-tag>
-        <span class="run-meta">{{ datasetName }} · {{ run.done }}/{{ run.total ?? '-' }} 题 · {{ durMin() }}</span>
-      </template>
-      <span class="header-right">
-        <a-button class="guide-btn" @click="guideOpen = true">
-          <template #icon><QuestionCircleOutlined /></template>指标解读
+      <div class="header-main">
+        <a-button type="text" class="back-btn" @click="goBack">
+          <template #icon><ArrowLeftOutlined /></template>返回运行记录
         </a-button>
-        <a-button v-if="run?.status === 'FAILED'" type="primary" size="small" @click="retry">
-          <template #icon><ReloadOutlined /></template>重试
-        </a-button>
-        <a-button danger size="small" @click="confirmDelete">
-          <template #icon><DeleteOutlined /></template>删除运行
-        </a-button>
-      </span>
+        <template v-if="run">
+          <span class="run-title">运行 #{{ run.id }}</span>
+          <a-tag :color="run.status === 'DONE' ? 'green' : run.status === 'FAILED' ? 'red' : 'processing'">
+            {{ statusText(run.status) }}
+          </a-tag>
+          <a-tag v-if="run.paradigm" color="purple">{{ paradigmLabel(run.paradigm) }}</a-tag>
+        </template>
+        <span class="header-right">
+          <a-button class="guide-btn" @click="guideOpen = true">
+            <template #icon><QuestionCircleOutlined /></template>指标解读
+          </a-button>
+          <a-button v-if="run?.status === 'FAILED'" type="primary" @click="retry">
+            <template #icon><ReloadOutlined /></template>重试
+          </a-button>
+          <a-button danger @click="confirmDelete">
+            <template #icon><DeleteOutlined /></template>删除运行
+          </a-button>
+        </span>
+      </div>
+      <div v-if="run" class="run-meta">
+        {{ datasetName }} · {{ run.done }}/{{ run.total ?? '-' }} 题 · 耗时 {{ durMin() }}
+      </div>
     </div>
 
     <a-spin :spinning="loading">
-      <!-- 本次检索参数（该次运行的 topK / 阈值 / 召回预算 等） -->
-      <div v-if="params" class="param-bar">
+      <!-- 检索参数卡（该次运行的 topK / 阈值 / 召回预算 等） -->
+      <div v-if="params" class="param-card">
         <span class="param-title">检索参数</span>
-        <span class="param-item">topK <b>{{ params.topK ?? '-' }}</b></span>
-        <span class="param-item">相似度阈值 <b>{{ params.threshold ?? '-' }}</b></span>
-        <span class="param-item">召回预算 <b>{{ params.recallBudget ?? '-' }}</b></span>
-        <span class="param-item">候选上限 <b>{{ params.candidateLimit ?? '-' }}</b></span>
-        <span class="param-item">上下文 topK <b>{{ params.contextTopK ?? '-' }}</b></span>
-        <span class="param-item">查询改写 <b :class="params.rewrite ? 'on' : 'off'">{{ params.rewrite ? '开' : '关' }}</b></span>
+        <span class="p-item"><span class="p-label">topK</span><b>{{ params.topK ?? '-' }}</b></span>
+        <span class="p-item"><span class="p-label">相似度阈值</span><b>{{ params.threshold ?? '-' }}</b></span>
+        <span class="p-item"><span class="p-label">召回预算</span><b>{{ params.recallBudget ?? '-' }}</b></span>
+        <span class="p-item"><span class="p-label">候选上限</span><b>{{ params.candidateLimit ?? '-' }}</b></span>
+        <span class="p-item"><span class="p-label">上下文 topK</span><b>{{ params.contextTopK ?? '-' }}</b></span>
+        <span class="p-item">
+          <span class="p-label">查询改写</span>
+          <b :class="params.rewrite ? 'on' : 'off'">{{ params.rewrite ? '开' : '关' }}</b>
+        </span>
       </div>
-      <!-- 聚合卡片（openobserve 式：白底 + 分档色 + 大数字 + 中文标签） -->
+
+      <!-- 聚合指标卡（与概览页 KPI 卡同风格：白卡 + 阶段徽标 + 分档色数字） -->
       <div v-if="aggregate" class="agg-grid">
         <div
           v-for="(m, name) in aggregate"
@@ -419,100 +429,133 @@ function durMin(): string {
       </div>
       <div v-else-if="run && run.status === 'DONE'" class="empty">无聚合指标数据</div>
 
-      <!-- 工具栏 -->
-      <div v-if="pivotRows.length" class="toolbar">
-        <a-input-search v-model:value="searchKeyword" placeholder="搜索问题关键词" allow-clear style="width: 240px" />
-        <a-select
-          v-if="hasCategory"
-          v-model:value="categoryFilter"
-          placeholder="数据分类"
-          allow-clear
-          style="width: 140px"
-        >
-          <a-select-option v-for="c in categoryOptions" :key="c" :value="c">{{ categoryLabel(c) }}</a-select-option>
-        </a-select>
-        <a-checkbox v-model:checked="reevalOnly">仅看重评过</a-checkbox>
-        <a-checkbox v-model:checked="badcaseOnly">低分筛选</a-checkbox>
-        <template v-if="badcaseOnly">
-          <a-select v-model:value="badcaseMetric" style="width: 160px">
-            <a-select-option v-for="n in metricNames" :key="n" :value="n">{{ metricLabel(n) }}</a-select-option>
-          </a-select>
-          <span class="op">&lt;</span>
-          <a-input-number v-model:value="badcaseThreshold" :min="0" :max="1" :step="0.1" style="width: 90px" />
-        </template>
-        <span class="filter-count">显示 {{ filteredRows.length }} / {{ pivotRows.length }} 条</span>
-      </div>
-
-      <!-- 逐题明细（列头中文 + 排序 + 行展开）；表格内部滚动，表头 + 上方参数条/聚合卡固定 -->
-      <div v-if="pivotRows.length" ref="tableWrap" class="table-wrap">
-        <a-table
-          :columns="pivotColumns"
-          :data-source="filteredRows"
-          :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
-          size="middle"
-          row-key="itemId"
-          :scroll="{ x: 1320, y: tableBodyHeight }"
-          class="metric-table"
-        >
-        <template #headerCell="{ column }">
-          <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="pivotColumns">{{ column.title }}</span>
-        </template>
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'question'">
-            <a-tooltip :title="record.question"><span class="q-cell">{{ record.question }}</span></a-tooltip>
-          </template>
-          <template v-else-if="column.key === 'paradigm'">
-            <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
-            <span v-else class="muted">-</span>
-          </template>
-          <template v-else-if="column.key === 'category'">
-            <a-tooltip v-if="record.category" :title="categoryDesc(record.category)">
-              <a-tag>{{ categoryLabel(record.category) }}</a-tag>
-            </a-tooltip>
-            <span v-else class="muted">-</span>
-          </template>
-          <template v-else-if="column.key === 'hit'">{{ record.hit ?? '-' }} / {{ record.retrieved }}</template>
-          <template v-else-if="column.key === 'remark'">
-            <a-tooltip v-if="record.latestRemark" :title="record.latestRemark">
-              <span class="remark-chip">{{ record.latestRemark }}</span>
-            </a-tooltip>
-            <span v-else class="muted">—</span>
-          </template>
-          <template v-else-if="column.key === 'action'">
-            <a-button type="link" size="small" @click="openReeval(record)">重评</a-button>
-          </template>
-          <template v-else-if="metricNames.includes(column.dataIndex)">
-            <span :class="'cell-tone-' + scoreTone(Number(record[column.dataIndex]))">{{ fmtScore(record[column.dataIndex]) }}</span>
-          </template>
-        </template>
-        <template #expandedRowRender="{ record }">
-          <div class="expand">
-            <div>命中 {{ record.hit ?? '-' }} / 期望 {{ record.expected ?? '-' }} · 召回 {{ record.retrieved }} 篇</div>
-            <div class="docs">期望召回文档：{{ record.expectedNames?.length ? record.expectedNames.join('，') : '（无）' }}</div>
-            <div class="docs">实际召回文档：{{ record.retrievedNames?.length ? record.retrievedNames.join('，') : '（无）' }}</div>
-            <div v-if="record.reevals && record.reevals.length" class="reevals">
-              <div class="reevals-title">重评历史（{{ record.reevals.length }} 次，保留对比）</div>
-              <div v-for="r in record.reevals" :key="r.attempt" class="reeval-item">
-                <span class="rv-attempt">#{{ r.attempt }}</span>
-                <a-tag v-if="r.paradigm" color="blue" class="rv-tag">{{ paradigmLabel(r.paradigm) }}</a-tag>
-                <a-tag :color="r.rewrite ? 'green' : 'default'" class="rv-tag">{{ r.rewrite ? '含改写' : '裸检索' }}</a-tag>
-                <template v-if="r.error">
-                  <span class="rv-error">检索失败：{{ r.error }}</span>
-                </template>
-                <template v-else>
-                  <span class="rv-hit">命中 {{ r.hit ?? '-' }} / {{ r.retrieved }}</span>
-                  <span v-for="k in Object.keys(r.scores)" :key="k" class="rv-score">
-                    {{ metricLabel(k) }} {{ fmtScore(r.scores[k]) }}
-                  </span>
-                  <span v-if="r.expectedNames.length" class="rv-exp">期望：{{ r.expectedNames.join('，') }}</span>
-                  <span v-if="r.retrievedNames.length" class="rv-docs">实际召回：{{ r.retrievedNames.join('，') }}</span>
-                </template>
-                <div v-if="r.remark" class="rv-remark">📝 {{ r.remark }}</div>
-              </div>
-            </div>
+      <!-- 逐题明细表格卡：工具栏筛选 + 表格内部滚动（表头与上方参数卡/聚合卡固定） -->
+      <div v-if="pivotRows.length" class="table-card">
+        <div class="table-toolbar">
+          <div class="toolbar-left">
+            <a-input-search v-model:value="searchKeyword" placeholder="搜索问题关键词" allow-clear style="width: 220px" />
+            <a-select
+              v-if="hasCategory"
+              v-model:value="categoryFilter"
+              placeholder="数据分类"
+              allow-clear
+              style="width: 140px"
+            >
+              <a-select-option v-for="c in categoryOptions" :key="c" :value="c">{{ categoryLabel(c) }}</a-select-option>
+            </a-select>
+            <a-checkbox v-model:checked="reevalOnly">仅看重评过</a-checkbox>
+            <a-checkbox v-model:checked="badcaseOnly">低分筛选</a-checkbox>
+            <template v-if="badcaseOnly">
+              <a-select v-model:value="badcaseMetric" style="width: 160px">
+                <a-select-option v-for="n in metricNames" :key="n" :value="n">{{ metricLabel(n) }}</a-select-option>
+              </a-select>
+              <span class="op">&lt;</span>
+              <a-input-number v-model:value="badcaseThreshold" :min="0" :max="1" :step="0.1" style="width: 90px" />
+            </template>
           </div>
-        </template>
-        </a-table>
+          <span class="toolbar-hint">显示 {{ filteredRows.length }} / {{ pivotRows.length }} 条</span>
+        </div>
+
+        <div ref="tableWrap" class="table-wrap">
+          <a-table
+            :columns="pivotColumns"
+            :data-source="filteredRows"
+            :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
+            size="middle"
+            row-key="itemId"
+            :scroll="{ x: 1320, y: tableBodyHeight }"
+            class="metric-table"
+          >
+            <template #headerCell="{ column }">
+              <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="pivotColumns">{{ column.title }}</span>
+            </template>
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'question'">
+                <a-tooltip :title="record.question"><span class="q-cell">{{ record.question }}</span></a-tooltip>
+              </template>
+              <template v-else-if="column.key === 'paradigm'">
+                <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
+                <span v-else class="muted">-</span>
+              </template>
+              <template v-else-if="column.key === 'category'">
+                <a-tooltip v-if="record.category" :title="categoryDesc(record.category)">
+                  <a-tag>{{ categoryLabel(record.category) }}</a-tag>
+                </a-tooltip>
+                <span v-else class="muted">-</span>
+              </template>
+              <template v-else-if="column.key === 'hit'">{{ record.hit ?? '-' }} / {{ record.retrieved }}</template>
+              <template v-else-if="column.key === 'remark'">
+                <a-tooltip v-if="record.latestRemark" :title="record.latestRemark">
+                  <span class="remark-chip">{{ record.latestRemark }}</span>
+                </a-tooltip>
+                <span v-else class="muted">—</span>
+              </template>
+              <template v-else-if="column.key === 'action'">
+                <a-button type="link" size="small" @click="openReeval(record)">重评</a-button>
+              </template>
+              <template v-else-if="metricNames.includes(column.dataIndex)">
+                <span :class="'cell-tone-' + scoreTone(Number(record[column.dataIndex]))">{{ fmtScore(record[column.dataIndex]) }}</span>
+              </template>
+            </template>
+            <template #expandedRowRender="{ record }">
+              <div class="expand">
+                <div class="exp-summary">
+                  命中 {{ record.hit ?? '-' }} / 期望 {{ record.expected ?? '-' }} · 实际召回 {{ record.retrieved }} 篇
+                </div>
+                <!-- 期望召回：命中=绿、未召回=红，badcase 一眼定位 -->
+                <div class="exp-row">
+                  <span class="exp-label">期望召回</span>
+                  <template v-if="record.expectedNames?.length">
+                    <span
+                      v-for="(n, i) in record.expectedNames"
+                      :key="'exp-' + i + '-' + n"
+                      class="doc-chip"
+                      :class="record.retrievedNames?.includes(n) ? 'hit' : 'miss'"
+                    >
+                      {{ n }}<i class="chip-mark">{{ record.retrievedNames?.includes(n) ? '✓' : '✗' }}</i>
+                    </span>
+                  </template>
+                  <span v-else class="muted">（无）</span>
+                </div>
+                <!-- 实际召回：按排名序号排列，期望内=蓝、多召回=灰 -->
+                <div class="exp-row">
+                  <span class="exp-label">实际召回</span>
+                  <template v-if="record.retrievedNames?.length">
+                    <span
+                      v-for="(n, i) in record.retrievedNames"
+                      :key="'ret-' + i + '-' + n"
+                      class="doc-chip"
+                      :class="record.expectedNames?.includes(n) ? 'hit-soft' : 'extra'"
+                    >
+                      <i class="rank">{{ i + 1 }}</i>{{ n }}
+                    </span>
+                  </template>
+                  <span v-else class="muted">（无）</span>
+                </div>
+                <div v-if="record.reevals && record.reevals.length" class="reevals">
+                  <div class="reevals-title">重评历史（{{ record.reevals.length }} 次，保留对比）</div>
+                  <div v-for="r in record.reevals" :key="r.attempt" class="reeval-item">
+                    <span class="rv-attempt">#{{ r.attempt }}</span>
+                    <a-tag v-if="r.paradigm" color="blue" class="rv-tag">{{ paradigmLabel(r.paradigm) }}</a-tag>
+                    <a-tag :color="r.rewrite ? 'green' : 'default'" class="rv-tag">{{ r.rewrite ? '含改写' : '裸检索' }}</a-tag>
+                    <template v-if="r.error">
+                      <span class="rv-error">检索失败：{{ r.error }}</span>
+                    </template>
+                    <template v-else>
+                      <span class="rv-hit">命中 {{ r.hit ?? '-' }} / {{ r.retrieved }}</span>
+                      <span v-for="k in Object.keys(r.scores)" :key="k" class="rv-score">
+                        {{ metricLabel(k) }} {{ fmtScore(r.scores[k]) }}
+                      </span>
+                      <span v-if="r.expectedNames.length" class="rv-exp">期望：{{ r.expectedNames.join('，') }}</span>
+                      <span v-if="r.retrievedNames.length" class="rv-docs">实际召回：{{ r.retrievedNames.join('，') }}</span>
+                    </template>
+                    <div v-if="r.remark" class="rv-remark">📝 {{ r.remark }}</div>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </a-table>
+        </div>
       </div>
     </a-spin>
 
@@ -565,17 +608,16 @@ function durMin(): string {
 </template>
 
 <style scoped>
+/* ── 整页骨架：不滚动，表格卡内部滚动（表头 + 参数卡 + 聚合卡固定） ── */
 .run-detail {
   padding: 20px 24px;
-  max-width: 1280px;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   height: 100%;
-  overflow: hidden; /* 整页不滚：表格内部滚动，表头 + 上方参数条/聚合卡固定 */
+  overflow: hidden;
 }
-/* a-spin 内部走 flex 列布局，让表格区吃掉剩余高度 */
+/* a-spin 内部走 flex 列布局，让表格卡吃掉剩余高度 */
 .run-detail :deep(.ant-spin-nested-loading),
 .run-detail :deep(.ant-spin-container) {
   flex: 1;
@@ -584,37 +626,50 @@ function durMin(): string {
   flex-direction: column;
   overflow: hidden;
 }
-/* 参数条 / 聚合卡 / 工具栏固定不压缩 */
-.run-detail .param-bar,
+.run-detail :deep(.ant-spin-container) {
+  gap: 14px;
+}
+/* 参数卡 / 聚合卡固定不压缩；表格卡（全局类）吃剩余空间，表体在 table-wrap 内滚 */
+.run-detail .param-card,
 .run-detail .agg-grid,
-.run-detail .toolbar,
 .run-detail .empty {
   flex-shrink: 0;
 }
-/* 表格区：占剩余空间，表体内部滚动 */
 .table-wrap {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
+/* 分页贴表格底部（配合 measure() 的高度扣算） */
+.run-detail :deep(.ant-pagination) {
+  margin: 10px 16px 12px 8px;
+}
 
-/* 顶部 */
+/* ── 页头 ── */
 .detail-header {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-bottom: 12px;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--color-border-light);
   flex-shrink: 0;
+}
+.header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .back-btn {
   color: var(--color-primary);
   font-size: 14px;
+  margin-left: -7px; /* 补偿 antd 文字按钮内边距，与标题视觉对齐 */
 }
 .run-title {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   color: var(--color-ink);
 }
 .run-meta {
@@ -630,65 +685,63 @@ function durMin(): string {
   color: var(--color-primary);
 }
 
-/* 聚合卡片：openobserve 浅色风 */
+/* ── 聚合指标卡（对齐概览页 kpi-card：白卡 + 阶段徽标 + 分档色数字 + 细进度条） ── */
 .agg-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
 .agg-card {
   background: var(--color-surface);
   border: 1px solid var(--color-border-light);
   border-radius: var(--radius-lg);
-  padding: 14px 16px;
-  border-top: 3px solid var(--color-border);
-}
-.agg-card.tone-good {
-  border-top-color: var(--color-success);
-}
-.agg-card.tone-mid {
-  border-top-color: var(--color-signal);
-}
-.agg-card.tone-bad {
-  border-top-color: var(--color-danger);
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .agg-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 8px;
 }
 .agg-name {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--color-ink-secondary);
   font-weight: 500;
 }
+/* 阶段徽标：检索=蓝、排序=琥珀（与概览页 KPI 卡一致） */
 .agg-stage {
   font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
 }
 .agg-stage.stage-ret {
-  background: var(--color-primary-light);
   color: var(--color-primary);
+  background: var(--color-primary-light);
 }
 .agg-stage.stage-sort {
+  color: #b07810;
   background: var(--color-signal-bg);
-  color: var(--color-signal);
 }
 .agg-mean {
   font-size: 26px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   color: var(--color-ink);
-  line-height: 1.2;
   font-family: var(--font-display);
   font-feature-settings: 'tnum';
 }
+/* 分档着色只落在数字与进度条上（替代旧版彩色顶边） */
 .agg-card.tone-good .agg-mean {
   color: var(--color-success);
 }
 .agg-card.tone-mid .agg-mean {
-  color: var(--color-signal);
+  color: #b07810;
 }
 .agg-card.tone-bad .agg-mean {
   color: var(--color-danger);
@@ -697,13 +750,14 @@ function durMin(): string {
   height: 4px;
   border-radius: 2px;
   background: var(--color-surface-secondary);
-  margin: 8px 0 6px;
+  margin: 6px 0 4px;
   overflow: hidden;
 }
 .agg-bar span {
   display: block;
   height: 100%;
   border-radius: 2px;
+  transition: width 0.25s ease;
 }
 .agg-card.tone-good .agg-bar span {
   background: var(--color-success);
@@ -717,25 +771,57 @@ function durMin(): string {
 .agg-detail {
   font-size: 11px;
   color: var(--color-ink-tertiary);
+  font-family: var(--font-display);
+  font-feature-settings: 'tnum';
 }
 
-/* 工具栏 */
-.toolbar {
+/* ── 检索参数卡 ── */
+.param-card {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 16px;
   flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-lg);
 }
+.param-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink-secondary);
+  padding-right: 14px;
+  border-right: 1px solid var(--color-border-light);
+}
+.p-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.p-label {
+  font-size: 12px;
+  color: var(--color-ink-tertiary);
+  white-space: nowrap;
+}
+.p-item b {
+  font-family: var(--font-display);
+  font-feature-settings: 'tnum';
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.p-item b.on {
+  color: var(--color-success);
+}
+.p-item b.off {
+  color: var(--color-ink-tertiary);
+  font-weight: 400;
+}
+
 .op {
   color: var(--color-ink-tertiary);
 }
-.filter-count {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--color-ink-tertiary);
-}
 
-/* 逐题表 */
+/* ── 逐题明细表 ── */
 .metric-table :deep(table) {
   table-layout: fixed;
 }
@@ -753,17 +839,154 @@ function durMin(): string {
 .cell-tone-bad {
   color: var(--color-danger);
 }
+.muted {
+  color: var(--color-ink-tertiary);
+}
+.remark-chip {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  padding: 1px 8px;
+  border-radius: var(--radius-lg);
+}
+
+/* ── 展开行：期望 vs 实际召回 chips 对照 ── */
 .expand {
   font-size: 12px;
   color: var(--color-ink-secondary);
-  padding: 4px 8px;
-  line-height: 1.8;
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.docs {
+.exp-summary {
+  color: var(--color-ink);
+  font-weight: 500;
+}
+.exp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.exp-label {
+  flex-shrink: 0;
   color: var(--color-ink-tertiary);
+  line-height: 22px;
+}
+.doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 280px;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 20px;
+  background: var(--color-surface-secondary);
+  color: var(--color-ink-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 期望行：命中=绿 / 未召回=红 */
+.doc-chip.hit {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  font-weight: 500;
+}
+.doc-chip.miss {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-weight: 500;
+}
+/* 实际行：期望内=蓝 / 多召回=灰 */
+.doc-chip.hit-soft {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.chip-mark {
+  font-style: normal;
+  font-family: var(--font-display);
+}
+.rank {
+  font-style: normal;
+  font-family: var(--font-display);
+  font-size: 11px;
+  opacity: 0.65;
 }
 
-/* 解读抽屉 */
+/* ── 重评历史（展开行内） ── */
+.reevals {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border-light);
+}
+.reevals-title {
+  font-size: 12px;
+  color: var(--color-primary);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.reeval-item {
+  font-size: 12px;
+  color: var(--color-ink-secondary);
+  padding: 4px 0;
+  line-height: 1.8;
+}
+.rv-attempt {
+  display: inline-block;
+  font-weight: 600;
+  color: var(--color-ink);
+  margin-right: 6px;
+}
+.rv-tag {
+  margin-right: 6px;
+}
+.rv-hit {
+  margin-right: 8px;
+  color: var(--color-ink);
+}
+.rv-score {
+  margin-right: 8px;
+}
+.rv-exp {
+  display: block;
+  color: var(--color-primary);
+}
+.rv-docs {
+  display: block;
+  color: var(--color-ink-tertiary);
+}
+.rv-error {
+  color: var(--color-danger);
+}
+.rv-remark {
+  color: var(--color-ink);
+  background: var(--color-signal-bg);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  margin-top: 2px;
+}
+
+/* ── 重评弹窗问题预览 ── */
+.reeval-q {
+  font-size: 13px;
+  color: var(--color-ink);
+  background: var(--color-surface-secondary);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+/* ── 指标解读抽屉 ── */
 .guide-tip-top {
   font-size: 12px;
   color: var(--color-primary);
@@ -826,123 +1049,10 @@ function durMin(): string {
   line-height: 1.7;
 }
 
-/* 检索参数条 */
-.param-bar {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-  padding: 10px 16px;
-  background: var(--color-surface-secondary);
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-lg);
-  margin-bottom: 14px;
-  font-size: 13px;
-}
-.param-title {
-  font-weight: 600;
-  color: var(--color-ink);
-}
-.param-item {
-  color: var(--color-ink-secondary);
-}
-.param-item b {
-  color: var(--color-primary);
-  margin-left: 3px;
-}
-
 .empty {
   text-align: center;
   padding: 24px;
   color: var(--color-ink-tertiary);
   font-size: 13px;
-}
-
-/* 改写开关着色 */
-.param-item b.on {
-  color: var(--color-success);
-}
-.param-item b.off {
-  color: var(--color-ink-tertiary);
-}
-.muted {
-  color: var(--color-ink-tertiary);
-}
-.remark-chip {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--color-primary);
-  background: var(--color-primary-light);
-  padding: 1px 8px;
-  border-radius: var(--radius-lg);
-}
-
-/* 重评历史（展开行内） */
-.reevals {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--color-border-light);
-}
-.reevals-title {
-  font-size: 12px;
-  color: var(--color-primary);
-  margin-bottom: 6px;
-  font-weight: 600;
-}
-.reeval-item {
-  font-size: 12px;
-  color: var(--color-ink-secondary);
-  padding: 4px 0;
-  line-height: 1.8;
-}
-.rv-attempt {
-  display: inline-block;
-  font-weight: 600;
-  color: var(--color-ink);
-  margin-right: 6px;
-}
-.rv-tag {
-  margin-right: 6px;
-}
-.rv-hit {
-  margin-right: 8px;
-  color: var(--color-ink);
-}
-.rv-score {
-  margin-right: 8px;
-}
-.rv-exp {
-  display: block;
-  color: var(--color-primary);
-}
-.rv-docs {
-  display: block;
-  color: var(--color-ink-tertiary);
-}
-.rv-error {
-  color: var(--color-danger);
-}
-.rv-remark {
-  color: var(--color-ink);
-  background: var(--color-signal-bg);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  display: inline-block;
-  margin-top: 2px;
-}
-
-/* 重评弹窗问题预览 */
-.reeval-q {
-  font-size: 13px;
-  color: var(--color-ink);
-  background: var(--color-surface-secondary);
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  margin-bottom: 12px;
-  line-height: 1.6;
 }
 </style>

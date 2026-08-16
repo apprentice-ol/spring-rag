@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.chat.agent.impl;
 
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
 import com.nageoffer.ai.rag.chat.agent.AgentRequest;
 import com.nageoffer.ai.rag.chat.agent.AgentRetrievalResult;
 import com.nageoffer.ai.rag.chat.agent.AgentTrace;
@@ -68,7 +68,7 @@ public class ReActRagAgent implements RagAgent {
     }
 
     @Override
-    @ObservedStep("rag.agent.plan")
+    @TelemetryStep("rag.agent.plan")
     public AgentRetrievalResult planAndRetrieve(AgentRequest req) {
         AgentTrace trace = new AgentTrace("react");
         RetrievalWorkspace ws = new RetrievalWorkspace();
@@ -148,19 +148,19 @@ public class ReActRagAgent implements RagAgent {
         SearchContext ctx = withQuery(req.searchContext(), q);
         MultiChannelRetrievalEngine.RetrievalResult rr = toolkit.retrieve(ctx);
         ws.setLastRetrieval(rr);
-        StringBuilder obs = new StringBuilder();
+        StringBuilder telemetry = new StringBuilder();
         List<AgentStepDetails.ChunkHit> hits = new ArrayList<>();
         for (RetrievedChunk c : rr.getFinalChunks()) {
             int ref = ws.register(c);
             ws.select(c);
             String prev = preview(c.getContent());
-            obs.append("[ref=").append(ref).append("] ").append(prev).append('\n');
+            telemetry.append("[ref=").append(ref).append("] ").append(prev).append('\n');
             hits.add(new AgentStepDetails.ChunkHit(
                     ref, c.getScore(), c.getOriginalScore(), docName(c), channel(c), prev));
         }
         trace.stepDetail("retrieve", thought, q, rr.getFinalChunks().size() + " 条", t,
                 new AgentStepDetails.Retrieve(q, hits));
-        return "▶ Action: retrieve(\"" + q + "\") → 命中 " + rr.getFinalChunks().size() + " 条\n" + obs + "\n";
+        return "▶ Action: retrieve(\"" + q + "\") → 命中 " + rr.getFinalChunks().size() + " 条\n" + telemetry + "\n";
     }
 
     private String doGrade(String input, RetrievalWorkspace ws, AgentRequest req,

@@ -1,2 +1,0 @@
-com.nageoffer.ai.obs.autoconfigure.ObsAutoConfiguration
-com.nageoffer.ai.obs.autoconfigure.OpenTelemetryLogbackAppenderAutoConfiguration

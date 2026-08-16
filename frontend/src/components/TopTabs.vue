@@ -1,6 +1,6 @@
 <script lang="ts">
-/** 全局顶部导航：品牌 + 主区 tab（对话 / 知识库 / 管理）。 */
-export type MainNavKey = 'chat' | 'knowledge' | 'admin'
+/** 全局顶部导航：品牌 + 主区 tab（对话 / 管理）。 */
+export type MainNavKey = 'chat' | 'admin'
 </script>
 
 <script setup lang="ts">
@@ -11,7 +11,6 @@ const emit = defineEmits<{ select: [key: MainNavKey] }>()
 
 const tabs: { key: MainNavKey; label: string }[] = [
   { key: 'chat', label: '对话' },
-  { key: 'knowledge', label: '知识库' },
   { key: 'admin', label: '管理' },
 ]
 </script>

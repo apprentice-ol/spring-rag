@@ -1,6 +1,6 @@
 package com.nageoffer.ai.rag.observe.controller;
 
-import com.nageoffer.ai.obs.backends.openobserve.OpenObserveProperties;
+import com.nageoffer.ai.llmobservability.backends.openobserve.OpenObserveProperties;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,8 +30,13 @@ public class ObserveController {
         }
         // OO 社区版无 RBAC，role 只能 admin；此账号供「查看」场景共享（看 trace/logs 本身只读）
         return Map.of(
-                "traceUrl", base + "/web/traces?tab=traces?org_identifier" + org,
-                "logUrl", base + "/web/logs?org_identifier" + org,
+                "traceUrl", base + "/web/traces?org_identifier=" + org,
+                "logUrl", base + "/web/logs?org_identifier=" + org,
+                // trace 详情深链模板（{traceId}/{from}/{to} 占位，from/to 为微秒时间戳，前端按消息时间生成窗口）：
+                // 对话页消息气泡「OO 链路」按此跳转（缺 from/to 会被 OO 重定向到列表页）
+                "traceDetailUrlTemplate", base + "/web/traces/trace-details?org_identifier=" + org
+                        + "&stream=" + openobserveProperties.getTraceStream()
+                        + "&trace_id={traceId}&from={from}&to={to}",
                 "org", org,
                 "email", "viewer@springai-rag.com",
                 "password", "Viewer@rag2026"

@@ -104,7 +104,7 @@ transform/langfuse:
 ## 5. 日志（已迁 OTLP Logs）
 
 日志已由 logback 的 `OpenTelemetryAppender` 统一走 **OTLP Logs**（→ collector logs pipeline → OpenObserve，
-`obs.collector.enabled=false` 时直连 OpenObserve `/v1/logs`），旧的 `OpenObserveAppender` 直推 `_json` API
+`telemetry.collector.enabled=false` 时直连 OpenObserve `/v1/logs`），旧的 `OpenObserveAppender` 直推 `_json` API
 的实现已删除。日志诊断读取（`OpenObserveQueryClient`）仍直连 OpenObserve SQL——后端耦合仅剩这一处，与 trace 无关。
 
 ## 6. 升级后验证清单

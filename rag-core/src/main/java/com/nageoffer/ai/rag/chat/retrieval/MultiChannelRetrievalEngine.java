@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import com.nageoffer.ai.obs.observation.annotation.ObservedStep;
+import com.nageoffer.ai.llmobservability.observation.annotation.TelemetryStep;
 
 /**
  * 多通道检索引擎。
@@ -43,7 +43,7 @@ public class MultiChannelRetrievalEngine {
      * @param context 检索上下文
      * @return 包含所有通道结果 + 后处理结果的检索结果
      */
-    @ObservedStep("rag.retrieve")
+    @TelemetryStep("rag.retrieve")
     public RetrievalResult retrieve(SearchContext context) {
         long t0 = System.currentTimeMillis();
 
