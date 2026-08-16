@@ -5,8 +5,8 @@
 # 新增/替换展示后端 = 在 exporters 加一个 otlphttp，并在 service.pipelines 加一条即可，应用零改动。
 #
 # 由 docker-compose.yml 的 otel-collector 服务挂载本文件。
-# 认证用 collector confmap 标准的 ${env:VAR} 语法，值由 compose env 注入：
-#   OO_AUTH=base64(admin@openobserve.io:OpenObserve@2026)        ← compose 内置默认
+# 认证用 collector confmap 标准的 ${env:VAR} 语法，值由 compose env 注入（真实值放 .env，不写在本文件）：
+#   OO_AUTH=base64(<OO账号>:<OO密码>)                              ← 从 .env 读取（compose 强制要求）
 #   LANGFUSE_AUTH=base64(pk-lf:sk-lf)                             ← 从 .env 读取
 #
 # 排错：

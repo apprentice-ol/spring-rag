@@ -1,9 +1,8 @@
 # Langfuse v3 自托管（独立 compose project，不污染主 docker-compose.yml）。
 # 启动：  docker compose -f docker/langfuse/docker-compose.langfuse.yml up -d
-# 访问：  http://localhost:3000   登录 admin@rageoffer.com / RagAdmin@2026
-# OTLP：  主 compose 的 otel-collector 经 rag-obs 网络打到 langfuse-web:3000/api/public/otel
+# 访问：  http://localhost:3000   登录 （首启在 UI 自行注册的 admin 账号）
+# OTLP：  主 compose 的 otel-collector 经宿主端口 localhost:3000 上报（host.docker.internal，无需共享网络）
 #
-# 前置：  docker network create rag-obs   （一次性；主 compose 的 collector 也挂此网络）
 # 停止：  docker compose -f docker/langfuse/docker-compose.langfuse.yml down
 # 清数据：docker compose -f docker/langfuse/docker-compose.langfuse.yml down -v
 
@@ -18,38 +17,37 @@ services:
       clickhouse: { condition: service_healthy }
       redis:      { condition: service_healthy }
       minio:      { condition: service_started }
-    ports: ["3000:3000"]
-    networks: [default, rag-obs]   # rag-obs 让主 compose 的 collector 能按名 langfuse-web 解析
+    ports: ["3000:3000"]   # 宿主端口映射：主 compose 的 collector 经 host.docker.internal:3000 上报
     environment: &lf-env
       NEXTAUTH_URL: http://localhost:3000          # 必须等于浏览器访问地址含端口
       NEXTAUTH_SECRET: lf-nextauth-secret-2026-dev  # 开发自托管占位；生产换随机
       SALT: lf-salt-2026-dev
       ENCRYPTION_KEY: a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90  # 64hex(32字节)开发固定值；生产 openssl rand -hex 32
-      DATABASE_URL: postgresql://postgres:lfpg@postgres:5432/postgres
+      DATABASE_URL: postgresql://postgres:DevPg2026@postgres:5432/postgres
       TELEMETRY_ENABLED: "false"                    # 关闭 Langfuse 自身向官方回传用量
       CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: lfch
+      CLICKHOUSE_PASSWORD: DevCh2026
       CLICKHOUSE_CLUSTER_ENABLED: "false"
       LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
       LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
-      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: DevMinioSecret2026
       LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
       LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
       LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
       LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
       LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
-      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: DevMinioSecret2026
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
       LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_AUTH: lfredis
+      REDIS_AUTH: DevRedis2026
       # 不预置 LANGFUSE_INIT_*（实测 web 卡在 "Running init scripts..." 不监听 3000）；
       # 首启在 http://localhost:3000 注册第一个 admin 账号 → 建 org/project → Settings → API Keys 拿 pk-lf/sk-lf。
 
@@ -68,7 +66,7 @@ services:
     environment:
       CLICKHOUSE_DEFAULT_DATABASE: default
       CLICKHOUSE_USER: clickhouse
-      CLICKHOUSE_PASSWORD: lfch
+      CLICKHOUSE_PASSWORD: DevCh2026
       TZ: UTC
     volumes:
       - lf_clickhouse_data:/var/lib/clickhouse
@@ -88,7 +86,7 @@ services:
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
       MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: miniosecret
+      MINIO_ROOT_PASSWORD: DevMinioSecret2026
     ports: ["9090:9000"]   # 宿主 9090 避开主 compose rustfs 的 9000
     volumes:
       - lf_minio_data:/data
@@ -97,11 +95,11 @@ services:
     image: docker.io/redis:7
     restart: unless-stopped
     networks: [default]
-    command: ["--requirepass", "lfredis", "--maxmemory-policy", "noeviction"]
+    command: ["--requirepass", "DevRedis2026", "--maxmemory-policy", "noeviction"]
     volumes:
       - lf_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "lfredis", "ping"]
+      test: ["CMD", "redis-cli", "-a", "DevRedis2026", "ping"]
       interval: 3s
       timeout: 10s
       retries: 10
@@ -112,7 +110,7 @@ services:
     networks: [default]
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: lfpg
+      POSTGRES_PASSWORD: DevPg2026
       POSTGRES_DB: postgres
       TZ: UTC
       PGTZ: UTC
@@ -130,8 +128,3 @@ volumes:
   lf_clickhouse_logs:
   lf_minio_data:
   lf_redis_data:
-
-networks:
-  default:
-  rag-obs:
-    external: true

@@ -30,3 +30,5 @@ echo ""
 echo "✅ 完成。产物："
 ls -lh rag-core/target/rag-core-0.0.1-SNAPSHOT.jar | awk '{print "  瘦 jar："$5"\t"$9}'
 echo "  依赖：$(ls rag-core/target/lib/ | wc -l) 个 jar，共 $(du -sh rag-core/target/lib/ | cut -f1)"
+echo ""
+echo "部署（scp 产物 + compose up）：见 docker/README.md"

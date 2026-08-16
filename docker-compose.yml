@@ -63,15 +63,15 @@ services:
     image: openobserve/openobserve:latest
     container_name: rag-openobserve
     environment:
-      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@openobserve.io}       # OO 管理员账号从 .env 注入
-      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-OpenObserve@2026}
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@dev.local}            # OO 管理员账号（真实值放 .env；默认是 dev 假值）
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-DevOnly@Local}
     ports: ["5080:5080"]
     volumes:
       - oo-data:/data
 
   # OTel Collector：接收 app 的 OTLP/HTTP trace，扇出到 OpenObserve（保留）+ Langfuse（新增）。
   # 单独启动：docker compose up -d otel-collector（不拉起其他服务，避免与现有容器端口冲突）。
-  # 认证：OO_AUTH=base64(admin@openobserve.io:OpenObserve@2026)；LANGFUSE_AUTH=base64(pk-lf:sk-lf) 从 .env 注入。
+  # 认证从 .env 注入：OO_AUTH=base64(OO账号:OO密码)；LANGFUSE_AUTH=base64(pk-lf:sk-lf)。
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.108.0
     container_name: rag-otel-collector
@@ -80,15 +80,14 @@ services:
     volumes:
       - ./docker/otel-collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
     ports: ["4318:4318"]   # 映射宿主：本地 IDEA app 经 localhost:4318 上报
-    networks: [default, rag-obs]
     environment:
-      OO_AUTH: ${OO_AUTH:-YWRtaW5Ab3Blbm9ic2VydmUuaW86T3Blbk9ic2VydmVAMjAyNg==}
+      OO_AUTH: ${OO_AUTH:?请在 .env 配置 OO_AUTH（base64(OO账号:密码)）}
       LANGFUSE_AUTH: ${LANGFUSE_AUTH}
 
   app:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/app/Dockerfile
     container_name: rag-app
     depends_on:
       postgres: { condition: service_healthy }
@@ -144,8 +143,3 @@ volumes:
   rustfs-data:
   # minio-data:
   oo-data:
-
-networks:
-  default:
-  rag-obs:
-    external: true

@@ -58,8 +58,8 @@ services:
     image: openobserve/openobserve:latest
     container_name: rag-openobserve
     environment:
-      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@openobserve.io}       # OO 管理员账号从 .env 注入（服务器 .env 需同步）
-      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-OpenObserve@2026}
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@dev.local}            # OO 管理员账号（真实值放服务器 .env；默认是 dev 假值）
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-DevOnly@Local}
     ports: ["5080:5080"]
     volumes:
       - oo-data:/data
@@ -68,7 +68,7 @@ services:
     image: springai-rag-app:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/app/Dockerfile
     container_name: rag-app
     depends_on:
       postgres: { condition: service_healthy }

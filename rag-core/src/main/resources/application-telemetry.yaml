@@ -67,8 +67,8 @@ telemetry:
   openobserve:
     url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}   # API 根地址（到组织 default）
     web-url: ${OPENOBSERVE_WEB_URL:http://localhost:5080}       # Web UI（前端链路追踪页跳转）
-    username: ${OO_USERNAME:admin@openobserve.io}               # 账号
-    password: ${OO_PASSWORD:OpenObserve@2026}                   # 密码
+    username: ${OO_USERNAME:admin@dev.local}                    # 账号（真实值放 .env；默认是 dev 假值）
+    password: ${OO_PASSWORD:DevOnly@Local}                      # 密码
     stream: springai_rag_logs                                   # 日志流（OpenObserve 规范化为下划线）
     trace-stream: default                                       # trace 流（OTLP traces 默认写入 default）
     query-enabled: true                                         # 是否注册日志/span 查询客户端（读取侧）

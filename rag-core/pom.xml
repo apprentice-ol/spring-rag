@@ -25,13 +25,13 @@
         <dependency>
             <groupId>com.github.apprentice-ol.llm-observability</groupId>
             <artifactId>llm-observability</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1</version>
         </dependency>
         <!-- 具体后端适配：OpenObserve + Langfuse 配置、直连 exporter 与 OTLP bridge -->
         <dependency>
             <groupId>com.github.apprentice-ol.llm-observability</groupId>
             <artifactId>llm-observability-backends</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1</version>
         </dependency>
 
         <!-- Web（MVC + SseEmitter 流式输出） -->

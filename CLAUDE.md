@@ -63,6 +63,8 @@ springai-rag（父聚合 POM）
 - spring.sql.init 启动自动建业务表（sa_*，幂等）；PgVectorStore 自动建 spring_ai_store
 - Knife4j：`/api/rag/doc.html`；前端：`cd frontend && npm run dev` → `localhost:5173`
 - traceId：日志每行带 `[traceId,spanId]`（Micrometer OTel），OTLP 可发 OpenObserve
+- Docker 部署（本地/服务器 compose、端口、账号、表结构迁移、运维）见 `docker/README.md`；打包→部署分步手册见 `docs/deploy.md`
+- 提交安全铁律：文档/配置里绝不写真实 IP、账号、密码、key——示例用 xxx/<占位>/${VAR}，真实值只进 .env（.env/.env.local/.env.prod 全 gitignore）；pre-commit 钩子 scripts/check-secrets.sh 自动拦截（clone 后 git config core.hooksPath .githooks 启用）
 
 ## 进度与剩余路线（2026-08-08 全链路核查）
 

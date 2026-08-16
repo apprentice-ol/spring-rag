@@ -86,13 +86,8 @@ public class StreamChatPipeline {
         ensureConversation(conversationId, question);
         saveMessage(conversationId, "user", question);
         long t0 = System.currentTimeMillis();
-        // 当前请求的 OTel traceId（rag.chat 根 span）：须在业务线程取好传下去——
-        // 流式回调跑在 reactor-netty 线程，ambient context 不保证恢复；span 结束后 SpanContext 仍可读
         String otelTraceId = currentTraceId();
-        // 0. 查询归一化：① 规则式（去噪 + 疑问→陈述）→ ② LLM 改写（带历史上下文消解指代词）
-        // QueryNormalizer 是 rag-common 静态工具（AOP 够不到），手动开 step 埋点
         String ruleNormalized = obsTemplate.step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
-
         if (ruleNormalized.isBlank()) {
             ruleNormalized = question == null ? "" : question.trim();
         }

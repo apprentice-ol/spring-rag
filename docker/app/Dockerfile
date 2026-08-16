@@ -1,6 +1,6 @@
 # springai-rag 运行时镜像：app.jar + lib 全部打进镜像（自包含，不依赖运行时挂载）。
 #
-# build context = 项目根（docker-compose.server.yml 所在目录），需含：
+# build context = 项目根（compose 的 build.context 指向 `.`，本文件在 docker/app/ 下由 dockerfile 键引用），需含：
 #   - rag-core-0.0.1-SNAPSHOT.jar   build-local.sh 产出的瘦 jar（rag-core/target/ 下），scp 原名上传即可，无需重命名
 #   - lib/                          build-local.sh 产出的依赖（rag-core/target/lib/），scp 成 lib/
 #

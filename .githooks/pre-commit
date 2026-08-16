@@ -1,0 +1,4 @@
+#!/bin/sh
+# 提交前敏感信息检查（公网 IP / 邮箱账号 / 密码 / API key）
+# 误报逃生：git commit --no-verify
+bash "$(git rev-parse --show-toplevel)/scripts/check-secrets.sh" --cached

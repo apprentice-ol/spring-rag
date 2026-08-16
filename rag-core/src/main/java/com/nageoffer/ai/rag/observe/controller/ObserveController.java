@@ -21,11 +21,11 @@ public class ObserveController {
 
     private final OpenObserveProperties openobserveProperties;
 
-    /** 前端「链路追踪」页展示的 OO 只读账号（供查看 trace/logs 登录用；生产务必覆盖默认值） */
-    @Value("${OO_VIEWER_EMAIL:viewer@springai-rag.com}")
+    /** 前端「链路追踪」页展示的 OO 只读账号（供查看 trace/logs 登录用；真实值放 .env，默认是 dev 假值） */
+    @Value("${OO_VIEWER_EMAIL:viewer@dev.local}")
     private String viewerEmail;
 
-    @Value("${OO_VIEWER_PASSWORD:Viewer@rag2026}")
+    @Value("${OO_VIEWER_PASSWORD:DevOnlyViewer}")
     private String viewerPassword;
 
     /** 链路追踪跳转链接 + 只读账号（前端 TraceView 调用） */

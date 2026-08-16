@@ -72,27 +72,19 @@ service:
       exporters: [otlphttp/openobserve]
     traces/langfuse:
       receivers: [otlp]
-      processors: [filter/drop-noise, transform/langfuse, batch]
+      processors: [filter/drop-noise, batch]
       exporters: [otlphttp/langfuse]
 ```
+
+> 注：早期版本在 collector 里有 `transform/langfuse` processor（OTTL 做 rag.* → langfuse.* 映射），
+> 现已**上收应用侧**（llm-observability-backends 的 `LangfuseAttributeKeyMapper`，与 collector 是否在场无关），
+> collector 只做扇出/过滤/批量，见配置文件头注释。
 
 ### 新增/替换后端三步（无需改业务代码）
 
 1. 在 `exporters` 加一个 `otlphttp/<后端名>`（endpoint + 认证 headers）。
-2. 若该后端需要专属字段语义，在 `processors` 加一个 `transform/<后端名>`（OTTL 映射）。
+2. 若该后端需要专属字段语义（rag.* → 后端字段映射），在**应用侧**实现属性映射器（参考 `LangfuseAttributeKeyMapper`）；collector 内不再放 transform。
 3. 在 `service.pipelines` 加一条 pipeline，或在已有 pipeline 的 exporters 列表里增删。
-
-Langfuse 的映射示例（collector 里，应用无感）：
-
-```yaml
-transform/langfuse:
-  error_mode: ignore
-  trace_statements:
-    - context: span
-      statements:
-        - set(attributes["langfuse.observation.input"], attributes["rag.trace.input"]) where attributes["rag.trace.input"] != nil
-        - set(attributes["langfuse.observation.output"], attributes["rag.trace.output"]) where attributes["rag.trace.output"] != nil
-```
 
 ## 4. 跨线程上下文
 
@@ -109,7 +101,7 @@ transform/langfuse:
 
 ## 6. 升级后验证清单
 
-- 编译启动后发一轮对话：Langfuse trace 表 input/output 应有值（collector 的 transform 生效）。
+- 编译启动后发一轮对话：Langfuse trace 表 input/output 应有值（应用侧 `LangfuseAttributeKeyMapper` 映射生效，collector 无需 transform）。
 - 每条 trace latency 应为秒级，不出现几百秒、新 trace 挂旧 trace（旧 scope 泄漏已修）。
 - OpenObserve trace 视图行为不变（`rag.chat`/步骤 span 的 input/output 依旧）。
 - 关掉 `rag.observability.llm.*` 两个开关后：trace 结构不变，仅缺失 LLM 用法/原文属性。

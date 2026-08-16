@@ -17,6 +17,20 @@
 cd /d/04_projects/20_springai-rag && bash build-local.sh
 ```
 
+## 部署（Docker）
+
+```bash
+# 本地：docker compose up -d --build
+# 服务器：docker compose -f docker-compose.server.yml up -d --build
+```
+
+完整部署流程（产物 scp、.env 变量、OO viewer 账号、端口、表结构迁移、常见运维）见 **[docker/README.md](./docker/README.md)**；
+从本地打包到服务器运行的分步操作手册见 **[docs/deploy.md](./docs/deploy.md)**。
+
+> 提交安全：pre-commit 钩子（`scripts/check-secrets.sh`）会拦截真实 IP / 账号 / 密码 / API key——示例一律用
+> `xxx`、`<占位>` 或 `${VAR}`，真实值只放 `.env`（`.env` / `.env.local` / `.env.prod` 均已 gitignore）。
+> clone 后启用：`git config core.hooksPath .githooks`
+
 ## 模块结构（自包含）
 
 ```
