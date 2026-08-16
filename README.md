@@ -9,7 +9,7 @@
 - **原项目仓库**：
   - Gitee：https://gitee.com/nageoffer/ragent.git
   - GitHub：https://github.com/nageoffer/ragent.git
-- **定位**：本项目为学习复刻的 demo，非 ragent 官方版本；采用 Spring AI 技术栈重写，代码结构与编排方式与原项目不同。
+- **定位**：本项目为学习复刻的 demo，非 ragent 官方版本；采用 Spring AI 技术栈重写。
 - **本项目仓库**：https://gitee.com/apprentice-ol/spring-rag
 
 ## 功能特性
