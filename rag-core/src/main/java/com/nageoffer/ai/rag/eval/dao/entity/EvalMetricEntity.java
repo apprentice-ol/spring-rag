@@ -46,6 +46,12 @@ public class EvalMetricEntity {
     @TableField(value = "expected_doc_names", typeHandler = JsonbTypeHandler.class)
     private String expectedDocNames;
 
+    /** 标准答案（黄金集 sa_eval_item.expected_answer 冗余投影，答案评测展示用） */
+    private String expectedAnswer;
+
+    /** 系统生成答案（answerEval 评测时 LLM 生成，前端「系统 vs 标准」对照用） */
+    private String generatedAnswer;
+
     /** 指标名：recall_at_5 / precision_at_5 / mrr / ndcg 等 */
     private String metricName;
 
@@ -67,6 +73,9 @@ public class EvalMetricEntity {
 
     /** 该条检索是否启用了查询改写（QueryRewriter） */
     private Boolean rewrite;
+
+    /** 该条是否仅检索期望文档（per-question 模式；重评可覆盖原 run 设置，区分上限对照记录） */
+    private Boolean perQuestion;
 
     /** traceId（预留，关联 OpenObserve） */
     private String traceId;

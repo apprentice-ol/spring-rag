@@ -11,7 +11,7 @@ import {
   parseDocIds,
   parseDetail,
   statusText,
-  isRetrievalMetric,
+  metricStage,
   scoreTone,
   parseAggregate,
   parseParamSnapshot,
@@ -35,23 +35,40 @@ const datasetName = computed(() => {
 const loading = ref(false)
 const guideOpen = ref(false) // 指标解读：右侧抽屉
 
+// 指标明细 item 级分页（单 run 全量可达数千题/数十 MB）
+const metricPage = ref(1)
+const metricPageSize = ref(20)
+const itemTotal = ref(0)
+
+// 透视表不用表格内置分页：数据源是服务端拉回的单页数据，内置分页器未绑 total 时
+// antdv 会用 data.length（=当前页条数）当总数，把页码锁死在第 1 页且总数显示错误。
+// 翻页/改每页条数统一走表格下方绑定服务端 itemTotal 的独立分页器。
+
 const aggregate = computed(() => parseAggregate(run.value))
 const params = computed(() => parseParamSnapshot(run.value))
 
-async function load() {
+async function load(resetPage = false) {
   loading.value = true
   try {
+    if (resetPage) metricPage.value = 1
     run.value = await getRun(props.runId)
-    metrics.value = await getMetrics(props.runId)
+    const page = await getMetrics(props.runId, metricPage.value, metricPageSize.value)
+    metrics.value = page.records
+    itemTotal.value = page.total
   } catch {
     /* ignore */
   } finally {
     loading.value = false
   }
 }
-onMounted(load)
+async function onPageChange(p: number, size: number) {
+  metricPage.value = p
+  metricPageSize.value = size
+  await load()
+}
+onMounted(() => load(true))
 onUnmounted(() => resizeObserver?.disconnect())
-watch(() => props.runId, load)
+watch(() => props.runId, () => load(true))
 
 const metricNames = computed(() => {
   const names = new Set<string>()
@@ -69,7 +86,10 @@ interface ReevalRow {
   attempt: number
   paradigm: string | null
   rewrite: boolean
+  perQuestion: boolean
   remark: string | null
+  expectedAnswer: string | null
+  generatedAnswer: string | null
   hit: number | null
   retrieved: number
   retrievedNames: string[]
@@ -88,6 +108,8 @@ interface PivotRow {
   retrieved: number
   retrievedNames: string[]
   expectedNames: string[]
+  expectedAnswer: string | null
+  generatedAnswer: string | null
   reevals: ReevalRow[]
   latestRemark: string | null
   [metric: string]: unknown
@@ -119,7 +141,10 @@ const pivotRows = computed<PivotRow[]>(() => {
         attempt: m.attempt,
         paradigm: m.paradigm ?? null,
         rewrite: !!m.rewrite,
+        perQuestion: !!m.perQuestion,
         remark: m.remark || null,
+        expectedAnswer: m.expectedAnswer ?? null,
+        generatedAnswer: m.generatedAnswer ?? null,
         hit: isError ? null : det?.hitCount ?? null,
         retrieved: parseDocIds(m.retrievedDocIds).length,
         retrievedNames: parseDocIds(m.retrievedDocNames),
@@ -151,6 +176,8 @@ const pivotRows = computed<PivotRow[]>(() => {
         retrieved: parseDocIds(m.retrievedDocIds).length,
         retrievedNames: parseDocIds(m.retrievedDocNames),
         expectedNames: expectedNamesOf(m, det),
+        expectedAnswer: m.expectedAnswer ?? null,
+        generatedAnswer: m.generatedAnswer ?? null,
         reevals,
         latestRemark: reevals[0]?.remark || null,
       }
@@ -289,10 +316,11 @@ async function retry() {
   }
 }
 
-// ── 单条重评（保留历史，新增 attempt；可选启用改写、可填备注）──
+// ── 单条重评（保留历史，新增 attempt；可选启用改写/per-question、可填备注）──
 const reevalModalOpen = ref(false)
 const reevalItem = ref<PivotRow | null>(null)
 const reevalRewrite = ref(false)
+const reevalPerQuestion = ref(false)
 const reevalRemark = ref('')
 const reevalParadigm = ref('')
 const reevaluating = ref(false)
@@ -300,6 +328,8 @@ const reevaluating = ref(false)
 function openReeval(row: PivotRow) {
   reevalItem.value = row
   reevalRewrite.value = false
+  // 默认带出原 run 的 per-question 设置，可改（提交时始终传明确值，覆盖原快照）
+  reevalPerQuestion.value = !!params.value?.perQuestion
   reevalRemark.value = ''
   reevalParadigm.value = ''
   reevalModalOpen.value = true
@@ -313,6 +343,7 @@ async function submitReeval() {
       rewriteEnabled: reevalRewrite.value,
       remark: reevalRemark.value.trim() || undefined,
       paradigm: reevalParadigm.value || undefined,
+      perQuestion: reevalPerQuestion.value,
     })
     message.success(`重评完成（attempt #${attempt}）`)
     reevalModalOpen.value = false
@@ -406,6 +437,19 @@ function durMin(): string {
           <span class="p-label">查询改写</span>
           <b :class="params.rewrite ? 'on' : 'off'">{{ params.rewrite ? '开' : '关' }}</b>
         </span>
+        <span class="p-item">
+          <span class="p-label">答案评测</span>
+          <b :class="params.answerEval ? 'on' : 'off'">{{ params.answerEval ? '开' : '关' }}</b>
+        </span>
+        <span class="p-item">
+          <span class="p-label">限定期望文档</span>
+          <b :class="params.perQuestion ? 'on' : 'off'">{{ params.perQuestion ? '开' : '关' }}</b>
+        </span>
+        <!-- 抽样说明：范式/数量决策信息（如"抽样数量 ≥ 范围内条目数，已全量评测该范式"） -->
+        <span v-if="params.note" class="p-item note">
+          <span class="p-label">抽样说明</span>
+          <b>{{ params.note }}</b>
+        </span>
       </div>
 
       <!-- 聚合指标卡（与概览页 KPI 卡同风格：白卡 + 阶段徽标 + 分档色数字） -->
@@ -418,8 +462,8 @@ function durMin(): string {
         >
           <div class="agg-head">
             <span class="agg-name">{{ metricLabel(String(name)) }}</span>
-            <span class="agg-stage" :class="isRetrievalMetric(String(name)) ? 'stage-ret' : 'stage-sort'">
-              {{ isRetrievalMetric(String(name)) ? '检索' : '排序' }}
+            <span class="agg-stage" :class="metricStage(String(name)).cls">
+              {{ metricStage(String(name)).label }}
             </span>
           </div>
           <div class="agg-mean">{{ fmtScore(m.mean) }}</div>
@@ -453,14 +497,14 @@ function durMin(): string {
               <a-input-number v-model:value="badcaseThreshold" :min="0" :max="1" :step="0.1" style="width: 90px" />
             </template>
           </div>
-          <span class="toolbar-hint">显示 {{ filteredRows.length }} / {{ pivotRows.length }} 条</span>
+          <span class="toolbar-hint">当前页 {{ filteredRows.length }} / {{ pivotRows.length }} · 共 {{ itemTotal }} 题</span>
         </div>
 
         <div ref="tableWrap" class="table-wrap">
           <a-table
             :columns="pivotColumns"
             :data-source="filteredRows"
-            :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
+            :pagination="false"
             size="middle"
             row-key="itemId"
             :scroll="{ x: 1320, y: tableBodyHeight }"
@@ -502,6 +546,16 @@ function durMin(): string {
                 <div class="exp-summary">
                   命中 {{ record.hit ?? '-' }} / 期望 {{ record.expected ?? '-' }} · 实际召回 {{ record.retrieved }} 篇
                 </div>
+                <!-- 标准答案置顶：答案评测对照的基准 -->
+                <div v-if="record.expectedAnswer" class="exp-row ans-row">
+                  <span class="exp-label">标准答案</span>
+                  <span class="ans-text">{{ record.expectedAnswer }}</span>
+                </div>
+                <!-- 系统回答：answerEval 主批次的生成结果（重评每次的答案在下方重评历史里） -->
+                <div v-if="record.generatedAnswer" class="exp-row ans-row">
+                  <span class="exp-label">系统回答</span>
+                  <span class="ans-text">{{ record.generatedAnswer }}</span>
+                </div>
                 <!-- 期望召回：命中=绿、未召回=红，badcase 一眼定位 -->
                 <div class="exp-row">
                   <span class="exp-label">期望召回</span>
@@ -538,6 +592,7 @@ function durMin(): string {
                     <span class="rv-attempt">#{{ r.attempt }}</span>
                     <a-tag v-if="r.paradigm" color="blue" class="rv-tag">{{ paradigmLabel(r.paradigm) }}</a-tag>
                     <a-tag :color="r.rewrite ? 'green' : 'default'" class="rv-tag">{{ r.rewrite ? '含改写' : '裸检索' }}</a-tag>
+                    <a-tag v-if="r.perQuestion" color="orange" class="rv-tag">仅期望文档</a-tag>
                     <template v-if="r.error">
                       <span class="rv-error">检索失败：{{ r.error }}</span>
                     </template>
@@ -546,6 +601,8 @@ function durMin(): string {
                       <span v-for="k in Object.keys(r.scores)" :key="k" class="rv-score">
                         {{ metricLabel(k) }} {{ fmtScore(r.scores[k]) }}
                       </span>
+                      <span v-if="r.expectedAnswer" class="rv-ans">标准答案：{{ r.expectedAnswer }}</span>
+                      <span v-if="r.generatedAnswer" class="rv-ans">系统回答：{{ r.generatedAnswer }}</span>
                       <span v-if="r.expectedNames.length" class="rv-exp">期望：{{ r.expectedNames.join('，') }}</span>
                       <span v-if="r.retrievedNames.length" class="rv-docs">实际召回：{{ r.retrievedNames.join('，') }}</span>
                     </template>
@@ -555,6 +612,20 @@ function durMin(): string {
               </div>
             </template>
           </a-table>
+          <!-- 指标明细 item 级分页（total 按 item 计，每页含这些 item 的全部指标行）；翻页走服务端 -->
+          <div class="metrics-pagination">
+            <a-pagination
+              :current="metricPage"
+              :page-size="metricPageSize"
+              :total="itemTotal"
+              show-size-changer
+              :page-size-options="['10', '20', '50', '100']"
+              size="small"
+              show-quick-jumper
+              :show-total="(t: number) => `共 ${t} 题`"
+              @change="onPageChange"
+            />
+          </div>
         </div>
       </div>
     </a-spin>
@@ -580,9 +651,13 @@ function durMin(): string {
         <a-form-item>
           <a-checkbox v-model:checked="reevalRewrite">启用查询改写（LLM 改写后再检索）</a-checkbox>
         </a-form-item>
+        <a-form-item>
+          <a-checkbox v-model:checked="reevalPerQuestion">仅检索期望文档（限定在该题期望文档内，排除语料噪声的上限对照）</a-checkbox>
+        </a-form-item>
         <a-form-item label="备注（可选）">
           <a-textarea v-model:value="reevalRemark" :rows="3" placeholder="如：测试改写后能否召回期望文档" />
         </a-form-item>
+        <div class="reeval-tip">重评会重新检索并打分；条目有标准答案时，同时生成系统回答并与标准答案对照展示。</div>
       </a-form>
     </a-modal>
 
@@ -608,6 +683,11 @@ function durMin(): string {
 </template>
 
 <style scoped>
+.metrics-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 0 4px;
+}
 /* ── 整页骨架：不滚动，表格卡内部滚动（表头 + 参数卡 + 聚合卡固定） ── */
 .run-detail {
   padding: 20px 24px;
@@ -727,6 +807,10 @@ function durMin(): string {
   color: #b07810;
   background: var(--color-signal-bg);
 }
+.agg-stage.stage-answer {
+  color: var(--color-success);
+  background: var(--color-success-bg);
+}
 .agg-mean {
   font-size: 26px;
   font-weight: 600;
@@ -816,6 +900,14 @@ function durMin(): string {
   color: var(--color-ink-tertiary);
   font-weight: 400;
 }
+.p-item.note {
+  flex-basis: 100%;
+}
+.p-item.note b {
+  font-weight: 400;
+  color: var(--color-ink-secondary);
+  line-height: 1.5;
+}
 
 .op {
   color: var(--color-ink-tertiary);
@@ -878,6 +970,22 @@ function durMin(): string {
   flex-shrink: 0;
   color: var(--color-ink-tertiary);
   line-height: 22px;
+}
+/* 答案对照：标准答案 / 系统回答 */
+.ans-row {
+  align-items: flex-start;
+}
+.ans-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+  color: var(--color-ink);
+  background: var(--color-surface-secondary);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font-size: 12px;
 }
 .doc-chip {
   display: inline-flex;
@@ -955,6 +1063,13 @@ function durMin(): string {
 .rv-score {
   margin-right: 8px;
 }
+.rv-ans {
+  display: block;
+  color: var(--color-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 2px 0;
+}
 .rv-exp {
   display: block;
   color: var(--color-primary);
@@ -983,6 +1098,11 @@ function durMin(): string {
   padding: 8px 12px;
   border-radius: var(--radius-md);
   margin-bottom: 12px;
+  line-height: 1.6;
+}
+.reeval-tip {
+  font-size: 12px;
+  color: var(--color-ink-tertiary);
   line-height: 1.6;
 }
 

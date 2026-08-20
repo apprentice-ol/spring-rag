@@ -23,7 +23,10 @@ import com.nageoffer.ai.rag.ingestion.engine.parser.model.TableBlock;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 表格 chunker：按 {@code maxChars} 体量预算累加切分数据行，<b>每个 chunk 都包含完整表头</b>
@@ -41,6 +44,9 @@ import java.util.List;
 @Component
 public class TableChunker implements BlockChunker<TableBlock> {
 
+    /** 各类换行归一（cell 清洗用；大表 = 行×列 次调用，预编译） */
+    private static final Pattern NEWLINE = Pattern.compile("\\r\\n|\\r|\\n");
+
     @Override
     public List<VectorChunk> chunk(TableBlock block, ChunkContext ctx) {
         if (block == null) {
@@ -57,12 +63,16 @@ public class TableChunker implements BlockChunker<TableBlock> {
         int budget = Math.max(1, ctx.config().maxChars());
         int maxRows = Math.max(1, ctx.config().rowsPerChunk());
         String sectionContext = buildSectionContext(block);
+        // 行级 key-value 渲染缓存（局部、按行对象身份）：预算度量与嵌入文本拼装共用一份渲染结果，
+        // 此前每行渲染两遍——一遍只为取 length
+        Map<List<String>, String> kvCache = new IdentityHashMap<>();
+
         List<VectorChunk> result = new ArrayList<>();
         int chunkIndex = ctx.startIndex();
 
         if (rows.isEmpty()) {
             // 仅表头：产生一个 chunk，标 blockType=TABLE
-            result.add(buildChunk(headers, List.of(), block, ctx, chunkIndex, sectionContext));
+            result.add(buildChunk(headers, List.of(), block, ctx, chunkIndex, sectionContext, kvCache));
             return result;
         }
 
@@ -70,18 +80,18 @@ public class TableChunker implements BlockChunker<TableBlock> {
         List<List<String>> group = new ArrayList<>();
         int groupCost = 0;
         for (List<String> row : rows) {
-            int rowCost = renderKeyValueRow(headers, row).length();
+            int rowCost = kvCache.computeIfAbsent(row, r -> renderKeyValueRow(headers, r)).length();
             boolean overCap = group.size() >= maxRows;
             boolean overBudget = !group.isEmpty() && groupCost + rowCost > budget;
             if (overCap || overBudget) {
-                result.add(buildChunk(headers, group, block, ctx, chunkIndex++, sectionContext));
+                result.add(buildChunk(headers, group, block, ctx, chunkIndex++, sectionContext, kvCache));
                 group = new ArrayList<>();
                 groupCost = 0;
             }
             group.add(row);
             groupCost += rowCost;
         }
-        result.add(buildChunk(headers, group, block, ctx, chunkIndex, sectionContext));
+        result.add(buildChunk(headers, group, block, ctx, chunkIndex, sectionContext, kvCache));
         return result;
     }
 
@@ -90,10 +100,11 @@ public class TableChunker implements BlockChunker<TableBlock> {
                                    TableBlock block,
                                    ChunkContext ctx,
                                    int chunkIndex,
-                                   String sectionContext) {
+                                   String sectionContext,
+                                   Map<List<String>, String> kvCache) {
         // 这个是属于文本
         String markdown = renderMarkdownTable(headers, rows);
-        String embeddingText = buildEmbeddingText(headers, rows, sectionContext);
+        String embeddingText = buildEmbeddingText(headers, rows, sectionContext, kvCache);
         // 章节标题注入：与 CodeChunker 一致（取最近的有语义章节，跳过"实现代码"等通用子标题），
         // 表格块带上章节归属，检索"XX 章节的表格"时 BM25/向量/rerank 全链路命中
         String section = CodeChunker.resolveSection(ctx.outlinePath());
@@ -120,8 +131,9 @@ public class TableChunker implements BlockChunker<TableBlock> {
      * 把语义关系写进字面，sparse/dense 检索均更优（参考 RAGFlow、STC）
      * sectionContext（sheet/表头等）随每块嵌入即 contextual chunking，切碎的行也带表身份
      */
-    private String buildEmbeddingText(List<String> headers, List<List<String>> rows, String sectionContext) {
-        String kvRows = renderKeyValueRows(headers, rows);
+    private String buildEmbeddingText(List<String> headers, List<List<String>> rows,
+                                      String sectionContext, Map<List<String>, String> kvCache) {
+        String kvRows = renderKeyValueRows(headers, rows, kvCache);
         if (sectionContext == null || sectionContext.isEmpty()) {
             return kvRows;
         }
@@ -134,10 +146,11 @@ public class TableChunker implements BlockChunker<TableBlock> {
     /**
      * 把数据行渲染成 key-value 文本：每行用 {@link #renderKeyValueRow} 渲染（跳过整行空），多行用换行连接
      */
-    private String renderKeyValueRows(List<String> headers, List<List<String>> rows) {
+    private String renderKeyValueRows(List<String> headers, List<List<String>> rows,
+                                      Map<List<String>, String> kvCache) {
         StringBuilder sb = new StringBuilder();
         for (List<String> row : rows) {
-            String line = renderKeyValueRow(headers, row);
+            String line = kvCache.computeIfAbsent(row, r -> renderKeyValueRow(headers, r));
             if (line.isEmpty()) {
                 continue;
             }
@@ -177,7 +190,7 @@ public class TableChunker implements BlockChunker<TableBlock> {
      * 把 cell 内换行压成空格：嵌入文本无需保留换行，避免 key/value 中间夹断行影响检索
      */
     private static String oneLine(String text) {
-        return text.replaceAll("\\r\\n|\\r|\\n", " ");
+        return NEWLINE.matcher(text).replaceAll(" ");
     }
 
     /**
@@ -215,8 +228,7 @@ public class TableChunker implements BlockChunker<TableBlock> {
         if (cell == null || cell.isEmpty()) {
             return "";
         }
-        return cell.replace("|", "\\|")
-                .replaceAll("\\r\\n|\\r|\\n", "<br>");
+        return NEWLINE.matcher(cell.replace("|", "\\|")).replaceAll("<br>");
     }
 
     private void appendSeparator(StringBuilder sb, int colCount) {

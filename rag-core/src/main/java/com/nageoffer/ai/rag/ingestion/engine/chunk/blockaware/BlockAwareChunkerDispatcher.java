@@ -16,6 +16,8 @@
  */
 
 package com.nageoffer.ai.rag.ingestion.engine.chunk.blockaware;
+import com.nageoffer.ai.rag.config.VlmClient;
+import com.nageoffer.ai.rag.config.properties.VlmProperties;
 import com.nageoffer.ai.rag.ingestion.engine.chunk.VectorChunk;
 
 import com.nageoffer.ai.rag.ingestion.engine.parser.model.Block;
@@ -31,6 +33,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 
 /**
  * BlockAwareChunker 调度器
@@ -53,6 +60,8 @@ public class BlockAwareChunkerDispatcher {
     private final ImageChunker imageChunker;
     private final CodeChunker codeChunker;
     private final ListChunker listChunker;
+    private final VlmClient vlmClient;
+    private final VlmProperties vlmProperties;
     private final ChunkPacker chunkPacker;
 
     /**
@@ -66,6 +75,8 @@ public class BlockAwareChunkerDispatcher {
         if (blocks == null || blocks.isEmpty()) {
             return List.of();
         }
+
+        blocks = pregenerateImageDescriptions(blocks);
 
         List<String> outlinePath = List.of();
         List<VectorChunk> result = new ArrayList<>();
@@ -90,6 +101,67 @@ public class BlockAwareChunkerDispatcher {
                 beforePack, packed.size(), config.packTargetChars(), config.packMinChars(),
                 config.packMaxChars(), config.overlapChars());
         return packed;
+    }
+
+    /**
+     * VLM 图片描述并行预生成：无描述的 ImageBlock 按信号量限流并发调 VLM，结果以重建 record 写回。
+     * <p>此前在分发循环内逐图<b>串行同步</b>调 VLM（秒级/次），20 张图拖慢整个 Chunker 节点数分钟。
+     * 预生成失败的块保持原样——分发阶段 {@link ImageChunker} 会再试一次，
+     * 失败语义（failOnError 抛错中断）仍由它兜底。</p>
+     */
+    private List<Block> pregenerateImageDescriptions(List<Block> blocks) {
+        if (!vlmProperties.isEnabled()) {
+            return blocks;
+        }
+        List<ImageBlock> pending = blocks.stream()
+                .filter(ImageBlock.class::isInstance)
+                .map(ImageBlock.class::cast)
+                .filter(b -> b.asset() != null && (b.description() == null || b.description().isBlank()))
+                .toList();
+        if (pending.isEmpty()) {
+            return blocks;
+        }
+
+        Semaphore limiter = new Semaphore(vlmProperties.getConcurrency());
+        Map<String, ImageBlock> replaced = new ConcurrentHashMap<>();
+        long t0 = System.currentTimeMillis();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CompletableFuture<?>[] futures = pending.stream()
+                    .map(b -> CompletableFuture.runAsync(() -> {
+                        try {
+                            limiter.acquire();
+                            try {
+                                String desc = vlmClient.describe(b.asset().publicUrl());
+                                if (desc != null && !desc.isBlank()) {
+                                    replaced.put(b.id(), new ImageBlock(b.id(), b.provenance(), b.outlinePath(),
+                                            b.asset(), b.caption(), b.altText(), desc));
+                                }
+                            } finally {
+                                limiter.release();
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }, executor))
+                    .toArray(CompletableFuture[]::new);
+            CompletableFuture.allOf(futures).join();
+        }
+        log.info("[BlockAware] VLM 图片描述并行预生成: {}/{} 张成功, 并发={}, 耗时={}ms",
+                replaced.size(), pending.size(), vlmProperties.getConcurrency(),
+                System.currentTimeMillis() - t0);
+
+        if (replaced.isEmpty()) {
+            return blocks;
+        }
+        List<Block> out = new ArrayList<>(blocks.size());
+        for (Block b : blocks) {
+            if (b instanceof ImageBlock img && replaced.containsKey(img.id())) {
+                out.add(replaced.get(img.id()));
+            } else {
+                out.add(b);
+            }
+        }
+        return out;
     }
 
     private List<VectorChunk> chunkOne(Block b, ChunkContext ctx) {

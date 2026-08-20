@@ -1,17 +1,21 @@
 package com.nageoffer.ai.rag.chat.retrieval;
 
 import com.nageoffer.ai.rag.chat.postprocessor.SearchResultPostProcessor;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
+import com.nageoffer.ai.rag.config.properties.ChatProperties;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
+import jakarta.annotation.PostConstruct;
 
 /**
  * 多通道检索引擎。
@@ -35,7 +39,14 @@ public class MultiChannelRetrievalEngine {
 
     private final List<SearchChannel> channels;
     private final List<SearchResultPostProcessor> postProcessors;
+    private final ChatProperties chatProperties;
     private final Executor ragContextExecutor;
+
+    /** 责任链顺序固定（getOrder 不随请求变），启动期排好一次即可（原实现每请求 filter+sorted） */
+    @PostConstruct
+    void sortProcessorChain() {
+        postProcessors.sort(Comparator.comparingInt(SearchResultPostProcessor::getOrder));
+    }
 
     /**
      * 执行多通道检索 + 后处理链。
@@ -60,7 +71,7 @@ public class MultiChannelRetrievalEngine {
         // 2. 并行执行各通道
         List<String> channelNameList = enabledChannels.stream().map(SearchChannel::getName).toList();
         log.info("[多通道检索] 启用通道: {}", channelNameList);
-        long channelTimeoutMs = 5000;
+        long channelTimeoutMs = chatProperties.getRetrieval().getChannelTimeoutMs();
         List<CompletableFuture<SearchChannelResult>> futures = enabledChannels.stream()
                 .map(ch -> CompletableFuture.supplyAsync(() -> {
                     try {
@@ -80,7 +91,13 @@ public class MultiChannelRetrievalEngine {
                 }, ragContextExecutor)
                                 .orTimeout(channelTimeoutMs, TimeUnit.MILLISECONDS)
                                 .exceptionally(ex -> {
-                                    log.error("[检索通道][{}] 超时({}ms), 丢弃该通道结果", ch.getName(), channelTimeoutMs);
+                                    // 区分超时与真实故障：通道业务异常已在上面 catch，走到这里的基本是超时；
+                                    // 但 orTimeout 不中断底层调用（JDBC/HTTP 仍占用池线程），日志须如实反映
+                                    if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
+                                        log.warn("[检索通道][{}] 超时({}ms), 丢弃该通道结果", ch.getName(), channelTimeoutMs);
+                                    } else {
+                                        log.error("[检索通道][{}] 失败, 丢弃该通道结果", ch.getName(), ex);
+                                    }
                                     return SearchChannelResult.builder()
                                             .channelType(ch.getType())
                                             .channelName(ch.getName())
@@ -103,10 +120,9 @@ public class MultiChannelRetrievalEngine {
 
         log.info("[多通道检索] 原始召回合计 {} 条（{} 个通道）, 耗时={}ms", merged.size(), enabledChannels.size(), System.currentTimeMillis() - t0);
 
-        // 4. 执行后处理器链
+        // 4. 执行后处理器链（构造期已按 order 排好，此处只过滤 isEnabled）
         List<SearchResultPostProcessor> sortedProcessors = postProcessors.stream()
                 .filter(p -> p.isEnabled(context))
-                .sorted(Comparator.comparingInt(SearchResultPostProcessor::getOrder))
                 .toList();
 
         List<String> enabledProcessorNames = sortedProcessors.stream().map(SearchResultPostProcessor::getName).toList();
@@ -139,18 +155,13 @@ public class MultiChannelRetrievalEngine {
                     c.getRank(),
                     c.getOriginalScore() != null ? String.format("%.4f", c.getOriginalScore()) : "N/A",
                     c.getScore() != null ? String.format("%.4f", c.getScore()) : "N/A",
-                    src, truncate(c.getContent(), 60));
+                    src, TextPreviews.truncate(c.getContent(), 60));
         }
         if (processed.size() > 5) {
             log.info("[多通道检索]   ... 还有 {} 条", processed.size() - 5);
         }
 
         return new RetrievalResult(allResults, processed, System.currentTimeMillis() - t0);
-    }
-
-    private static String truncate(String text, int maxLen) {
-        if (text == null) return "";
-        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 
     /**

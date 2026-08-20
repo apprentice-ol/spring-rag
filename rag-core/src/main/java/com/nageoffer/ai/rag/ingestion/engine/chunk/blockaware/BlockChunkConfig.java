@@ -22,14 +22,16 @@ package com.nageoffer.ai.rag.ingestion.engine.chunk.blockaware;
  * <p>
  * 提供常用的切分参数；具体 chunker 按需读取自己关心的字段
  *
- * @param maxChars          单个 chunker 切分上限（ParagraphChunker / CodeChunker 长块切分时用）
- * @param overlapChars      chunk 重叠字符数（block-aware 路径恒 0）
+ * @param maxChars          单个 chunker 切分上限（ParagraphChunker / CodeChunker / ListChunker 兜底切分时用）
+ * @param overlapChars      chunk 重叠字符数（按文档语言校准：中文 100 / 英文 200；
+ *                          仅 ParagraphChunker→BoundaryAwareSplitter 消费，packer 块级重叠未接线）
  * @param packTargetChars   packer 贪心合并目标：累加到该值附近即倾向于断开，尽量贴合（1400）
  * @param packMinChars      packer 合并下限：当前 chunk 不足该值时允许"忍一次超限"吸入下一块（600）
- * @param packMaxChars      packer 合并硬上限：单个 chunk 不可超过此值（1800）
+ * @param packMaxChars      packer 合并硬上限：单个 chunk 不可超过此值（1800）；
+ *                          2026-08 起 ListChunker 分组同样受此预算约束（旧版只按条数分组产出 7k+ 巨块）
  * @param rowsPerChunk      TableChunker 每个 chunk 包含的数据行数
- * @param maxListItems      ListChunker 短列表 atomic 的阈值
- * @param listItemsPerChunk 长列表每个 chunk 的列表项数
+ * @param maxListItems      ListChunker 短列表 atomic 的条数阈值（还需渲染字符 ≤ packMaxChars 才 atomic）
+ * @param listItemsPerChunk 已废弃：ListChunker 改为字符预算分组后不再按固定条数切（保留字段兼容既有配置）
  */
 public record BlockChunkConfig(
         int maxChars,

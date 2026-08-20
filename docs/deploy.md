@@ -148,3 +148,58 @@ ssh root@<SERVER_IP> "cd /opt/spring-rag && docker compose -f docker-compose.ser
 | 前端某功能新增列后旧数据异常（如 Agent 轨迹无新记录） | 表缺列：init.sql 自动迁移未生效时手动补幂等 ALTER（实例见 docker/README.md「表结构迁移」） |
 | 日志刷 `Failed to connect to localhost:3000` | 服务器 compose 未含 `TELEMETRY_CONFIG`（旧版文件），git pull 最新 compose |
 | 图片不显示 | Nginx /storage 反代没配（见二-5） |
+| OpenObserve 频繁 OOM 宕机（Exit 137） | 4G 无 swap + WAL 重放内存峰值 + 无 restart 策略，见下方「OpenObserve OOM 排查与修复」 |
+
+### OpenObserve 频繁 OOM 宕机：排查与修复（2026-08-20）
+
+**现象**：OO 周期性挂掉，`docker ps -a` 显示 `Exited (137)`；`docker inspect` 输出
+`RestartCount=0 ExitCode=137 OOMKilled=false RestartPolicy=no`；启动日志在重放 WAL 后 5~15 秒内戛然而止。
+
+**证据链**：
+- `dmesg | grep -i "killed process|out of memory"` → `Out of memory: Kill process ... (openobserve) score 385 ... anon-rss:1491680kB`
+- `free -h` → 总内存 3.7G、Swap 0、已用 1.9G（宿主机还跑 mysql / redis / nginx / postfix / python）
+- 启动日志：`replay wal file ... json_size: 367MB, arrow_size: 532MB` → 启动时把积压 WAL 全量读进内存
+  （官方 issue [openobserve#5023](https://github.com/openobserve/openobserve/issues/5023)；
+  重放 OOM 已由 [PR #5021](https://github.com/openobserve/openobserve/pull/5021) 修复）
+- `OOMKilled=false` 的原因：系统级 OOM 不走容器 cgroup，Docker 不标记；
+  `RestartPolicy=no` 导致杀完不自动拉起
+
+**根因**：4G 无 swap 的宿主机同时跑 mysql + redis + nginx + postfix + RAG 全套；OO 启动重放 WAL 时
+RSS 冲到 ~1.5G 被内核 OOM killer 杀掉；被杀 → WAL 无法消化 → 下次启动积压更大 → 峰值更高 → 恶性循环。
+
+**已实施修复**（docker-compose.server.yml 的 `openobserve` 段）：
+- `restart: unless-stopped`、`mem_limit: 2g`
+- `ZO_MEM_TABLE_MAX_SIZE=512`（默认 = 总内存 50% ≈ 1.85G，4G 机器必须显式压小）
+- `ZO_MAX_FILE_SIZE_IN_MEMORY=128`（默认 256MB）
+- `ZO_MAX_FILE_SIZE_ON_DISK=64`（单个 WAL 文件上限）
+- `ZO_MAX_FILE_RETENTION_TIME=300`（默认 600s，WAL/MemTable 更早落盘）
+- `ZO_FILE_PUSH_INTERVAL=30`（默认 60s，WAL 转 parquet 更频繁，减少积压）
+- `ZO_COMPACT_FAST_MODE=false`（官方：关闭快速合并可减少约 50% 合并内存）
+
+参数含义以官方文档为准：<https://openobserve.ai/docs/administration/configuration/environment-variables>
+
+**救活步骤**：
+
+```bash
+# 本地传改好的 compose
+scp docker-compose.server.yml root@<SERVER_IP>:/opt/spring-rag/
+
+# 服务器：腾内存 → 重建 OO（配置变了会自动 recreate）→ 等 WAL 消化完 → 恢复
+docker stop rag-app
+systemctl stop mysqld postfix
+docker compose -f docker-compose.server.yml up -d openobserve
+docker logs -f rag-openobserve
+docker stats rag-openobserve        # 稳定后应 <1G
+docker compose -f docker-compose.server.yml up -d app
+systemctl start mysqld postfix
+```
+
+**加 swap（强烈建议，防下次启动被瞬杀）**：
+
+```bash
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+**长期建议**：升 8G 或把 OO 独立部署；跑批时 `TELEMETRY_STEP_LOG_LEVEL=OFF`、采样率降到 0.1，
+可显著减少 WAL 写入源（代价：OO 里 step 输入/输出明文缺失，span 本身仍在）。

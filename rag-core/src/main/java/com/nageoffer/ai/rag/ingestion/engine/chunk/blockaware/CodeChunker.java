@@ -78,15 +78,10 @@ public class CodeChunker implements BlockChunker<CodeBlock> {
             if (s == null || s.isBlank()) {
                 continue;
             }
-            String t = s.replaceAll("^#+\\s*", "").trim();
-            if (!GENERIC_CODE_HEADINGS.contains(t)) {
+            if (!CodeHeadings.isGeneric(s)) {
                 return s;
             }
         }
         return outlinePath.isEmpty() ? null : outlinePath.get(outlinePath.size() - 1);
     }
-
-    /** 无主题词的通用代码子标题（MinerU 常把代码归到这些标题下） */
-    private static final java.util.Set<String> GENERIC_CODE_HEADINGS = java.util.Set.of(
-            "实现代码", "代码", "代码示例", "示例", "Code", "Implementation", "代码实现");
 }

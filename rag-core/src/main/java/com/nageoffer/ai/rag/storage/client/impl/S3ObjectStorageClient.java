@@ -223,33 +223,32 @@ public class S3ObjectStorageClient implements ObjectStorageClient {
                                           long size,
                                           String contentType) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) presignedReq.url().openConnection();
-        try {
-            conn.setDoOutput(true);
-            conn.setRequestMethod("PUT");
-            conn.setFixedLengthStreamingMode(size);
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
+        conn.setDoOutput(true);
+        conn.setRequestMethod("PUT");
+        conn.setFixedLengthStreamingMode(size);
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
 
-            presignedReq.signedHeaders()
-                    .forEach((k, vs) -> vs.forEach(v -> conn.addRequestProperty(k, v)));
+        presignedReq.signedHeaders()
+                .forEach((k, vs) -> vs.forEach(v -> conn.addRequestProperty(k, v)));
 
-            if (contentType != null && !contentType.isBlank()) {
-                conn.setRequestProperty("Content-Type", contentType);
-            }
+        if (contentType != null && !contentType.isBlank()) {
+            conn.setRequestProperty("Content-Type", contentType);
+        }
 
-            try (OutputStream out = conn.getOutputStream()) {
-                inputStream.transferTo(out);
-            }
+        try (OutputStream out = conn.getOutputStream()) {
+            inputStream.transferTo(out);
+        }
 
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) {
-                String errorBody = readErrorStream(conn);
-                throw new IOException(String.format(
-                        "S3 流式上传失败: HTTP %d, url=%s, body=%s",
-                        code, presignedReq.url(), errorBody));
-            }
-        } finally {
+        int code = conn.getResponseCode();
+        if (code < 200 || code >= 300) {
+            String errorBody = readErrorStream(conn);
+            // 仅失败路径 disconnect：成功路径 disconnect 会主动关底层 socket，
+            // 击穿 keep-alive 连接复用，每次上传都完整 TCP 握手
             conn.disconnect();
+            throw new IOException(String.format(
+                    "S3 流式上传失败: HTTP %d, url=%s, body=%s",
+                    code, presignedReq.url(), errorBody));
         }
     }
 

@@ -25,7 +25,8 @@ import com.nageoffer.ai.rag.common.exception.ServiceException;
 import com.nageoffer.ai.rag.common.util.TextCleanupUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
-import org.apache.tika.parser.pdf.PDFParserConfig;
+import org.apache.tika.metadata.Metadata;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -35,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Apache Tika 文档解析器
@@ -49,11 +51,15 @@ public class TikaDocumentParser implements DocumentParser {
 
     private static final Tika TIKA = new Tika();
 
-    static {
-        PDFParserConfig pdfConfig = new PDFParserConfig();
-        pdfConfig.setExtractInlineImages(false);
-        pdfConfig.setExtractUniqueInlineImagesOnly(true);
-    }
+    /** 空行分段（预编译） */
+    private static final Pattern BLANK_LINE_SPLIT = Pattern.compile("\\n{2,}");
+
+    /**
+     * 单文档提取字符上限。Tika parseToString(is) 单参版默认 10 万字符静默截断，
+     * 长文档后半内容无声丢失；显式放开到 100 万（内存可控），超出仍截断并打 warn。
+     */
+    @Value("${rag.ingestion.tika-max-chars:1000000}")
+    private int tikaMaxChars;
 
     @Override
     public String getParserType() {
@@ -74,16 +80,20 @@ public class TikaDocumentParser implements DocumentParser {
 
         String text;
         try (ByteArrayInputStream is = new ByteArrayInputStream(content)) {
-            text = TIKA.parseToString(is);
+            // 带 writeLimit 的重载：单参版默认 10 万字符静默截断
+            text = TIKA.parseToString(is, new Metadata(), tikaMaxChars);
             text = TextCleanupUtil.cleanup(text);
         } catch (Exception e) {
             log.error("Tika 结构化解析失败，MIME 类型: {}", mimeType, e);
             throw new ServiceException("文档解析失败: " + e.getMessage());
         }
+        if (text.length() >= tikaMaxChars) {
+            log.warn("Tika 提取达到字符上限被截断: maxChars={}, 源类型={}", tikaMaxChars, mimeType);
+        }
 
         Provenance prov = Provenance.ofFile(extractSourceFile(options));
         List<Block> blocks = new ArrayList<>();
-        for (String segment : text.split("\\n{2,}")) {
+        for (String segment : BLANK_LINE_SPLIT.split(text)) {
             String trimmed = segment.strip();
             if (trimmed.isEmpty()) {
                 continue;

@@ -4,6 +4,8 @@ import com.nageoffer.ai.rag.config.properties.ChatProperties;
 import com.nageoffer.ai.rag.config.properties.VlmProperties;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
@@ -50,8 +52,8 @@ public class ChatClientConfig {
         // maxTokens=8192：放宽输出上限，使回答能包含多段代码块 + 对比表 + JSON 示例而不被截断。
         return builder
                 .defaultSystem(systemPrompt)
-                // 最终 RAG 回答用温度 0.0（贴近 ragent）：严格遵循资料边界与引用规则，输出稳定、确定。
-                // 意图分类/查询改写/入库增强走 ingestionChatClient，沿用 yaml 低温度（0.1）保证确定性。
+                // 最终 RAG 回答用低温 0.1：严格遵循资料边界与引用规则，输出稳定（yaml 全局 0.0 之上的显式兜底）。
+                // 意图分类/查询改写/入库增强走 ingestionChatClient，沿用 yaml 低温度保证确定性。
                 .defaultOptions(OpenAiChatOptions.builder().temperature(0.1).maxTokens(8192).build())
                 .build();
     }
@@ -91,19 +93,37 @@ public class ChatClientConfig {
     /**
      * 多通道检索并行执行器。
      * <p>各 SearchChannel 通过此线程池并行执行检索，避免阻塞 SSE 输出线程。</p>
+     * <p>容量设计：通道任务是短阻塞 IO（JdbcTemplate + HTTP rerank）。JDK 池「队列不满不扩到 max」
+     * 的语义下，core=2 意味着稳态并发只有 2，而每请求有 2-3 个通道任务；再叠加引擎侧 orTimeout
+     * 从<b>提交</b>起算，排队任务会在执行前就超时、通道结果被静默丢弃。故 core=max 同值（配置
+     * {@code rag.chat.retrieval.executor-pool-size}），队列取小值让超时主要计量执行时间。</p>
      */
     @Bean("ragContextExecutor")
-    public Executor ragContextExecutor() {
+    public Executor ragContextExecutor(ChatProperties props) {
+        int poolSize = props.getRetrieval().getExecutorPoolSize();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(20);
+        executor.setCorePoolSize(poolSize);
+        executor.setMaxPoolSize(poolSize);
+        executor.setQueueCapacity(poolSize * 2);
         executor.setThreadNamePrefix("rag-ctx-");
         // 跨线程传播 MDC + OTel Context（Spring 官方 ContextPropagatingTaskDecorator，accessor 由 telemetry ContextPropagationConfiguration 注册），使通道检索子 span 挂在父 trace 下
         executor.setTaskDecorator(new ContextPropagatingTaskDecorator());
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(5);
+        executor.setAwaitTerminationSeconds(10);
         return executor;
+    }
+
+    /**
+     * 流式回答落库执行器（虚拟线程）。
+     * <p>StreamChatPipeline 的 complete/error 回调运行在 WebClient 的 reactor-http-nio 事件循环线程上，
+     * saveMessage / agentTrace 落库等阻塞 JDBC 必须移出事件循环（否则拖慢所有并发流式回答）。
+     * 虚拟线程适合这类阻塞 IO，且按需扩张无池容量顾虑；destroyMethod=close 停机时等待在途落库完成。</p>
+     */
+    @Bean(name = "chatPersistExecutor", destroyMethod = "close")
+    public ExecutorService chatPersistExecutor() {
+        // name(prefix, start)：从 start 起自动递增编号
+        return Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("chat-persist-", 0).factory());
     }
 }

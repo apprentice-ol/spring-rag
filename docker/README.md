@@ -78,7 +78,7 @@ docker compose -f docker-compose.server.yml up -d --build
 
 **部署后必做**：
 1. OpenObserve 创建 viewer 账号：登录 `http://<IP>:5080`（管理员账号见 .env 的 `ZO_ROOT_*`）→ IAM → 用户
-   → 新建账号（与 `.env` 的 `OO_VIEWER_EMAIL/PASSWORD` 一致）。前端「链路追踪」页与对话气泡「链路」按钮用它登录。
+   → 默认展示 root 账号（`ZO_ROOT_USER_EMAIL/PASSWORD`；如需单独展示账号可在 `.env` 配 `OO_VIEWER_*` 覆盖）。前端「链路追踪」页与对话气泡「链路」按钮用它登录。
 2. 安全组放行 9081（app）/ 5080（OO）/ 9000（rustfs，或用 Nginx `/storage/` 反代后不开）。
 
 **升级业务代码**：重新 `build-local.sh` → scp 新 jar（依赖变了才传 lib/）→ `up -d --build`。
@@ -106,6 +106,9 @@ docker exec -it rag-postgres psql -U postgres -d springai_rag
 # 重启单个服务
 docker compose -f docker-compose.server.yml restart app
 ```
+
+**OpenObserve 频繁 OOM（Exit 137）**：4G 无 swap 宿主机 + WAL 重放内存峰值 + 无 restart 策略导致，
+排查证据、compose 内存参数与救活步骤见 [../docs/deploy.md](../docs/deploy.md)「OpenObserve OOM 排查与修复」。
 
 **表结构迁移（重要教训）**：`init.sql` 每次启动都会执行（`spring.sql.init.mode=always`），新增列必须写成幂等形式：
 

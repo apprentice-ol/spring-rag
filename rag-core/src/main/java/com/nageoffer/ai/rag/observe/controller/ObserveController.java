@@ -21,11 +21,16 @@ public class ObserveController {
 
     private final OpenObserveProperties openobserveProperties;
 
-    /** 前端「链路追踪」页展示的 OO 只读账号（供查看 trace/logs 登录用；真实值放 .env，默认是 dev 假值） */
-    @Value("${OO_VIEWER_EMAIL:viewer@dev.local}")
+    /**
+     * 前端「链路追踪」页展示的 OO 登录账号。
+     * <p>OO 社区版无 RBAC（无独立只读账号体系），未单独配置 OO_VIEWER_* 时自动回退
+     * root 账号（ZO_ROOT_USER_*，即 compose 部署 OO 的那组）——此前 .env 里手写的
+     * viewer 账号在 OO 中并不存在，前端照抄登录必然失败。</p>
+     */
+    @Value("${OO_VIEWER_EMAIL:${ZO_ROOT_USER_EMAIL:viewer@dev.local}}")
     private String viewerEmail;
 
-    @Value("${OO_VIEWER_PASSWORD:DevOnlyViewer}")
+    @Value("${OO_VIEWER_PASSWORD:${ZO_ROOT_USER_PASSWORD:DevOnlyViewer}}")
     private String viewerPassword;
 
     /** 链路追踪跳转链接 + 只读账号（前端 TraceView 调用） */

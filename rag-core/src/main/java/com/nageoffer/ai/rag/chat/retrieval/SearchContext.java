@@ -1,6 +1,7 @@
 package com.nageoffer.ai.rag.chat.retrieval;
 
 import java.util.Map;
+import java.util.Set;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -33,6 +34,14 @@ public class SearchContext {
 
     /** 检索预算（三级漏斗控制） */
     private RetrievalBudget budget;
+
+    /** 检索范围限定：集合 ID。非空时三通道仅检索 metadata.collection_id 匹配的 chunk；
+     *  null=全库（独立文件无 collection_id 键，全库模式下正常参与检索）。 */
+    private Long collectionId;
+
+    /** 检索范围限定：期望文档 doc_id 白名单（eval per-question 模式用）。
+     *  非空时三通道仅检索 metadata.doc_id 命中的 chunk；null/空=不按文档限定。 */
+    private Set<String> restrictedDocIds;
 
     /** 扩展元数据（意图信息、过滤条件、会话上下文等） */
     private Map<String, Object> metadata;

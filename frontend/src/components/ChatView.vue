@@ -3,14 +3,14 @@ import { ref, nextTick, watch, computed } from 'vue'
 import {
   SendOutlined, UserOutlined, RobotOutlined,
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
-  ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined,
+  ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined, FileSearchOutlined,
 } from '@ant-design/icons-vue'
-import { streamChat, type AgentTrace } from '../api/chat'
+import { streamChat, type AgentTrace, type Citation } from '../api/chat'
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
 import { PARADIGMS } from './evalShared'
-import { messages, activeId, currentTitle, type Msg } from '../composables/useChatState'
+import { messages, activeId, currentTitle, hasEarlierMessages, loadEarlierMessages, type Msg } from '../composables/useChatState'
 import { useIsMobile } from '../composables/useSplitter'
 import ConversationList from './ConversationList.vue'
 import AgentTraceTree from './AgentTraceTree.vue'
@@ -32,6 +32,63 @@ function highlightCode(str: string, lang: string): string {
 const md = new MarkdownIt({ html:true, linkify:true, typographer:true, breaks:true, highlight:highlightCode })
 
 function renderMarkdown(text:string): string { return text?md.render(text):'' }
+
+// ── 引用溯源渲染 ──
+/** 该消息正文中的 [N] 角标（仅保留 citations 里真实存在的 ref，防 LLM 幻觉编号） */
+function usedCitations(m: Msg): Citation[] {
+  if (!m.citations?.length) return []
+  return m.citations.filter(c => new RegExp(`\\[${c.ref}\\]`).test(m.content))
+}
+
+/**
+ * 渲染引用角标：markdown 输出后做后处理，兼容两种来源格式——
+ * ① 提示词规定的 `[N](#cite-N)` 链接式（markdown 渲染成 <a href="#cite-N">N</a>）
+ * ② 模型偶发输出的裸 `[N]` 文本
+ * 只替换与 citations 匹配的编号（防幻觉编号），注入内容为纯数字，无 XSS 面。
+ */
+function renderWithCitations(m: Msg): string {
+  const html = renderMarkdown(m.content)
+  if (!m.citations?.length) return html
+  const refs = new Set(m.citations.map(c => c.ref))
+  // ① 链接式：<a href="#cite-N">N</a> → 角标
+  const linked = html.replace(/<a href="#cite-(\d{1,2})">\1<\/a>/g, (whole, num: string) => {
+    return refs.has(Number(num)) ? makeBadge(Number(num)) : whole
+  })
+  // ② 裸 [N]（sup 标签内无方括号，二次替换不会误伤）
+  return linked.replace(/\[(\d{1,2})\]/g, (whole, num: string) => {
+    return refs.has(Number(num)) ? makeBadge(Number(num)) : whole
+  })
+}
+
+function makeBadge(ref: number): string {
+  return `<sup class="cite-badge" data-cite-ref="${ref}">${ref}</sup>`
+}
+
+/** 角标点击（事件委托）：打开右侧引用溯源抽屉并高亮对应来源 */
+const citeDrawerOpen = ref(false)
+const citeDrawerMsg = ref<Msg | null>(null)
+const activeCiteRef = ref<number | null>(null)
+
+function openCitations(m: Msg, ref?: number) {
+  if (!usedCitations(m).length) return
+  citeDrawerMsg.value = m
+  activeCiteRef.value = ref ?? activeCiteRef.value ?? null
+  citeDrawerOpen.value = true
+}
+
+function onBubbleClick(e: MouseEvent, m: Msg) {
+  const target = (e.target as HTMLElement).closest('sup.cite-badge')
+  if (!target) return
+  const ref = Number(target.getAttribute('data-cite-ref'))
+  if (!m.citations?.some(c => c.ref === ref)) return
+  openCitations(m, ref)
+}
+
+/** 引用原文入口：优先进入项目内文档预览页（代理取源文件，本地/Docker/服务器均可用），无 docId 时退回对象存储直链 */
+function citationViewUrl(c: Citation): string {
+  if (c.docId) return `#/preview/${encodeURIComponent(c.docId)}`
+  return c.sourceLocation || ''
+}
 
 const isMobile = useIsMobile()
 
@@ -80,6 +137,7 @@ async function send() {
       scheduleScroll()
     },
     onTrace:(t)=>{ ans.trace = t },
+    onCitations:(cs)=>{ ans.citations = cs },
     onMeta:(meta)=>{
       if (meta.messageId != null) ans.id = meta.messageId
       if (meta.traceId) ans.traceId = meta.traceId
@@ -150,6 +208,22 @@ function forceScrollToBottom() {
 
 let scrollRaf=0
 function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(()=>{ scrollToBottomIfStuck(); scrollRaf=0 }) }
+
+// ── 向上加载更早消息（消息列表 id 游标分页配合）──
+const loadingEarlier = ref(false)
+async function onLoadEarlier() {
+  if (loadingEarlier.value) return
+  const el = logRef.value
+  const prevHeight = el ? el.scrollHeight : 0
+  loadingEarlier.value = true
+  try {
+    await loadEarlierMessages()
+    // 保持视口锚在原首条消息：补偿加载新增的高度
+    if (el) el.scrollTop += el.scrollHeight - prevHeight
+  } finally {
+    loadingEarlier.value = false
+  }
+}
 </script>
 
 <template>
@@ -184,6 +258,9 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 
     <!-- 消息列表 -->
     <div ref="logRef" class="log" @scroll="onLogScroll">
+      <div v-if="hasEarlierMessages" class="load-earlier">
+        <a-button type="link" size="small" :loading="loadingEarlier" @click="onLoadEarlier">加载更早消息</a-button>
+      </div>
       <div v-if="!messages.length" class="empty">
         <div class="empty-illustration"><RobotOutlined /></div>
         <h4 class="empty-title">开始对话</h4>
@@ -201,12 +278,15 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
         <div class="bubble">
           <div v-if="m.streaming&&!m.content" class="typing-indicator"><span></span><span></span><span></span></div>
           <div v-else-if="m.role==='user'" class="msg-text user-text">{{ m.content }}</div>
-          <div v-else class="markdown-body" v-html="renderMarkdown(m.content)"></div>
+          <div v-else class="markdown-body" v-html="renderWithCitations(m)" @click="onBubbleClick($event, m)"></div>
           <span v-if="m.streaming&&m.content" class="stream-cursor">▍</span>
-          <!-- 操作条：轨迹回看 + traceId（完整展示可复制）+ OpenObserve 全链路（流式结束后） -->
+          <!-- 操作条：轨迹回看 + 引用溯源 + traceId（完整展示可复制）+ OpenObserve 全链路（流式结束后） -->
           <div v-if="m.role==='assistant' && !m.streaming && (m.id || m.trace)" class="msg-actions">
             <button class="action-btn" @click="openTrace(m)">
               <ApartmentOutlined />轨迹
+            </button>
+            <button v-if="usedCitations(m).length" class="action-btn" @click="openCitations(m)">
+              <FileSearchOutlined />引用 {{ usedCitations(m).length }}
             </button>
             <template v-if="m.traceId">
               <span class="trace-id-full" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
@@ -262,6 +342,42 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
         <a-empty v-else-if="!traceLoading" description="该消息无 agent 轨迹（闲聊/诊断分支，或早于本功能的数据）" />
       </a-spin>
     </a-drawer>
+
+    <!-- 引用溯源抽屉：点击正文 [N] 角标或操作条「引用」打开，展示该回答被引用的来源文档 -->
+    <a-drawer
+      :open="citeDrawerOpen"
+      :width="440"
+      title="引用溯源"
+      @update:open="(v: boolean) => (citeDrawerOpen = v)"
+    >
+      <template v-if="citeDrawerMsg">
+        <div class="cite-drawer-hint">
+          回答正文中带 <sup class="cite-badge cite-badge-inline">N</sup> 角标的内容来自下列来源（共
+          {{ usedCitations(citeDrawerMsg).length }} 份，按引用顺序排列）
+        </div>
+        <div
+          v-for="c in usedCitations(citeDrawerMsg)"
+          :key="c.ref"
+          class="cite-item"
+          :class="{ active: activeCiteRef === c.ref }"
+          @click="activeCiteRef = activeCiteRef === c.ref ? null : c.ref"
+        >
+          <span class="cite-badge-static">[{{ c.ref }}]</span>
+          <div class="cite-main">
+            <div class="cite-doc">
+              <span class="cite-doc-name" :title="c.docName">{{ c.docName }}</span>
+            </div>
+            <a
+              v-if="citationViewUrl(c)"
+              class="cite-source-link"
+              :href="citationViewUrl(c)"
+              target="_blank"
+              rel="noopener"
+            >查看原文 ↗</a>
+          </div>
+        </div>
+      </template>
+    </a-drawer>
   </div>
 </template>
 
@@ -312,6 +428,7 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 .log { flex:1; overflow-y:auto; padding:20px 24px; display:flex; flex-direction:column; gap:16px; }
 .log-bottom { height:4px; flex-shrink:0; }
 
+.load-earlier { display:flex; justify-content:center; flex-shrink:0; }
 .empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 20px; }
 .empty-illustration { width:56px; height:56px; display:flex; align-items:center; justify-content:center; background:var(--color-primary-light); border:1px solid var(--color-border-light); border-radius:var(--radius-lg); font-size:24px; color:var(--color-primary); margin-bottom:12px; }
 .empty-title { margin:0 0 6px; font-size:16px; font-weight:600; }
@@ -337,6 +454,23 @@ function scheduleScroll(){ if(scrollRaf)return; scrollRaf=requestAnimationFrame(
 @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
 
 /* 气泡操作条（轨迹 / traceId / OO 链路） */
+/* ── 引用溯源 ── */
+/* v-html 注入的角标不带 scoped 属性，必须用 :deep 才能命中 */
+/* 纯蓝色上标数字（无边框）：加粗 + 主色保证辨识度，hover 下划线示意可点击 */
+:deep(.cite-badge) { display:inline; margin:0 1px; color:var(--color-primary, #0064fa); font-size:11px; font-weight:700; cursor:pointer; vertical-align:super; line-height:1; user-select:none; transition:color .12s ease; }
+:deep(.cite-badge:hover) { text-decoration:underline; }
+.cite-drawer-hint { font-size:12px; color:var(--color-ink-secondary); background:var(--color-surface-secondary); border-radius:6px; padding:8px 10px; margin-bottom:12px; line-height:1.7; }
+.cite-drawer-hint .cite-badge-inline { vertical-align:baseline; margin:0 1px; }
+.cite-item { display:flex; gap:8px; padding:8px 10px; border-radius:8px; cursor:pointer; border:1px solid transparent; transition:background .15s, border-color .15s; }
+.cite-item:hover { background:var(--color-surface-secondary); }
+.cite-item.active { background:var(--color-primary-light, #e8f1ff); border-color:var(--color-primary, #0064fa); }
+.cite-badge-static { flex-shrink:0; color:var(--color-primary, #0064fa); font-size:12px; font-weight:700; line-height:20px; }
+.cite-main { flex:1; min-width:0; }
+.cite-doc { display:flex; align-items:center; gap:8px; }
+.cite-doc-name { font-size:12px; font-weight:500; color:var(--color-ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cite-chunk-count { flex-shrink:0; font-size:11px; color:var(--color-ink-tertiary); }
+.cite-preview { margin-top:4px; font-size:12px; color:var(--color-ink-secondary); line-height:1.6; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+.cite-source-link { flex-shrink:0; font-size:11px; margin-top:4px; display:inline-block; }
 .msg-actions { display:flex; align-items:center; gap:2px; flex-wrap:wrap; margin-top:8px; padding-top:6px; border-top:1px dashed var(--color-border-light); }
 .action-btn { display:inline-flex; align-items:center; gap:4px; border:none; background:none; padding:2px 8px; font-size:12px; color:var(--color-ink-tertiary); cursor:pointer; border-radius:var(--radius-sm); transition:color .15s, background .15s; }
 .action-btn:hover { color:var(--color-primary); background:var(--color-primary-light); }

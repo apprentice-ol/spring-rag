@@ -9,6 +9,7 @@ import com.nageoffer.ai.rag.eval.dao.entity.EvalDatasetEntity;
 import com.nageoffer.ai.rag.eval.dao.entity.EvalItemEntity;
 import com.nageoffer.ai.rag.eval.dao.mapper.EvalDatasetMapper;
 import com.nageoffer.ai.rag.eval.dao.mapper.EvalItemMapper;
+import com.nageoffer.ai.rag.ingestion.collection.service.DocCollectionService;
 import com.nageoffer.ai.rag.ingestion.engine.enums.SourceType;
 import com.nageoffer.ai.rag.ingestion.engine.fetcher.DocumentSource;
 import com.nageoffer.ai.rag.ingestion.service.IngestionEngineService;
@@ -57,23 +58,31 @@ public class LiveRagImporter {
     /** 文档入库并发度（embedding API 是瓶颈，4 并发约 2 分钟跑完 50 题） */
     private static final int INGEST_CONCURRENCY = 4;
 
+    /** parquet 字段解析共享 mapper（static 方法用；此前每行每字段 new 一个 ObjectMapper） */
+    private static final ObjectMapper FIELD_MAPPER = new ObjectMapper();
+
     private final EvalProperties evalProperties;
     private final IngestionEngineService engineService;
     private final EvalDatasetMapper datasetMapper;
     private final EvalItemMapper itemMapper;
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
+    private final DocCollectionService docCollectionService;
 
     public LiveRagImporter(EvalProperties evalProperties, IngestionEngineService engineService,
                            EvalDatasetMapper datasetMapper, EvalItemMapper itemMapper,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper, DocCollectionService docCollectionService,
+                           @org.springframework.beans.factory.annotation.Qualifier("syncHttpClient") OkHttpClient sharedClient) {
         this.evalProperties = evalProperties;
         this.engineService = engineService;
         this.datasetMapper = datasetMapper;
         this.itemMapper = itemMapper;
         this.objectMapper = objectMapper;
+        this.docCollectionService = docCollectionService;
+        // 从共享 client 派生（共享连接池/dispatcher），仅覆盖镜像下载的长超时——
+        // 此前自建独立 client，多一份连接池与线程
         long timeoutSeconds = Math.max(evalProperties.getLiverag().getTimeoutSeconds(), 30L);
-        this.httpClient = new OkHttpClient.Builder()
+        this.httpClient = sharedClient.newBuilder()
                 .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build();
@@ -98,6 +107,19 @@ public class LiveRagImporter {
         Path parquetFile = downloadParquet(liveragConfig, forceRefresh);
 
         long datasetId = ensureDataset(datasetName);
+        // 语料归集：入库时即带 collectionId（向量 metadata 与 sa_document 同步写对），
+        // 未指定集合则按数据集名查/建同名文档集合，与评测数据集一一对应；
+        // 评测跑批 resolveSafeCollection 按期望文档归属定位到该集合 → 检索范围隔离自动生效
+        long collectionId;
+        String collectionName;
+        if (request.collectionId() != null) {
+            collectionName = docCollectionService.requireCollection(request.collectionId());
+            collectionId = request.collectionId();
+        } else {
+            collectionName = datasetName;
+            collectionId = docCollectionService.ensureCollection(datasetName,
+                    "LiveRAG 基准语料（评测数据集「" + datasetName + "」导入器自动归集）");
+        }
         List<Row> sampleRows = readSampleRows(parquetFile, sampleSize);
         log.info("[LiveRAG] 数据集 {} 抽样 {} 题（共抽样 {} 行）", datasetName, sampleSize, sampleRows.size());
         if (sampleRows.isEmpty()) {
@@ -110,11 +132,22 @@ public class LiveRagImporter {
         AtomicInteger docsFailed = new AtomicInteger();
         AtomicInteger itemsSkipped = new AtomicInteger();
 
+        // 一次 IN 查询预取已有 itemKey（此前每题一次 selectCount，50 题 = 50 次 DB 往返）
+        java.util.Set<String> sampleKeys = sampleRows.stream()
+                .map(r -> "LiveRAG-" + r.index()).collect(java.util.stream.Collectors.toSet());
+        // 并发集合：importOneItem 的 4 个工作线程会并发 add 占位（普通 HashSet 并发写会坏结构）
+        java.util.Set<String> existingKeys = itemMapper.selectList(new LambdaQueryWrapper<EvalItemEntity>()
+                        .eq(EvalItemEntity::getDatasetId, datasetId)
+                        .in(!sampleKeys.isEmpty(), EvalItemEntity::getItemKey, sampleKeys)
+                        .select(EvalItemEntity::getItemKey))
+                .stream().map(EvalItemEntity::getItemKey)
+                .collect(java.util.stream.Collectors.toCollection(java.util.concurrent.ConcurrentHashMap::newKeySet));
+
         try (ExecutorService executor = Executors.newFixedThreadPool(INGEST_CONCURRENCY)) {
             List<Future<?>> futures = new ArrayList<>(sampleRows.size());
             for (Row row : sampleRows) {
                 futures.add(executor.submit(() ->
-                        importOneItem(datasetId, row, imported, skipped, docsIngested, docsFailed, itemsSkipped)));
+                        importOneItem(datasetId, collectionId, row, existingKeys, imported, skipped, docsIngested, docsFailed, itemsSkipped)));
             }
             for (Future<?> future : futures) {
                 try {
@@ -135,21 +168,20 @@ public class LiveRagImporter {
         datasetMapper.updateById(datasetUpdate);
 
         return new LiveRagImportResult(datasetId, sampleSize, imported.get(), skipped.get(),
-                docsIngested.get(), docsFailed.get(), itemsSkipped.get(),
+                docsIngested.get(), docsFailed.get(), itemsSkipped.get(), collectionId, collectionName,
                 System.currentTimeMillis() - startTimeMillis);
     }
 
     /**
-     * 导入单题：支持文档逐个入库 → 全成功或部分成功则写 sa_eval_item（expected_doc_ids = 各 taskId）。
-     * 已存在（itemKey 判重）则跳过。
+     * 导入单题：支持文档逐个入库（带 collectionId 归集）→ 全成功或部分成功则写 sa_eval_item（expected_doc_ids = 各 taskId）。
+     * 已存在（itemKey 判重，预取的 existingKeys）则跳过。
      */
-    private void importOneItem(Long datasetId, Row row, AtomicInteger imported, AtomicInteger skipped,
+    private void importOneItem(Long datasetId, long collectionId, Row row, java.util.Set<String> existingKeys,
+                               AtomicInteger imported, AtomicInteger skipped,
                                AtomicInteger docsIngested, AtomicInteger docsFailed, AtomicInteger itemsSkipped) {
         String itemKey = "LiveRAG-" + row.index();
-        Long existingCount = itemMapper.selectCount(new LambdaQueryWrapper<EvalItemEntity>()
-                .eq(EvalItemEntity::getDatasetId, datasetId)
-                .eq(EvalItemEntity::getItemKey, itemKey));
-        if (existingCount != null && existingCount > 0) {
+        if (!existingKeys.add(itemKey)) {
+            // 已存在（或本批并发占位）：跳过重复导入
             skipped.incrementAndGet();
             return;
         }
@@ -169,7 +201,7 @@ public class LiveRagImporter {
                     .build();
             try {
                 IngestionResult result = engineService.executeTask(liveragConfig.getPipeline(), source,
-                        docContent.getBytes(StandardCharsets.UTF_8), "text/markdown", null, null);
+                        docContent.getBytes(StandardCharsets.UTF_8), "text/markdown", collectionId, null, null);
                 if (StringUtils.hasText(result.docId())) {
                     taskIds.add(result.docId());
                     docsIngested.incrementAndGet();
@@ -292,7 +324,7 @@ public class LiveRagImporter {
             return contents;
         }
         try {
-            JsonNode docsArray = new ObjectMapper().readTree(json);
+            JsonNode docsArray = FIELD_MAPPER.readTree(json);
             if (!docsArray.isArray()) {
                 return contents;
             }
@@ -314,7 +346,7 @@ public class LiveRagImporter {
             return "qa";
         }
         try {
-            JsonNode configNode = new ObjectMapper().readTree(json);
+            JsonNode configNode = FIELD_MAPPER.readTree(json);
             String type = configNode.path("answer-type-categorization").asText("");
             return StringUtils.hasText(type) ? type : "qa";
         } catch (Exception ex) {
@@ -322,7 +354,7 @@ public class LiveRagImporter {
         }
     }
 
-    /** 按名查/建数据集，返回 datasetId（同名复用）。 */
+    /** 按名查/建数据集，返回 datasetId（同名复用）。并发首建的 check-then-insert 冲突按唯一约束兜底重查。 */
     private long ensureDataset(String name) {
         EvalDatasetEntity existingDataset = datasetMapper.selectOne(new LambdaQueryWrapper<EvalDatasetEntity>()
                 .eq(EvalDatasetEntity::getName, name));
@@ -333,8 +365,15 @@ public class LiveRagImporter {
         dataset.setName(name);
         dataset.setDescription("LiveRAG 基准（HuggingFace 实时 RAG 问答集，自动导入）");
         dataset.setItemCount(0);
-        datasetMapper.insert(dataset);
-        return dataset.getId();
+        try {
+            datasetMapper.insert(dataset);
+            return dataset.getId();
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // 并发导入同名数据集：另一请求已建，重查复用
+            return datasetMapper.selectOne(new LambdaQueryWrapper<EvalDatasetEntity>()
+                            .eq(EvalDatasetEntity::getName, name))
+                    .getId();
+        }
     }
 
     /** 对象 → JSON 字符串；序列化失败返回 null（不抛异常，避免阻断导入）。 */

@@ -40,11 +40,17 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class HttpClientHelper {
 
+    /**
+     * URL 抓取的默认大小上限（get() 主路径此前传 -1 不限：响应 body().bytes() 全量入内存，
+     * 大文件直接 OOM）。50MB 与上传上限一致。
+     */
+    private static final long DEFAULT_MAX_BYTES = 50L * 1024 * 1024;
+
     @Qualifier("syncHttpClient")
     private final OkHttpClient client;
 
     public HttpFetchResponse get(String url, Map<String, String> headers) {
-        return doGet(url, headers, -1);
+        return doGet(url, headers, DEFAULT_MAX_BYTES);
     }
 
     public HttpFetchResponse getWithLimit(String url, Map<String, String> headers, long maxBytes) {

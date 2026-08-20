@@ -98,6 +98,8 @@ public class RocketMqProducer implements MqProducer {
             rocketMQTemplate.sendMessageInTransaction(topic, message, null);
             log.info("[MQ] {} - 事务消息发送成功, topic={}, keys={}", bizDesc, topic, keys);
         } catch (Throwable ex) {
+            // half 消息发送失败：本地事务回调永远不会被触发，注销注册避免 Map 无界增长
+            transactionListener.unregisterLocalTransaction(txId);
             log.error("[MQ] {} - 事务消息发送失败, topic={}, keys={}", bizDesc, topic, keys, ex);
             throw ex;
         }

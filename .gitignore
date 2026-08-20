@@ -22,8 +22,10 @@ Thumbs.db
 *.log
 logs/
 
-# Env / secrets（.env 含真实密钥绝不提交；.env.example 是模板，故意提交供他人参考）
+# Env / secrets（真实配置绝不提交：.env / .env.local / .env.prod 全部 ignore；
+# .env.example 是占位模板（xxx/假值），故意提交供他人参考）
 .env
+.env.*
 !.env.example
 application-local.yaml
 application-prod.yaml

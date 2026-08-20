@@ -13,6 +13,8 @@ import java.util.List;
  * @param paradigm       agent 范式（naive/react）；null/空 用 naive
  * @param itemIds        指定只跑这些条目 id（精确子集）；非空时覆盖 category/limit，不再抽样。
  *                       用于 agent 对照场景：多个范式传同一组 itemIds，保证跑相同问题、对照公平。
+ * @param answerEval     是否启用答案质量评测（生成答案 + LLM-as-judge 打分）
+ * @param perQuestion    per-question 检索模式：检索限定在该题 expected_doc_ids 内（实验开关）
  */
 public record EvalRunOptions(
         Long datasetId,
@@ -21,5 +23,20 @@ public record EvalRunOptions(
         Integer limit,
         Boolean rewriteEnabled,
         String paradigm,
-        List<Long> itemIds
-) {}
+        List<Long> itemIds,
+        Boolean answerEval,
+        Boolean perQuestion
+) {
+    /** 兼容旧 7 参构造（answerEval=null，不做答案质量评测）。 */
+    public EvalRunOptions(Long datasetId, EvalParamSnapshot paramsOverride, String category,
+                          Integer limit, Boolean rewriteEnabled, String paradigm, List<Long> itemIds) {
+        this(datasetId, paramsOverride, category, limit, rewriteEnabled, paradigm, itemIds, null, null);
+    }
+
+    /** 兼容旧 8 参构造（perQuestion=null，不限定期望文档）。 */
+    public EvalRunOptions(Long datasetId, EvalParamSnapshot paramsOverride, String category,
+                          Integer limit, Boolean rewriteEnabled, String paradigm,
+                          List<Long> itemIds, Boolean answerEval) {
+        this(datasetId, paramsOverride, category, limit, rewriteEnabled, paradigm, itemIds, answerEval, null);
+    }
+}

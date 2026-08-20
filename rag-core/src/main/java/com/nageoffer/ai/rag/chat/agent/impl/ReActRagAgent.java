@@ -14,8 +14,11 @@ import com.nageoffer.ai.rag.chat.agent.toolkit.AgentToolkit;
 import com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
+import com.nageoffer.ai.rag.chat.util.LlmCallGuard;
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
+import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -49,6 +52,7 @@ import java.util.regex.Pattern;
 public class ReActRagAgent implements RagAgent {
 
     private static final Pattern DIGITS = Pattern.compile("\\d+");
+    private static final Duration DECISION_TIMEOUT = Duration.ofSeconds(30);
 
     private final AgentToolkit toolkit;
     private final ChatClient chatClient;
@@ -82,7 +86,11 @@ public class ReActRagAgent implements RagAgent {
             String userMsg = buildUserMsg(question, scratchpad);
             String response;
             try {
-                response = chatClient.prompt().system(system).user(userMsg).call().content();
+                response = LlmCallGuard.call(() -> chatClient.prompt()
+                        .system(system)
+                        .user(userMsg)
+                        .call()
+                        .content(), DECISION_TIMEOUT, "ReAct 决策");
             } catch (Exception e) {
                 log.warn("[ReAct] LLM 决策调用异常: {}", e.getMessage());
                 trace.step("error", "LLM 异常: " + e.getMessage(), null, null, t);
@@ -229,16 +237,14 @@ public class ReActRagAgent implements RagAgent {
                 .topK(orig.getTopK())
                 .threshold(orig.getThreshold())
                 .budget(orig.getBudget())
+                .collectionId(orig.getCollectionId())
+                .restrictedDocIds(orig.getRestrictedDocIds())
                 .metadata(orig.getMetadata())
                 .build();
     }
 
     private static String preview(String content) {
-        if (!StringUtils.hasText(content)) {
-            return "";
-        }
-        String s = content.replaceAll("\\s+", " ").trim();
-        return s.length() > 120 ? s.substring(0, 120) + "…" : s;
+        return TextPreviews.preview(content, 120);
     }
 
     /** chunk 来源文档名（与 MultiChannelRetrievalEngine 一致用 doc_name 字段）。 */

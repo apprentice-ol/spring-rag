@@ -52,9 +52,13 @@ public class EvalController {
 
     }
 
+    /** 指标明细（item 级分页：page/size 针对 item，每 item 含其全部指标行；不含 agent_trace） */
     @GetMapping("/{id}/metrics")
-    public List<EvalMetricEntity> metrics(@PathVariable Long id) {
-        return evalService.getMetrics(id);
+    public com.nageoffer.ai.rag.ingestion.domain.dto.PageResult<EvalMetricEntity> metrics(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return evalService.getMetrics(id, page, size);
     }
 
     /**
@@ -83,7 +87,8 @@ public class EvalController {
     public Map<String, Object> reevaluateItem(@PathVariable Long id, @PathVariable Long itemId,
                                               @RequestBody(required = false) ReevaluateRequest body) {
         ReevaluateRequest request = body == null ? new ReevaluateRequest() : body;
-        int attempt = evalService.reevaluateItem(id, itemId, request.getRewriteEnabled(), request.getRemark(), request.getParadigm());
+        int attempt = evalService.reevaluateItem(id, itemId, request.getRewriteEnabled(), request.getRemark(),
+                request.getParadigm(), request.getPerQuestion());
         return Map.of("runId", id, "itemId", itemId, "attempt", attempt);
     }
 
@@ -93,6 +98,8 @@ public class EvalController {
         private Boolean rewriteEnabled;
         /** agent 范式（naive/react）；null 用原 run 范式 */
         private String paradigm;
+        /** 仅检索期望文档（per-question 模式）；null 沿用原 run 设置 */
+        private Boolean perQuestion;
         /** 备注（显示在该条重评记录上） */
         private String remark;
     }

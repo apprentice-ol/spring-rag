@@ -23,6 +23,7 @@ import {
   type EvalItem,
 } from '../api/eval'
 import { parseDocIds, SOURCE_LABEL, CATEGORY_DESC, PARADIGMS, paradigmLabel } from './evalShared'
+import { listCollections, type DocCollection } from '../api/collection'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 const props = defineProps<{ datasets: EvalDataset[] }>()
@@ -34,6 +35,7 @@ const importing = ref(false)
 const importSampleSize = ref(50)
 const newQuestion = ref('')
 const newExpected = ref('')
+const newExpectedAnswer = ref('')
 
 const dsColumns = useResizableColumns([
   { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
@@ -44,7 +46,24 @@ const dsColumns = useResizableColumns([
 
 const selectedDataset = computed(() => props.datasets.find((d) => d.id === selectedDatasetId.value) || null)
 
+// 条目表分页（受控）：非受控 + 内联对象字面量时，任何重渲染都会重建 pagination 对象
+// 把 pageSize 重置回初始值——size 选择器选了立即弹回，表现为"不能选择"
+const itemPage = ref(1)
+const itemPageSize = ref(10)
+const itemPagination = computed(() => ({
+  current: itemPage.value,
+  pageSize: itemPageSize.value,
+  showSizeChanger: true,
+  pageSizeOptions: ['10', '20', '50', '100'],
+  showTotal: (t: number) => `共 ${t} 条`,
+}))
+function onItemTableChange(pag: { current?: number; pageSize?: number }) {
+  itemPage.value = pag.current ?? 1
+  itemPageSize.value = pag.pageSize ?? 10
+}
+
 watch(selectedDatasetId, async (id) => {
+  itemPage.value = 1
   if (!id) {
     items.value = []
     return
@@ -128,10 +147,17 @@ async function doAddItem() {
   }
   const expected = newExpected.value.split(/[,\n，]/).map((s) => s.trim()).filter(Boolean)
   try {
-    await addItems(selectedDatasetId.value, [{ question: newQuestion.value.trim(), expectedDocIds: expected }])
+    await addItems(selectedDatasetId.value, [
+      {
+        question: newQuestion.value.trim(),
+        expectedDocIds: expected,
+        expectedAnswer: newExpectedAnswer.value.trim() || undefined,
+      },
+    ])
     message.success('已添加')
     newQuestion.value = ''
     newExpected.value = ''
+    newExpectedAnswer.value = ''
     items.value = await listItems(selectedDatasetId.value)
     emit('need-reload-datasets')
   } catch (e: unknown) {
@@ -195,8 +221,26 @@ const targetHint = computed(() => {
     : `将创建新数据集「${name}」`
 })
 
+/** 语料归集：可选指定文件集；空 = 自动按数据集名查/建同名集合 */
+const importCollectionId = ref<number | undefined>(undefined)
+const collections = ref<DocCollection[]>([])
+const collectionHint = computed(() => {
+  if (importCollectionId.value != null) {
+    const c = collections.value.find((x) => x.id === importCollectionId.value)
+    return c ? `语料将归入已有文件集「${c.name}」（${c.docCount ?? 0} 篇）` : ''
+  }
+  const name = importDatasetName.value.trim() || 'LiveRAG'
+  return `语料将归入同名文件集「${name}」（没有则自动创建）；评测跑批按期望文档归属隔离检索范围`
+})
+
 function openImport() {
   importModalOpen.value = true
+  // 集合列表懒加载：首次打开拉一次（归集选择项）
+  if (collections.value.length === 0) {
+    listCollections()
+      .then((cs) => (collections.value = cs))
+      .catch(() => {})
+  }
 }
 async function submitImport() {
   const name = importDatasetName.value.trim()
@@ -207,8 +251,12 @@ async function submitImport() {
   if (importing.value) return
   importing.value = true
   try {
-    const r = await importLiveRag({ sampleSize: importSampleSize.value, datasetName: name })
-    message.success(`导入完成：${r.imported} 题新导入，${r.skipped} 题跳过`)
+    const r = await importLiveRag({
+      sampleSize: importSampleSize.value,
+      datasetName: name,
+      collectionId: importCollectionId.value,
+    })
+    message.success(`导入完成：${r.imported} 题新导入，${r.skipped} 题跳过，语料已归入文件集「${r.collectionName}」`)
     emit('need-reload-datasets')
     selectedDatasetId.value = r.datasetId
     importModalOpen.value = false
@@ -223,6 +271,8 @@ const triggerCategory = ref<string | undefined>(undefined)
 const triggerLimit = ref<number | undefined>(undefined)
 const triggerRewrite = ref(false)
 const triggerParadigm = ref('naive')
+const triggerAnswerEval = ref(false)
+const triggerPerQuestion = ref(false)
 
 /** 当前数据集条目的分类选项（去重，用于触发时筛选） */
 const categoryOptions = computed(() => {
@@ -237,10 +287,19 @@ async function doTrigger() {
     return
   }
   try {
-    const opts: { category?: string; limit?: number; rewriteEnabled?: boolean; paradigm?: string } = {}
+    const opts: {
+      category?: string
+      limit?: number
+      rewriteEnabled?: boolean
+      paradigm?: string
+      answerEval?: boolean
+      perQuestion?: boolean
+    } = {}
     if (triggerCategory.value) opts.category = triggerCategory.value
     if (triggerLimit.value && triggerLimit.value > 0) opts.limit = triggerLimit.value
     if (triggerRewrite.value) opts.rewriteEnabled = true
+    if (triggerAnswerEval.value) opts.answerEval = true
+    if (triggerPerQuestion.value) opts.perQuestion = true
     opts.paradigm = triggerParadigm.value
     const { runId } = await triggerRun(selectedDatasetId.value, opts)
     const scope =
@@ -249,6 +308,8 @@ async function doTrigger() {
         triggerCategory.value ? `分类「${triggerCategory.value}」` : null,
         triggerLimit.value ? `抽样 ${triggerLimit.value} 条` : null,
         triggerRewrite.value ? '含改写' : '裸检索',
+        triggerAnswerEval.value ? '答案评测' : null,
+        triggerPerQuestion.value ? '限定期望文档' : null,
       ]
         .filter(Boolean)
         .join(' · ') || '全量'
@@ -260,6 +321,7 @@ async function doTrigger() {
 
 const itemColumns = useResizableColumns([
   { title: '问题', dataIndex: 'question', key: 'question', ellipsis: true },
+  { title: '标准答案', dataIndex: 'expectedAnswer', key: 'expectedAnswer', width: 200, ellipsis: true },
   { title: '分类', dataIndex: 'category', key: 'category', width: 100 },
   { title: '来源', dataIndex: 'source', key: 'source', width: 130 },
   { title: '期望文档', dataIndex: 'expected', key: 'expected', width: 90 },
@@ -357,6 +419,8 @@ interface ErrResp {
           <span class="filter-hint">不选 = 全量（{{ items.length }} 题）</span>
           <div class="filter-actions">
             <a-checkbox v-model:checked="triggerRewrite" title="勾选后评测走真实聊天链路（含 LLM 改写，分数更接近线上）">启用查询改写</a-checkbox>
+            <a-checkbox v-model:checked="triggerAnswerEval" title="勾选后对每题生成答案，并用 LLM-as-judge 打「答案正确性/忠实度」分（每题多 2 次 LLM 调用）">答案评测</a-checkbox>
+            <a-checkbox v-model:checked="triggerPerQuestion" title="实验开关：检索限定在该题期望文档内，模拟官方独立语料（验证混合语料是否唯一瓶颈）">仅检索期望文档</a-checkbox>
             <a-button type="primary" :disabled="!items.length" @click="doTrigger">
               <template #icon><PlayCircleOutlined /></template>触发评测
             </a-button>
@@ -381,6 +445,7 @@ interface ErrResp {
         <div class="add-row">
           <a-textarea v-model:value="newQuestion" placeholder="用户问题" :auto-size="{ minRows: 1, maxRows: 3 }" style="flex: 2" />
           <a-input v-model:value="newExpected" placeholder="期望 doc_id（逗号或换行分隔）" style="flex: 2" />
+          <a-input v-model:value="newExpectedAnswer" placeholder="标准答案（答案评测用，可选）" style="flex: 3" />
           <a-button type="primary" @click="doAddItem">
             <template #icon><PlusOutlined /></template>添加
           </a-button>
@@ -391,7 +456,8 @@ interface ErrResp {
           :columns="itemColumns"
           size="small"
           row-key="id"
-          :pagination="{ pageSize: 10, showSizeChanger: true, showTotal: (t: number) => `共 ${t} 条` }"
+          :pagination="itemPagination"
+          @change="onItemTableChange"
           :scroll="{ x: 760 }"
         >
           <template #headerCell="{ column }">
@@ -411,6 +477,12 @@ interface ErrResp {
           </template>
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'expected'">{{ parseDocIds(record.expectedDocIds).length }}</template>
+            <template v-else-if="column.key === 'expectedAnswer'">
+              <a-tooltip v-if="record.expectedAnswer" :title="record.expectedAnswer">
+                <span class="ans-cell">{{ record.expectedAnswer }}</span>
+              </a-tooltip>
+              <span v-else class="muted">-</span>
+            </template>
             <template v-else-if="column.key === 'source'">{{ SOURCE_LABEL[record.source] || record.source }}</template>
             <template v-else-if="column.key === 'enabled'">
               <a-switch :checked="record.enabled === 1" size="small" @change="doToggle(record)" />
@@ -470,6 +542,18 @@ interface ErrResp {
             allow-clear
           />
           <div class="target-hint">{{ targetHint || '输入或选择目标数据集名称' }}</div>
+        </a-form-item>
+        <a-form-item label="语料归入文件集">
+          <a-select
+            v-model:value="importCollectionId"
+            placeholder="自动：与数据集同名创建/复用"
+            allow-clear
+          >
+            <a-select-option v-for="c in collections" :key="c.id" :value="c.id">
+              {{ c.name }}<span class="opt-desc">{{ c.docCount ?? 0 }} 篇</span>
+            </a-select-option>
+          </a-select>
+          <div class="target-hint">{{ collectionHint }}</div>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -539,5 +623,15 @@ interface ErrResp {
   padding: 24px;
   color: var(--color-ink-tertiary);
   font-size: 13px;
+}
+.ans-cell {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink-secondary);
+}
+.muted {
+  color: var(--color-ink-tertiary);
 }
 </style>

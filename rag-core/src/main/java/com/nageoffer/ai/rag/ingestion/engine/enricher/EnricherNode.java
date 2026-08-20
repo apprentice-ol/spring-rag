@@ -21,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -40,6 +41,9 @@ public class EnricherNode implements IngestionNode {
 
     /** 富集 LLM 并发度（与 MinerU 解析并发对齐，避免 DeepSeek/百炼限流） */
     private static final int ENRICH_CONCURRENCY = 5;
+
+    /** 整节点超时上限（秒）：按块数 × 单块 LLM 耗时放宽，防底层 HTTP 挂起时节点永久阻塞 */
+    private static final long ENRICH_TIMEOUT_SECONDS = 300;
 
     private final ObjectMapper objectMapper;
     private final ChatClient chatClient;
@@ -117,7 +121,9 @@ public class EnricherNode implements IngestionNode {
                     }
                 }, pool));
             }
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            // orTimeout 兜底：底层 HTTP 客户端挂起时 allOf().join() 会永久阻塞整个节点
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .orTimeout(ENRICH_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
         }
         return NodeResult.ok("富集完成");
     }

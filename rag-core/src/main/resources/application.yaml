@@ -27,6 +27,10 @@ spring:
     username: ${POSTGRES_USER:postgres}
     password: ${POSTGRES_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 20
+      minimum-idle: 5
 
   data:
     redis:
@@ -158,7 +162,14 @@ mineru:
 
 logging:
   level:
-    org.springframework.ai: DEBUG
-    org.springframework.web.servlet.DispatcherServlet: DEBUG
-    org.apache.ibatis: DEBUG
-    com.nageoffer.ai.rag: DEBUG
+    # 服务器实测：DEBUG 下 MyBatis 每条 SQL + Spring AI 每次 prompt 全量入日志，
+    # 叠加遥测后单包 5~8MB，直接打满磁盘 I/O。生产/服务器统一 INFO，排查时再临时开 DEBUG。
+    org.springframework.ai: INFO
+    org.springframework.web.servlet.DispatcherServlet: INFO
+    org.apache.ibatis: INFO
+    com.nageoffer.ai.rag: INFO
+    # 遥测步骤日志（llm-observability 的 telemetry.telemetry logger，step.input/output 大 JSON）。
+    # 评测跑批期间每条 item 产生 20+ 条（单条最大 8KB），是服务器磁盘 I/O 的主要写入源之一；
+    # 注意：这些日志同时经 OPEN_TELEMETRY appender 进 OpenObserve，关闭后 OO 内对应的
+    # step 输入/输出明文展示会缺失（span 本身仍在）。跑批时可设 TELEMETRY_STEP_LOG_LEVEL=OFF。
+    telemetry.telemetry: ${TELEMETRY_STEP_LOG_LEVEL:INFO}

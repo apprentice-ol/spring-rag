@@ -10,6 +10,7 @@ import com.nageoffer.ai.rag.chat.retrieval.SearchChannelType;
 import com.jjx.ai.llmobservability.observation.logging.TelemetryStructuredLog;
 import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -25,6 +26,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
+import jakarta.annotation.PostConstruct;
 
 /**
  * 百炼 Rerank 客户端。
@@ -60,10 +62,37 @@ public class BaiLianRerankClient implements RerankClient {
     @Value("${rag.rerank.min-relevance-score:0.0}")
     private double minRelevanceScore;
 
+    /** Rerank 独立超时：后处理器在通道 orTimeout 覆盖之外串行执行，共享客户端 120s readTimeout 会拖垮整条回答 */
+    @Value("${rag.rerank.timeout-ms:8000}")
+    private long rerankTimeoutMs;
+
+    /** 规范化后的最终请求 URL（baseUrl 启动期固定，无需每次调用重算） */
+    private String rerankUrl;
+
+    /** 派生自共享客户端（共享连接池），仅覆盖 rerank 短超时 */
+    private OkHttpClient rerankClient;
+
     public BaiLianRerankClient(OkHttpClient httpClient, Gson gson, TelemetryTemplate obsTemplate) {
         this.httpClient = httpClient;
         this.gson = gson;
         this.obsTemplate = obsTemplate;
+    }
+
+    @PostConstruct
+    void initRerankEndpoint() {
+        // 官方端点要求双段 .../services/rerank/text-rerank/text-rerank（2026 新版）。
+        // 兼容配置里已含单段/双段的情况：缺哪段补哪段，避免配置笔误让 rerank 静默失效（400 退化回向量序）。
+        String base = baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
+        if (base.endsWith("/text-rerank/text-rerank")) {
+            this.rerankUrl = base;
+        } else if (base.endsWith("/text-rerank")) {
+            this.rerankUrl = base + "/text-rerank";
+        } else {
+            this.rerankUrl = base + "/text-rerank/text-rerank";
+        }
+        this.rerankClient = httpClient.newBuilder()
+                .callTimeout(Duration.ofMillis(rerankTimeoutMs))
+                .build();
     }
 
     @Override
@@ -114,29 +143,18 @@ public class BaiLianRerankClient implements RerankClient {
         reqBody.add("input", input);
         reqBody.add("parameters", params);
 
-        // 官方端点要求双段 .../services/rerank/text-rerank/text-rerank（2026 新版）。
-        // 兼容配置里已含单段/双段的情况：缺哪段补哪段，避免配置笔误让 rerank 静默失效（400 退化回向量序）。
-        String base = baseUrl == null ? "" : baseUrl.replaceAll("/+$", "");
-        String url;
-        if (base.endsWith("/text-rerank/text-rerank")) {
-            url = base;
-        } else if (base.endsWith("/text-rerank")) {
-            url = base + "/text-rerank";
-        } else {
-            url = base + "/text-rerank/text-rerank";
-        }
         Request request = new Request.Builder()
-                .url(url)
+                .url(rerankUrl)
                 .post(RequestBody.create(gson.toJson(reqBody), JSON))
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .build();
 
-        try (Response response = httpClient.newCall(request).execute()) {
+        try (Response response = rerankClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String body = response.body() != null ? response.body().string() : "";
                 log.warn("[BaiLianRerank] 请求失败: status={}, body={}", response.code(), body);
-                // fallback: 直接截取前 topN
-                return candidates.subList(0, Math.min(topN, candidates.size()));
+                // fallback: 直接截取前 topN（拷贝而非 subList 视图，避免上游改动联动）
+                return fallback(candidates, topN);
             }
 
             String respBody = response.body() != null ? response.body().string() : "";
@@ -145,20 +163,25 @@ public class BaiLianRerankClient implements RerankClient {
             return parseResponse(respJson, candidates, topN);
         } catch (IOException e) {
             log.error("[BaiLianRerank] 请求异常", e);
-            return candidates.subList(0, Math.min(topN, candidates.size()));
+            return fallback(candidates, topN);
         }
+    }
+
+    /** 降级截断：返回前 topN 的<b>拷贝</b>（subList 视图与原列表联动，语义不一致） */
+    private static List<RetrievedChunk> fallback(List<RetrievedChunk> candidates, int topN) {
+        return List.copyOf(candidates.subList(0, Math.min(topN, candidates.size())));
     }
 
     private List<RetrievedChunk> parseResponse(JsonObject respJson, List<RetrievedChunk> candidates, int topN) {
         if (respJson == null || !respJson.has("output")) {
             log.warn("[BaiLianRerank] 响应缺少 output: {}", respJson);
-            return candidates.subList(0, Math.min(topN, candidates.size()));
+            return fallback(candidates, topN);
         }
 
         JsonObject output = respJson.getAsJsonObject("output");
         if (output == null || !output.has("results")) {
             log.warn("[BaiLianRerank] output 缺少 results");
-            return candidates.subList(0, Math.min(topN, candidates.size()));
+            return fallback(candidates, topN);
         }
 
         JsonArray results = output.getAsJsonArray("results");
@@ -238,7 +261,8 @@ public class BaiLianRerankClient implements RerankClient {
             String id = c.getMetadata() != null
                     ? String.valueOf(c.getMetadata().getOrDefault("doc_id", ""))
                     : "";
-            if (seen.add(id + ":" + c.getContent().hashCode())) {
+            // 去重键用 doc_id + 全文：hashCode 有碰撞概率（误去重），且 content 为 null 时直接 NPE
+            if (seen.add(id + ":" + (c.getContent() == null ? "" : c.getContent()))) {
                 result.add(c);
             }
         }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { listDatasets, type EvalDataset } from '../api/eval'
 import EvalOverviewTab from './EvalOverviewTab.vue'
 import EvalDatasetTab from './EvalDatasetTab.vue'
@@ -8,6 +8,15 @@ import EvalRunDetail from './EvalRunDetail.vue'
 
 const activeTab = ref('overview')
 const datasets = ref<EvalDataset[]>([])
+
+/** 运行记录 tab 的 reload 句柄：tab 面板保活（首次激活后不重新挂载），
+ * 别的 tab 触发的新 run 靠这里在切回时刷新，否则列表发现不了 RUNNING 任务、轮询永远不起 */
+const runTabRef = ref<InstanceType<typeof EvalRunTab> | null>(null)
+watch(activeTab, (tab) => {
+  if (tab === 'runs') {
+    runTabRef.value?.reload()
+  }
+})
 
 const currentHash = ref(window.location.hash)
 function onHashChange() {
@@ -36,10 +45,11 @@ const detailRunId = computed(() => {
   return m ? Number(m[1]) : null
 })
 
-/** 从详情页返回 → 回到「运行记录」Tab */
+/** 从详情页返回 → 回到「运行记录」Tab（activeTab 值可能未变、watch 不触发，这里显式刷新） */
 function backToList() {
   activeTab.value = 'runs'
   window.location.hash = '#/admin/eval'
+  runTabRef.value?.reload()
 }
 </script>
 
@@ -70,7 +80,7 @@ function backToList() {
           <EvalDatasetTab :datasets="datasets" @need-reload-datasets="loadDatasets" />
         </a-tab-pane>
         <a-tab-pane key="runs" tab="运行记录">
-          <EvalRunTab :datasets="datasets" />
+          <EvalRunTab ref="runTabRef" :datasets="datasets" />
         </a-tab-pane>
       </a-tabs>
     </div>

@@ -9,6 +9,8 @@ import com.nageoffer.ai.rag.chat.dao.entity.ConversationEntity;
 import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.ConversationMapper;
 import com.nageoffer.ai.rag.chat.dao.mapper.MessageMapper;
+import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
+import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
 import com.nageoffer.ai.rag.chat.intent.IntentClassifier;
 import com.nageoffer.ai.rag.chat.intent.IntentResult;
 import com.nageoffer.ai.rag.chat.normalize.QueryRewriter;
@@ -16,6 +18,7 @@ import com.nageoffer.ai.rag.chat.retrieval.RetrievalBudget;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
 import com.nageoffer.ai.rag.chat.service.RagAnswerStreamService;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
 import com.nageoffer.ai.rag.chat.util.TraceIdExtractor;
 import com.nageoffer.ai.rag.common.util.QueryNormalizer;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
@@ -27,13 +30,19 @@ import com.jjx.ai.llmobservability.backends.openobserve.dto.TraceLogEntry;
 import io.opentelemetry.api.trace.Span;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.util.Strings;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -74,6 +83,11 @@ public class StreamChatPipeline {
     private final AgentTraceService agentTraceService;
     private final RagAnswerStreamService ragAnswerStreamService;
     private final TelemetryTemplate obsTemplate;
+    private final DocumentMapper documentMapper;
+
+    /** 流式回答落库/收尾专用（虚拟线程）：complete 回调跑在 reactor 事件循环上，阻塞 JDBC 必须移出 */
+    @Qualifier("chatPersistExecutor")
+    private final ExecutorService chatPersistExecutor;
 
     /**
      * 执行流式对话管道。
@@ -91,31 +105,48 @@ public class StreamChatPipeline {
         if (ruleNormalized.isBlank()) {
             ruleNormalized = question == null ? "" : question.trim();
         }
-        String historyForRewrite = buildHistoryContext(conversationId);
-        String query = queryRewriter.rewrite(ruleNormalized, historyForRewrite);
-        log.info("[对话管道] 会话ID={}, 原始={}, 规则归一化={}, LLM改写={}",
-                conversationId, question, ruleNormalized, query);
 
-        IntentResult intent = intentClassifier.classify(query);
-        log.info("[对话管道] 意图分类结果: intent={}, confidence={}, needsRetrieval={}, needsDiagnose={}, reason={}",
-                intent.getIntent(), intent.getConfidence(), intent.isNeedsRetrieval(), intent.isNeedsDiagnose(), intent.getReason());
-
-
+        // ========== 1. traceId 提取前置（纯正则零开销）：命中直接进诊断，省掉 rewrite+classify 两次 LLM 往返 ==========
         String traceId = TraceIdExtractor.extract(question);
-        if (traceId != null || intent.isNeedsDiagnose()) {
-            log.info("[对话管道] 命中诊断分支: traceId={}, needsDiagnose={}", traceId, intent.isNeedsDiagnose());
+        if (traceId != null) {
+            log.info("[对话管道] 消息含 traceId，直接进诊断分支: traceId={}", traceId);
             handleDiagnose(traceId, conversationId, emitter, otelTraceId);
             return;
         }
 
-        // ========== 2. 非查询类短路由 ==========
+        // ========== 2. 指代悬空检测（纯正则 + 一次轻查询）：「这篇文档」类指代在会话里找不到先行对象时
+        // 反问澄清，而不是把"这篇"静默解释成检索第一名（检索到哪篇就总结哪篇，用户易被误导） ==========
+        if (isDanglingDocReference(question, conversationId)) {
+            log.info("[对话管道] 指代悬空（会话无文档语境），反问澄清: question=\"{}\"", question);
+            askForDocClarification(conversationId, emitter, otelTraceId);
+            return;
+        }
+
+        // ========== 3. 意图分类（吃规则归一化结果；对改写不敏感）==========
+        IntentResult intent = intentClassifier.classify(ruleNormalized);
+        log.info("[对话管道] 意图分类结果: intent={}, confidence={}, needsRetrieval={}, needsDiagnose={}, reason={}",
+                intent.getIntent(), intent.getConfidence(), intent.isNeedsRetrieval(), intent.isNeedsDiagnose(), intent.getReason());
+
+        if (intent.isNeedsDiagnose()) {
+            log.info("[对话管道] 命中诊断分支: needsDiagnose=true");
+            handleDiagnose(null, conversationId, emitter, otelTraceId);
+            return;
+        }
+
+        // ========== 4. 非查询类短路由（闲聊短路，不做 LLM 改写）==========
         if (!intent.isNeedsRetrieval()) {
             log.info("[对话管道] 非查询意图，走闲聊回复");
             handleNonQuery(question, conversationId, emitter, otelTraceId);
             return;
         }
 
-        // ========== 3. Agent 编排检索（可插拔，默认 naive = 单次检索）==========
+        // ========== 5. 需要检索：才做历史加载 + LLM 改写 ==========
+        String historyForRewrite = buildHistoryContext(conversationId);
+        String query = queryRewriter.rewrite(ruleNormalized, historyForRewrite);
+        log.info("[对话管道] 会话ID={}, 原始={}, 规则归一化={}, LLM改写={}",
+                conversationId, question, ruleNormalized, query);
+
+        // ========== 6. Agent 编排检索（可插拔，默认 naive = 单次检索）==========
         long tRetrieve = System.currentTimeMillis();
         SearchContext searchCtx = SearchContext.builder()
                 .query(question)
@@ -153,7 +184,7 @@ public class StreamChatPipeline {
         // 发送 agent 执行轨迹（SSE trace 事件，前端对照面板用；一次性，在流式回答前发出）
         sendObsEvent(emitter, agentResult.trace());
 
-        // ========== 4. 空检索处理 ==========
+        // ========== 7. 空检索处理 ==========
         if (agentResult.verdict() == RetrievalVerdict.EMPTY || agentResult.isEmpty()) {
             log.warn("[对话管道] 检索结果为空(verdict={})，返回降级提示", agentResult.verdict());
             Long emptyMsgId = handleRetrievalEmpty(question, conversationId, emitter, otelTraceId);
@@ -161,7 +192,7 @@ public class StreamChatPipeline {
             return;
         }
 
-        // ========== 5. 构建上下文 + 流式回答 ==========
+        // ========== 8. 构建上下文 + 流式回答 ==========
         log.info("[对话管道] 开始流式回答, 上下文共 {} 条", agentResult.finalChunks().size());
         streamRagResponse(question, conversationId, agentResult.finalChunks(), emitter, t0, ragAgent.getType(), agentResult.trace(), otelTraceId);
     }
@@ -319,6 +350,96 @@ public class StreamChatPipeline {
 
     // ==================== 其他分支 ====================
 
+    /** 文档类指代词模式：这篇/该/上述/刚才的… + 文档/文件/文章/发票等（命中才做悬空判定，无命中零成本） */
+    private static final java.util.regex.Pattern DANGLING_DOC_REF = java.util.regex.Pattern.compile(
+            "(?:这篇|这封|这份|这则|该|上述|上面的|上面提到|刚才|刚刚|前面|之前)"
+                    + "(?:一?(?:篇|封|份|则)|的)?\\s*"
+                    + "(?:文档|文件|文章|资料|报告|报表|表格|发票|合同|手册|指南|规范)");
+
+    /**
+     * 「以文档为对象」的元问题模式：问题核心是某个文档容器的摘要/要点本身（总结文档、文档里的关键信息…），
+     * 没有任何业务主题词。此类问题同样需要明确的文档对象，与「这篇文档」指代同等对待。
+     */
+    private static final java.util.regex.Pattern META_DOC_QUESTION = java.util.regex.Pattern.compile(
+            "(?:总结|概括|概述|归纳|提炼|提取|梳理)\\s*一?下?"
+                    + "|(?:关键信息|核心要点|主要内容|重点内容|信息要点|核心内容)"
+                    + "|(?:讲了什么|说了什么|提到(?:了)?(?:哪些|什么)|包含(?:了)?(?:哪些|什么))");
+
+    /** 含文档类名词（元问题判定的前提：问题里根本没有"文档"字样就不可能是文档元问题） */
+    private static final java.util.regex.Pattern DOC_NOUN = java.util.regex.Pattern.compile(
+            "文档|文件|文章|资料");
+
+    /**
+     * 指代悬空判定：消息含「这篇文档」类指代、或是以文档为对象的元问题（无业务主题），但会话里找不到先行对象。
+     * <p>先行对象 = 此前 user 消息中出现过库内任一文档名（全名或去扩展名主干）。
+     * 新会话（此前无 user 消息）必悬空。仅正则命中时才做两次轻查询，正常消息零开销。</p>
+     */
+    private boolean isDanglingDocReference(String question, String conversationId) {
+        if (question == null
+                || (!DANGLING_DOC_REF.matcher(question).find() && !isMetaDocQuestion(question))) {
+            return false;
+        }
+        // 当前 user 消息已在 execute 开头落库，count <= 1 说明这是会话首条 → 必悬空
+        Long priorUserMsgs = messageMapper.selectCount(Wrappers.lambdaQuery(MessageEntity.class)
+                .eq(MessageEntity::getConversationId, conversationId)
+                .eq(MessageEntity::getRole, "user"));
+        if (priorUserMsgs == null || priorUserMsgs <= 1) {
+            return true;
+        }
+        // 有历史：拼最近 user 消息文本，与库内文档名比对（含去扩展名主干，用户提名字常不带后缀）
+        String recentUserText = messageMapper.selectList(Wrappers.lambdaQuery(MessageEntity.class)
+                        .select(MessageEntity::getContent)
+                        .eq(MessageEntity::getConversationId, conversationId)
+                        .eq(MessageEntity::getRole, "user")
+                        .orderByDesc(MessageEntity::getId)
+                        .last("LIMIT 10"))
+                .stream()
+                .map(MessageEntity::getContent)
+                .reduce("", (a, b) -> a + "\n" + (b == null ? "" : b));
+        List<String> docNames = documentMapper.selectList(Wrappers.lambdaQuery(DocumentEntity.class)
+                        .select(DocumentEntity::getName))
+                .stream()
+                .map(DocumentEntity::getName)
+                .filter(Objects::nonNull)
+                .toList();
+        for (String name : docNames) {
+            if (recentUserText.contains(name)) {
+                return false;
+            }
+            int dot = name.lastIndexOf('.');
+            if (dot > 0 && name.length() > 4) {
+                String stem = name.substring(0, dot);
+                // 主干太短（如 "a"、"doc"）会大量误匹配，跳过
+                if (stem.length() >= 4 && recentUserText.contains(stem)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 元问题判定：含文档类名词 + 命中元问题模式（总结/关键信息/讲了什么…）。
+     * <p>例：「文档中提到了哪些关键信息」（空状态页建议词）、「总结一下这份文件」。
+     * 反例（不拦）：「发票文档里提到了冲红流程」（"提到了"后跟具体主题，非"哪些/什么"泛问）、
+     * 「总结一下增值税发票冲红」（不含文档名词，自带主题，正常检索）。</p>
+     */
+    private static boolean isMetaDocQuestion(String question) {
+        return DOC_NOUN.matcher(question).find() && META_DOC_QUESTION.matcher(question).find();
+    }
+
+    /** 指代悬空的反问澄清（同诊断缺 traceId 的反问模式：落库 + 流式输出 + meta + complete）。 */
+    private void askForDocClarification(String conversationId, SseEmitter emitter, String otelTraceId) {
+        String ask = "你的问题指向某篇具体的文档，但我们当前的对话里还没有确定是哪一篇。\n\n"
+                + "可以带上文档名提问，比如「总结《增值税发票冲红流程.pdf》」；"
+                + "也可以描述得更具体一些（比如文档的主题、里面提到的内容），我来帮你定位。";
+        Long msgId = saveMessage(conversationId, "assistant", ask);
+        log.conversationOutput(ask);
+        sendEvent(emitter, ask);
+        sendMetaEvent(emitter, msgId, otelTraceId, null);
+        completeEmitter(emitter);
+    }
+
     /**
      * 处理问候/闲聊（不检索，直接回答）。
      */
@@ -328,13 +449,12 @@ public class StreamChatPipeline {
         StringBuilder fullAnswer = new StringBuilder();
         // 流式回调线程（reactor-netty）的 ambient HOLDER 常未恢复，subscribe 前于业务线程捕获 output sink
         Consumer<Object> outputSink = log.conversationSink();
-        ragAnswerStreamService.chitchat(question, conversationId)
+        Disposable disposable = ragAnswerStreamService.chitchat(question, conversationId)
                 .subscribe(
                         content -> {
+                            // 只累积 + 增量发 SSE；trace output 是覆盖写（last-write-wins），
+                            // 每 token 全量 accept 与完成时一次 accept 的最终结果等价，却每 token 白做一遍序列化
                             fullAnswer.append(content);
-                            // 先写 trace output 再发 SSE：客户端断连时 sendEvent 可能让 server span 提前结束，
-                            // 若在 error 回调再写会因 span 已结束而丢失 output。
-                            outputSink.accept(fullAnswer.toString());
                             sendEvent(emitter, content);
                         },
                         e -> {
@@ -347,11 +467,24 @@ public class StreamChatPipeline {
                         },
                         () -> {
                             String answer = fullAnswer.toString();
-                            Long msgId = saveMessage(conversationId, "assistant", answer);
+                            // 先写 trace output 再收尾：断连时 span 可能提前结束，晚了 output 丢失
                             outputSink.accept(answer);
-                            sendMetaEvent(emitter, msgId, otelTraceId, null);
-                            completeEmitter(emitter);
+                            // 落库/收尾移出 reactor 事件循环线程
+                            chatPersistExecutor.execute(() -> {
+                                Long msgId = null;
+                                try {
+                                    msgId = CompletableFuture.supplyAsync(
+                                            () -> saveMessage(conversationId, "assistant", answer),
+                                            chatPersistExecutor)
+                                            .get(5, TimeUnit.SECONDS);
+                                } catch (Exception persistEx) {
+                                    log.warn("[ChatPipeline] persist chat message failed", persistEx);
+                                }
+                                sendMetaEvent(emitter, msgId, otelTraceId, null);
+                                completeEmitter(emitter);
+                            });
                         });
+        cancelOnDisconnect(emitter, disposable, outputSink, fullAnswer, conversationId);
     }
 
     /**
@@ -385,26 +518,24 @@ public class StreamChatPipeline {
     private void streamRagResponse(String question, String conversationId,
                                     List<RetrievedChunk> chunks, SseEmitter emitter, long t0,
                                     String paradigm, AgentTrace trace, String otelTraceId) {
-        String contextText = buildContextText(chunks);
+        RagContext ragContext = buildContextText(chunks);
+        log.info("[对话管道] 给 LLM 的上下文: {}块{}文档 {}字符",
+                chunks.size(), ragContext.docCount(), ragContext.text().length());
 
-        int docCount = contextText.split("<content ref=\"", -1).length - 1;
-        log.info("[对话管道] 给 LLM 的上下文: {}块{}文档 {}字符", chunks.size(), docCount, contextText.length());
+        // 引用映射先行下发（流式开始前，与 trace 事件同模式）：正文里的 [N] 角标靠它渲染溯源
+        String citationsJson = toJsonOrNull(ragContext.citations());
+        sendCitationsEvent(emitter, citationsJson);
 
         StringBuilder fullAnswer = new StringBuilder();
         // 流式回调线程（reactor-netty）的 ambient HOLDER 常未恢复，subscribe 前于业务线程捕获 output sink
         Consumer<Object> outputSink = log.conversationSink();
-        ragAnswerStreamService.answer(question, contextText)
+        Disposable disposable = ragAnswerStreamService.answer(question, ragContext.text())
                 .subscribe(
                         content -> {
-                            try {
-                                fullAnswer.append(content);
-                                // 先写 trace output 再发 SSE：客户端断连时 sendEvent 可能让 server span 提前结束，
-                                // 若在 error 回调再写会因 span 已结束而丢失 output。
-                                outputSink.accept(fullAnswer.toString());
-                            } catch (Throwable t) {
-                                // 观测写失败绝不能中断流式回答
-                                log.warn("[ObservationPipeline] 写 trace output 失败（忽略）", t);
-                            }
+                            // 只累积 + 增量发 SSE；trace output 是覆盖写（last-write-wins），
+                            // 每 token 全量 accept 与完成时一次 accept 的最终结果等价，却每 token 白做一遍
+                            // Gson 序列化 + truncate + 写属性，且 O(n²) 复制累积全文
+                            fullAnswer.append(content);
                             sendEvent(emitter, content);
                         },
                         e -> {
@@ -422,32 +553,85 @@ public class StreamChatPipeline {
                         },
                         () -> {
                             String answer = fullAnswer.toString();
-                            Long msgId = null;
-                            try {
-                                msgId = saveMessage(conversationId, "assistant", answer);
-                            } catch (Throwable t) {
-                                log.warn("[对话管道] 保存助手消息失败", t);
-                            }
+                            // 先写 trace output 再收尾：断连时 span 可能提前结束，晚了 output 丢失
                             try {
                                 outputSink.accept(answer);
                             } catch (Throwable t) {
                                 log.warn("[ObservationPipeline] 写最终 trace output 失败", t);
                             }
-                            try {
-                                agentTraceService.record(conversationId, msgId, paradigm, question, trace, otelTraceId);
-                            } catch (Throwable t) {
-                                log.warn("[对话管道] 记录 agent trace 失败", t);
-                            }
-                            log.info("========== [对话管道] 完成 ========== 会话ID={}, 耗时={}ms",
-                                    conversationId, System.currentTimeMillis() - t0);
-                            // meta（messageId/traceId/paradigm）须在 complete 前 send：complete 后 emitter 关闭
-                            sendMetaEvent(emitter, msgId, otelTraceId, paradigm);
-                            completeEmitter(emitter);
+                            // saveMessage/agentTrace 是阻塞 JDBC，移出 reactor 事件循环线程（否则拖慢所有并发流）
+                            chatPersistExecutor.execute(() -> {
+                                Long msgId = null;
+                                try {
+                                    msgId = CompletableFuture.supplyAsync(
+                                            () -> saveMessage(conversationId, "assistant", answer, citationsJson),
+                                            chatPersistExecutor)
+                                            .get(5, TimeUnit.SECONDS);
+                                } catch (Throwable t) {
+                                    log.warn("[对话管道] 保存助手消息失败", t);
+                                }
+                                final Long traceMsgId = msgId;
+                                try {
+                                    CompletableFuture.supplyAsync(
+                                            () -> {
+                                                agentTraceService.record(conversationId, traceMsgId, paradigm, question, trace, otelTraceId);
+                                                return null;
+                                            },
+                                            chatPersistExecutor)
+                                            .get(5, TimeUnit.SECONDS);
+                                } catch (Throwable t) {
+                                    log.warn("[对话管道] 记录 agent trace 失败", t);
+                                }
+                                log.info("========== [对话管道] 完成 ========== 会话ID={}, 耗时={}ms",
+                                        conversationId, System.currentTimeMillis() - t0);
+                                // meta（messageId/traceId/paradigm）须在 complete 前 send：complete 后 emitter 关闭
+                                sendMetaEvent(emitter, msgId, otelTraceId, paradigm);
+                                completeEmitter(emitter);
+                            });
                         });
+        cancelOnDisconnect(emitter, disposable, outputSink, fullAnswer, conversationId);
+    }
+
+    /**
+     * 断连/超时取消 LLM 流订阅（省后续 token 计费）。
+     * <p>dispose 前把已累积的部分写入 trace output——流被取消后 complete 回调不会再执行，
+     * 不补写的话该轮 trace 只剩 input。正常完成时 Flux 已 disposed，回调内直接返回（no-op）。</p>
+     */
+    private void cancelOnDisconnect(SseEmitter emitter, Disposable disposable,
+                                    Consumer<Object> outputSink, StringBuilder fullAnswer,
+                                    String conversationId) {
+        Runnable cancel = () -> {
+            if (disposable.isDisposed()) {
+                return;
+            }
+            disposable.dispose();
+            String partial = fullAnswer.toString();
+            if (!partial.isEmpty()) {
+                try {
+                    outputSink.accept(partial);
+                } catch (Throwable t) {
+                    log.warn("[ObservationPipeline] 取消订阅时写 trace output 失败", t);
+                }
+            }
+            log.warn("[对话管道] SSE 断连/超时，已取消 LLM 流, 会话ID={}, 已生成 {} 字符", conversationId, partial.length());
+            completeEmitter(emitter);
+        };
+        emitter.onCompletion(cancel);
+        emitter.onTimeout(cancel);
+        emitter.onError(t -> cancel.run());
     }
 
 
 
+
+    /** 检索上下文组装结果：text = 拼好的上下文，docCount = 命中文档数，citations = 引用溯源映射 */
+    private record RagContext(String text, int docCount, List<Citation> citations) {
+    }
+
+    /** 回答引用溯源项：ref 对应提示词里 {@code <content ref="N">} 的 N，前端据此渲染 [N] 角标与来源面板 */
+    public record Citation(int ref, String docId, String docName, int chunkCount,
+                           String preview, String sourceLocation) {
+    }
 
     /**
      * 组装检索上下文（对齐 ragent DefaultContextFormatter 的按文档分组 + 阅读顺序还原）。
@@ -457,7 +641,7 @@ public class StreamChatPipeline {
      * 独立"资料"，提示词"不同 content 之间注意张冠李戴"会压制跨块整合，块间关联丢失。
      * 刻意不注入文档名与分数：标题/分数进入上下文会诱导"出自《XX》"或偏向高分块。</p>
      */
-    private String buildContextText(List<RetrievedChunk> chunks) {
+    private RagContext buildContextText(List<RetrievedChunk> chunks) {
         // 按 doc_id 分组（LinkedHashMap 保持首次出现顺序=相关性顺序），组内按 chunk_index 还原原文顺序；
         // doc_id 缺失的块各自单独成组（__nodoc__ + 序号），避免无关块被拼进同一份"资料"
         Map<String, List<RetrievedChunk>> byDoc = new LinkedHashMap<>();
@@ -468,16 +652,56 @@ public class StreamChatPipeline {
             byDoc.computeIfAbsent(key, k -> new ArrayList<>()).add(c);
         }
         StringBuilder sb = new StringBuilder("<documents>\n");
+        List<Citation> citations = new ArrayList<>(byDoc.size());
+        Map<String, String> sourceLocations = loadSourceLocations(byDoc.keySet());
         int idx = 1;
-        for (List<RetrievedChunk> group : byDoc.values()) {
+        for (Map.Entry<String, List<RetrievedChunk>> entry : byDoc.entrySet()) {
+            List<RetrievedChunk> group = entry.getValue();
             group.sort(Comparator.comparingInt(this::chunkIndexOf));
-            sb.append("<content ref=\"").append(idx++).append("\">\n");
+            sb.append("<content ref=\"").append(idx).append("\">\n");
             for (RetrievedChunk c : group) {
                 sb.append(c.getContent() == null ? "" : c.getContent()).append("\n");
             }
             sb.append("</content>\n");
+            citations.add(buildCitation(idx, entry.getKey(), group, sourceLocations));
+            idx++;
         }
-        return sb.append("</documents>").toString();
+        return new RagContext(sb.append("</documents>").toString(), byDoc.size(), citations);
+    }
+
+    /** 组装单条引用溯源项：预览取该文档首个命中块前 240 字（压空白；右侧抽屉展示用） */
+    private Citation buildCitation(int ref, String docKey, List<RetrievedChunk> group,
+                                   Map<String, String> sourceLocations) {
+        String docId = docKey.startsWith("__nodoc__") ? null : docKey;
+        String preview = TextPreviews.preview(group.get(0).getContent(), 240);
+        return new Citation(ref, docId, docNameOf(group.get(0)), group.size(), preview,
+                docId != null ? sourceLocations.get(docId) : null);
+    }
+
+    /** chunk 来源文档名（doc_name 元数据；与 MultiChannelRetrievalEngine 日志口径一致） */
+    private static String docNameOf(RetrievedChunk c) {
+        Object v = c.getMetadata() == null ? null : c.getMetadata().get("doc_name");
+        return v != null ? String.valueOf(v) : "未知文档";
+    }
+
+    /** 批量预查文档公开预览 URL（sa_document.source_location → docId），一次 IN 免逐文档 N+1 */
+    private Map<String, String> loadSourceLocations(Set<String> docKeys) {
+        List<String> docIds = docKeys.stream().filter(k -> !k.startsWith("__nodoc__")).toList();
+        if (docIds.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return documentMapper.selectList(Wrappers.lambdaQuery(DocumentEntity.class)
+                            .in(DocumentEntity::getDocId, docIds)
+                            .select(DocumentEntity::getDocId, DocumentEntity::getSourceLocation))
+                    .stream()
+                    .filter(d -> d.getSourceLocation() != null)
+                    .collect(java.util.stream.Collectors.toMap(DocumentEntity::getDocId,
+                            DocumentEntity::getSourceLocation));
+        } catch (Exception e) {
+            log.warn("[对话管道] 批量查询引用文档原文链接失败: {}", e.getMessage());
+            return Map.of();
+        }
     }
 
     /** chunk 在文档内的阅读序号（metadata.chunk_index），缺失按 0 排最前 */
@@ -510,6 +734,28 @@ public class StreamChatPipeline {
             emitter.send(SseEmitter.event().name("trace").data(json));
         } catch (Exception e) {
             log.debug("[ObservationPipeline] trace 事件发送失败（忽略）: {}", e.getMessage());
+        }
+    }
+
+    /** 发送引用溯源映射（SSE citations 事件，流式开始前一次性）：ref → 文档信息，前端渲染 [N] 角标与来源面板。 */
+    private void sendCitationsEvent(SseEmitter emitter, String citationsJson) {
+        if (citationsJson == null) {
+            return;
+        }
+        try {
+            emitter.send(SseEmitter.event().name("citations").data(citationsJson));
+        } catch (Exception e) {
+            log.debug("[对话管道] citations 事件发送失败（忽略）: {}", e.getMessage());
+        }
+    }
+
+    /** 序列化失败返回 null（引用溯源是增强功能，绝不能阻断回答主链路） */
+    private String toJsonOrNull(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("[对话管道] citations 序列化失败（忽略）: {}", e.getMessage());
+            return null;
         }
     }
 
@@ -562,6 +808,8 @@ public class StreamChatPipeline {
                 Wrappers.lambdaQuery(MessageEntity.class)
                         .eq(MessageEntity::getConversationId, conversationId)
                         .orderByDesc(MessageEntity::getCreatedAt)
+                        // 同秒多条消息时以 id 决胜，保证多轮改写上下文顺序稳定
+                        .orderByDesc(MessageEntity::getId)
                         .last("LIMIT 4"));
         if (recent == null || recent.isEmpty() || recent.size() < 2){
             return Strings.EMPTY;
@@ -581,44 +829,57 @@ public class StreamChatPipeline {
 
     // ==================== 消息持久化 ====================
 
+    /**
+     * 确保会话存在并刷新 updated_at。
+     * <p>热路径（已存在）走单语句 UPDATE 免取整行；不存在再插入，并发首条消息的
+     * check-then-insert 竞态由 conversation_id 唯一约束兜底（DuplicateKeyException 幂等忽略）。</p>
+     */
     private void ensureConversation(String conversationId, String firstQuestion) {
-        ConversationEntity existing;
-        existing = conversationMapper.selectOne(Wrappers.lambdaQuery(ConversationEntity.class).eq(ConversationEntity::getConversationId, conversationId));
-        if (existing != null) {
-            existing.setUpdatedAt(LocalDateTime.now());
-            conversationMapper.updateById(existing);
+        int updated = conversationMapper.update(null,
+                Wrappers.lambdaUpdate(ConversationEntity.class)
+                        .eq(ConversationEntity::getConversationId, conversationId)
+                        .set(ConversationEntity::getUpdatedAt, LocalDateTime.now()));
+        if (updated > 0) {
             return;
         }
         ConversationEntity conversationEntity = new ConversationEntity();
         conversationEntity.setConversationId(conversationId);
         // 用首条问题前 30 字作为标题
         String title = firstQuestion == null ? "新对话" : firstQuestion.trim();
-        if (title.length() > 30){
+        if (title.length() > 30) {
             title = title.substring(0, 30);
         }
         conversationEntity.setTitle(title);
         conversationEntity.setCreatedAt(LocalDateTime.now());
         conversationEntity.setUpdatedAt(LocalDateTime.now());
-        conversationMapper.insert(conversationEntity);
+        try {
+            conversationMapper.insert(conversationEntity);
+        } catch (DuplicateKeyException e) {
+            // 并发首条消息：另一请求已插入，幂等
+        }
     }
 
+    /**
+     * 保存一条消息并返回其 id。
+     * <p>会话 updated_at 由 {@link #ensureConversation} 在请求入口统一刷新，此处不再重复回写
+     * （原实现每条消息多 2 次 DB 往返：select 整行 + update）。</p>
+     */
     private Long saveMessage(String conversationId, String role, String content) {
-        if (content == null || content.isBlank()){
+        return saveMessage(conversationId, role, content, null);
+    }
+
+    /** 同上，带引用溯源 JSON（仅 RAG assistant 消息非空）。 */
+    private Long saveMessage(String conversationId, String role, String content, String citationsJson) {
+        if (content == null || content.isBlank()) {
             return null;
         }
         MessageEntity messageEntity = new MessageEntity();
         messageEntity.setConversationId(conversationId);
         messageEntity.setRole(role);
         messageEntity.setContent(content);
+        messageEntity.setCitations(citationsJson);
         messageEntity.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(messageEntity);
-        // 更新会话时间
-        ConversationEntity conv = conversationMapper.selectOne(
-                Wrappers.lambdaQuery(ConversationEntity.class).eq(ConversationEntity::getConversationId, conversationId));
-        if (conv != null) {
-            conv.setUpdatedAt(LocalDateTime.now());
-            conversationMapper.updateById(conv);
-        }
         return messageEntity.getId();
     }
 }

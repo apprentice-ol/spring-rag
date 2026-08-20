@@ -9,9 +9,20 @@
         <captureExperimentalAttributes>true</captureExperimentalAttributes>
     </appender>
 
+    <!-- CONSOLE 异步化：服务器上 stdout 经 dockerd json-file 落盘，与 OpenObserve/Postgres 同盘；
+         评测跑批期 telemetry 步骤日志（step.input/output 大 JSON）同步写会随磁盘压力阻塞业务线程，
+         表现为逐题耗时单调上涨。改为队列异步写，队满丢弃新日志而不是阻塞（neverBlock=true）。
+         遥测数据走 OPEN_TELEMETRY appender（OTLP Batch 异步，队满自带丢弃），不受此影响。 -->
+    <appender name="CONSOLE_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>4096</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="CONSOLE"/>
+    </appender>
+
     <!-- 日志级别由 application.yaml 的 logging.level 控制 -->
     <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="CONSOLE_ASYNC"/>
         <appender-ref ref="OPEN_TELEMETRY"/>
     </root>
 </configuration>

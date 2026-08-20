@@ -12,6 +12,7 @@ import com.nageoffer.ai.rag.ingestion.engine.NodeConfig;
 import com.nageoffer.ai.rag.ingestion.engine.PipelineDefinition;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.nageoffer.ai.rag.ingestion.service.IngestionPipelineService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>搬原 ragent IngestionPipelineServiceImpl 的 getDefinition 逻辑（读 DB → NodeConfig，
  * settings/condition 用 ObjectMapper.readTree 转 JsonNode），删 LogRecord/UserContext。
+ * getDefinition 带 ConcurrentHashMap 缓存：流水线极少变化，但每份文档入库都要查 2 次 DB + readTree。</p>
  */
 @Slf4j
 @Service
@@ -34,8 +36,15 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
     private final IngestionPipelineNodeMapper nodeMapper;
     private final ObjectMapper objectMapper;
 
+    /** 流水线定义缓存（pipelineId → definition）；写路径（建/删）失效 */
+    private final ConcurrentHashMap<String, PipelineDefinition> definitionCache = new ConcurrentHashMap<>();
+
     @Override
     public PipelineDefinition getDefinition(String pipelineId) {
+        return definitionCache.computeIfAbsent(pipelineId, this::loadDefinition);
+    }
+
+    private PipelineDefinition loadDefinition(String pipelineId) {
         IngestionPipelineEntity pipeline = resolvePipeline(pipelineId);
         if (pipeline == null) {
             throw new ClientException("流水线不存在: " + pipelineId);
@@ -71,6 +80,7 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
             nodeMapper.insert(node);
         }
         log.info("[ObservationPipeline] 创建流水线: id={}, name={}, nodes={}", pipeline.getId(), name, nodes.size());
+        definitionCache.remove(name);
         return pipeline.getId();
     }
 
@@ -88,8 +98,13 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
     @Override
     public void deletePipeline(Long id) {
         // 物理删除：pipeline name 全局唯一，逻辑删除会残留 name 占位，导致无法重建同名
+        IngestionPipelineEntity pipeline = pipelineMapper.selectById(id);
         nodeMapper.deletePhysicalByPipelineId(id);
         pipelineMapper.deletePhysical(id);
+        if (pipeline != null) {
+            definitionCache.remove(pipeline.getName());
+        }
+        definitionCache.remove(String.valueOf(id));
     }
 
     /** pipelineId 可能是数字 id 或 name，先按 id 再按 name。 */

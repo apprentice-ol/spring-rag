@@ -7,6 +7,7 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.Strictness;
 import com.google.gson.stream.JsonReader;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.StringReader;
 import java.util.Collections;
@@ -17,6 +18,7 @@ import java.util.Map;
 /**
  * JSON 响应解析器，用于解析 LLM 返回的 JSON 字符串
  */
+@Slf4j
 public final class JsonResponseParser {
 
     private static final Gson GSON = new Gson();
@@ -51,6 +53,8 @@ public final class JsonResponseParser {
             reader.setStrictness(Strictness.LENIENT);
             return JsonParser.parseReader(reader);
         } catch (JsonSyntaxException e) {
+            // 保持返回 null 契约，但留一条 warn 便于排障时区分「格式错误」与「真为空」
+            log.warn("[JsonResponseParser] LLM 响应 JSON 解析失败, 片段: {}", StrUtil.subPre(trimmed, 200), e);
             return null;
         }
     }

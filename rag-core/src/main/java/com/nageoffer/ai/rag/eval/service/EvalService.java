@@ -44,8 +44,14 @@ public interface EvalService {
     /** 列运行（可按 datasetId / status 过滤，均空则全部） */
     List<EvalRunEntity> listRuns(Long datasetId, String status);
 
-    /** 查某次运行的逐条指标明细 */
-    List<EvalMetricEntity> getMetrics(Long runId);
+    /**
+     * 查某次运行的逐条指标明细（item 级分页）。
+     *
+     * @param page 页码（1 起）
+     * @param size 每页 item 数（每 item 含全部指标行）
+     * @return total = item 总数；records = 页内 item 的指标行（不含 agent_trace 列）
+     */
+    com.nageoffer.ai.rag.ingestion.domain.dto.PageResult<EvalMetricEntity> getMetrics(Long runId, int page, int size);
 
     /** 删运行（级联删指标明细） */
     void deleteRun(Long runId);
@@ -55,10 +61,12 @@ public interface EvalService {
 
     /**
      * 单条重评（保留历史，新增一条 attempt）：对某次运行的某条条目重新检索打分。
-     * 可选启用查询改写、可选指定 agent 范式（覆盖原 run 范式）、可填备注，结果以新 attempt 行落库，不污染原 run 聚合。
+     * 可选启用查询改写、可选指定 agent 范式（覆盖原 run 范式）、可选仅检索期望文档（per-question 模式）、可填备注，
+     * 结果以新 attempt 行落库，不污染原 run 聚合。
      *
-     * @param paradigm agent 范式（naive/react）；null 用原 run 范式
+     * @param paradigm    agent 范式（naive/react）；null 用原 run 范式
+     * @param perQuestion 仅检索期望文档；null 沿用原 run 设置
      * @return 本次重评的 attempt 序号（1 起）
      */
-    int reevaluateItem(Long runId, Long itemId, Boolean rewriteEnabled, String remark, String paradigm);
+    int reevaluateItem(Long runId, Long itemId, Boolean rewriteEnabled, String remark, String paradigm, Boolean perQuestion);
 }

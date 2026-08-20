@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import {
   listConversations, getMessages, deleteConversation,
-  type ConversationItem, type AgentTrace,
+  type ConversationItem, type AgentTrace, type Citation,
 } from '../api/chat'
 
 /**
@@ -21,11 +21,17 @@ export interface Msg {
   ts?: number
   /** 本轮 SSE trace 事件携带的 agent 轨迹（仅本次会话内存态；历史消息走 by-message 接口拉取） */
   trace?: AgentTrace
+  /** 引用溯源（SSE citations 事件/历史加载获得；正文 [N] 角标据此渲染） */
+  citations?: Citation[]
 }
 
 export const conversations = ref<ConversationItem[]>([])
 export const activeId = ref('')
 export const messages = ref<Msg[]>([])
+/** 会话列表分页状态（ConversationList「加载更多」用） */
+export const conversationTotal = ref(0)
+const convPageSize = 20
+let convPage = 1
 
 export function genId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -48,26 +54,86 @@ export async function initChatState() {
   }
 }
 
+/** 消息条数已到最早时置 false（「加载更早」入口隐藏用） */
+export const hasEarlierMessages = ref(false)
+
+function toMsg(m: {
+  id: number
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+  citations?: string | null
+  traceId?: string | null
+}): Msg {
+  let citations: Citation[] | undefined
+  if (m.citations) {
+    try {
+      citations = JSON.parse(m.citations)
+    } catch {
+      /* 损坏的引用 JSON 忽略 */
+    }
+  }
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    ts: m.createdAt ? new Date(m.createdAt).getTime() : undefined,
+    citations,
+    traceId: m.traceId || undefined,
+  }
+}
+
 async function loadMessages(convId: string) {
   try {
+    // 首屏只取最近 50 条（升序），更早的走「向上加载」
     const msgs = await getMessages(convId)
-    // 保留 id/ts：assistant 气泡按 messageId 查 agent 轨迹，ts 供 OO 深链生成查询窗口
-    messages.value = msgs.map(m => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      ts: m.createdAt ? new Date(m.createdAt).getTime() : undefined,
-    }))
+    messages.value = msgs.map(toMsg)
+    hasEarlierMessages.value = msgs.length >= 50
   } catch {
     messages.value = []
+    hasEarlierMessages.value = false
+  }
+}
+
+/** 向上加载更早一页消息（前插），返回是否加载成功 */
+export async function loadEarlierMessages(): Promise<boolean> {
+  const oldestId = messages.value.find(m => m.id != null)?.id
+  if (!activeId.value || oldestId == null) return false
+  try {
+    const earlier = await getMessages(activeId.value, oldestId)
+    if (earlier.length > 0) {
+      messages.value = [...earlier.map(toMsg), ...messages.value]
+    }
+    hasEarlierMessages.value = earlier.length >= 50
+    return earlier.length > 0
+  } catch {
+    return false
   }
 }
 
 export async function loadConversations() {
   try {
-    conversations.value = await listConversations()
+    const page = await listConversations(1, convPageSize)
+    conversations.value = page.records
+    conversationTotal.value = page.total
+    convPage = 1
   } catch {
     conversations.value = []
+    conversationTotal.value = 0
+  }
+}
+
+/** 会话列表「加载更多」（下一页追加） */
+export async function loadMoreConversations(): Promise<boolean> {
+  if (conversations.value.length >= conversationTotal.value) return false
+  try {
+    const page = await listConversations(convPage + 1, convPageSize)
+    convPage += 1
+    conversations.value = [...conversations.value, ...page.records]
+    conversationTotal.value = page.total
+    return page.records.length > 0
+  } catch {
+    return false
   }
 }
 

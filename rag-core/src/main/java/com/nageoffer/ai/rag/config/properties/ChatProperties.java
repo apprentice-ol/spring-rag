@@ -34,4 +34,30 @@ public class ChatProperties {
 
     /** RRF 融合后送入 Rerank 的候选池上限（成本天花板）；对标 ragent rag.search.fusion.rerank-candidate-limit（40） */
     private int candidateLimit = 40;
+
+    /**
+     * Rerank 相关性分数阈值：精排后低于该分的 chunk 不进 LLM 上下文（宁缺毋滥，防低相关块稀释注意力）。
+     * 0 = 关闭过滤（保持旧行为）。百炼 rerank 分数 0~1，相关通常 >0.3、不相关 <0.05，0.1 为保守线。
+     */
+    private double rerankScoreThreshold = 0.1;
+
+    /** 检索执行参数（通道并行池 / 超时） */
+    private Retrieval retrieval = new Retrieval();
+
+    @Data
+    public static class Retrieval {
+
+        /**
+         * 单通道检索超时（毫秒）。注意 orTimeout 从任务<b>提交</b>起算（含排队），
+         * 超时通道的结果被整体丢弃、其余通道照常融合。
+         */
+        private long channelTimeoutMs = 5000;
+
+        /**
+         * 检索并行执行器线程数（core=max 同值）。应 ≥ 峰值并发请求数 × 每请求通道数：
+         * 通道任务是短阻塞 IO（JdbcTemplate + HTTP rerank），池小了任务在队列里排队，
+         * orTimeout 会在执行开始前就把结果判超时丢弃（检索质量静默退化）。
+         */
+        private int executorPoolSize = 8;
+    }
 }

@@ -38,6 +38,31 @@ public final class QueryNormalizer {
     private static final Pattern TAIL_PUNCT = Pattern.compile(
             "[\\p{Punct}\\s，。！？、；：“”‘’（）《》【】「」『』·…]+$");
 
+    /** 连续空白压缩（热路径，避免 replaceAll 每次隐式编译） */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+
+    /** 连续"的"清理 */
+    private static final Pattern CONSECUTIVE_DE = Pattern.compile("的{2,}");
+
+    /**
+     * 疑问句→陈述句改写规则（模式 + 替换串成对）。
+     */
+    private record RewriteRule(Pattern pattern, String replacement) {
+    }
+
+    /** 改写规则表；Pattern 全部预编译（本方法在每次查询的归一化路径上，do-while 还可能多轮） */
+    private static final RewriteRule[] DECLARATIVE_RULES = {
+            new RewriteRule(Pattern.compile("(?:怎么|如何|咋)(?:使用|用)"), "的使用方式"),
+            new RewriteRule(Pattern.compile("(?:怎么|如何)(?:配置|设置|开启|启用)"), "的配置方法"),
+            new RewriteRule(Pattern.compile("(?:怎么|如何)(?:实现)"), "的实现方式"),
+            new RewriteRule(Pattern.compile("(?:怎么|如何)(?:部署|安装|调用)"), "的使用方法"),
+            new RewriteRule(Pattern.compile("为什么(?:要)?用\\s*(.+)"), "使用 $1 的原因"),
+            new RewriteRule(Pattern.compile("为什么\\s*(.+)"), "$1的原因"),
+            new RewriteRule(Pattern.compile("是(?:什么|啥|干嘛的|干啥的)"), "的概念介绍"),
+            new RewriteRule(Pattern.compile("有(?:哪些|什么类型|啥类型)"), "的类型"),
+            new RewriteRule(Pattern.compile("有(?:什么用|啥用|什么作用|啥作用)"), "的作用"),
+    };
+
     /**
      * 归一化用户查询。
      *
@@ -51,7 +76,7 @@ public final class QueryNormalizer {
         // 1. 全角→半角（英数字与常见标点）
         String s = toHalfWidth(raw);
         // 2. 压缩连续空白
-        s = s.replaceAll("\\s+", " ").trim();
+        s = WHITESPACE.matcher(s).replaceAll(" ").trim();
         // 3. 去无意义前缀（循环，应对"你好，请问一下"这类叠加）
         String prev;
         do {
@@ -81,18 +106,12 @@ public final class QueryNormalizer {
         String prev;
         do {
             prev = s;
-            s = s.replaceAll("(?:怎么|如何|咋)(?:使用|用)", "的使用方式")
-                    .replaceAll("(?:怎么|如何)(?:配置|设置|开启|启用)", "的配置方法")
-                    .replaceAll("(?:怎么|如何)(?:实现)", "的实现方式")
-                    .replaceAll("(?:怎么|如何)(?:部署|安装|调用)", "的使用方法")
-                    .replaceAll("为什么(?:要)?用\\s*(.+)", "使用 $1 的原因")
-                    .replaceAll("为什么\\s*(.+)", "$1的原因")
-                    .replaceAll("是(?:什么|啥|干嘛的|干啥的)", "的概念介绍")
-                    .replaceAll("有(?:哪些|什么类型|啥类型)", "的类型")
-                    .replaceAll("有(?:什么用|啥用|什么作用|啥作用)", "的作用");
+            for (RewriteRule rule : DECLARATIVE_RULES) {
+                s = rule.pattern().matcher(s).replaceAll(rule.replacement());
+            }
         } while (!s.equals(prev));
         // 清理可能出现的连续"的"
-        s = s.replaceAll("的{2,}", "的");
+        s = CONSECUTIVE_DE.matcher(s).replaceAll("的");
         return s;
     }
 

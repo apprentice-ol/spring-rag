@@ -58,6 +58,30 @@ export const METRIC_KNOWLEDGE: Record<string, MetricKnow> = {
           ? '当前值良好：排序基本合理，个别位置需要优化。'
           : '当前值偏低：排序整体欠佳，与 Precision@k 一起看定位问题。',
   },
+  answer_correctness: {
+    label: '答案正确性',
+    stage: '答案质量',
+    dir: '越高越好',
+    desc: '生成答案与黄金答案在关键事实/数字/实体上的一致程度（LLM-as-judge，0~1）。',
+    judge: (m) =>
+      m >= 0.8
+        ? '当前值优秀：关键事实与黄金答案基本一致。'
+        : m >= 0.5
+          ? '当前值一般：部分关键事实缺失或表述有偏差。'
+          : '当前值偏低：答案与黄金答案事实层面存在明显分歧。',
+  },
+  answer_faithfulness: {
+    label: '答案忠实度',
+    stage: '答案质量',
+    dir: '越高越好',
+    desc: '生成答案是否严格基于检索上下文、未编造上下文外事实（LLM-as-judge，0~1）。',
+    judge: (m) =>
+      m >= 0.8
+        ? '当前值优秀：答案忠于检索上下文，无明显编造。'
+        : m >= 0.5
+          ? '当前值一般：存在少量上下文外推断或幻觉。'
+          : '当前值偏低：答案大量依赖上下文外信息。',
+  },
 }
 
 /** 基础指标名（去掉 _at_k 数字后缀），如 recall_at_5 → recall_at */
@@ -71,6 +95,8 @@ const METRIC_CN: Record<string, string> = {
   precision_at: '精确率',
   mrr: 'MRR',
   ndcg_at: 'nDCG',
+  answer_correctness: '答案正确性',
+  answer_faithfulness: '答案忠实度',
 }
 
 /** 指标名 → 中文标签（带 k），如 recall_at_5 → 召回率@5；mrr → MRR；未知指标原样返回 */
@@ -86,6 +112,14 @@ export function metricLabel(name: string): string {
 /** 是否检索环节指标（蓝），否则排序环节（橙）—— 用于卡片配色 */
 export function isRetrievalMetric(name: string): boolean {
   return metricKey(name) === 'recall_at'
+}
+
+/** 指标所属阶段（聚合卡阶段徽标用）：检索=蓝、精排=琥珀、答案质量=绿。 */
+export function metricStage(name: string): { cls: 'stage-ret' | 'stage-sort' | 'stage-answer'; label: string } {
+  const base = metricKey(name)
+  if (base === 'recall_at') return { cls: 'stage-ret', label: '检索' }
+  if (base === 'answer_correctness' || base === 'answer_faithfulness') return { cls: 'stage-answer', label: '答案质量' }
+  return { cls: 'stage-sort', label: '精排' }
 }
 
 /** 按均值给颜色档：≥0.8 绿 / 0.5–0.8 黄 / <0.5 红 */
@@ -151,6 +185,12 @@ export interface RunParams {
   candidateLimit?: number
   contextTopK?: number
   rewrite?: boolean
+  /** 答案质量评测（生成答案 + LLM-as-judge） */
+  answerEval?: boolean
+  /** per-question 检索模式：检索限定在该题期望文档内 */
+  perQuestion?: boolean
+  /** 抽样说明：数量超范围已全量 / 未指定范围按比例抽了多少条 等 */
+  note?: string
 }
 
 /** 从 run.paramSnapshot（jsonb 字符串）解析出本次检索参数 */

@@ -12,10 +12,32 @@ export interface MessageItem {
   role: 'user' | 'assistant'
   content: string
   createdAt: string
+  /** 引用溯源 JSON（后端 jsonb 读出的字符串；RAG 回答非空，需 JSON.parse） */
+  citations?: string | null
+  /** 关联 Agent 轨迹的 traceId（历史消息加载时后端批量回填，跳 OpenObserve 全链路用） */
+  traceId?: string | null
 }
 
-export async function listConversations(): Promise<ConversationItem[]> {
-  const { data } = await (await import('./client')).http.get<ConversationItem[]>('/chat/conversations')
+/** 回答引用溯源项（后端 Citation record 镜像）：ref 对应正文 [N] 角标 */
+export interface Citation {
+  ref: number
+  docId: string | null
+  docName: string
+  chunkCount: number
+  preview: string
+  sourceLocation: string | null
+}
+
+/** 通用分页返回（后端 PageResult 镜像） */
+export interface PageResult<T> {
+  total: number
+  records: T[]
+}
+
+export async function listConversations(page = 1, size = 20): Promise<PageResult<ConversationItem>> {
+  const { data } = await (await import('./client')).http.get<PageResult<ConversationItem>>(
+    '/chat/conversations', { params: { page, size } },
+  )
   return data
 }
 
@@ -24,8 +46,16 @@ export async function createConversation(title?: string): Promise<ConversationIt
   return data
 }
 
-export async function getMessages(conversationId: string): Promise<MessageItem[]> {
-  const { data } = await (await import('./client')).http.get<MessageItem[]>(`/chat/conversations/${conversationId}/messages`)
+/**
+ * 会话消息（id 游标分页，按时间升序返回）。
+ * 默认返回最近 limit 条；带 beforeId 返回更早一页（「向上加载更早」），返回条数小于 limit 即已到最早。
+ */
+export async function getMessages(conversationId: string, beforeId?: number, limit = 50): Promise<MessageItem[]> {
+  const params: Record<string, number> = { limit }
+  if (beforeId != null) params.beforeId = beforeId
+  const { data } = await (await import('./client')).http.get<MessageItem[]>(
+    `/chat/conversations/${conversationId}/messages`, { params },
+  )
   return data
 }
 
@@ -100,6 +130,7 @@ export interface StreamMeta {
 export interface StreamHandlers {
   onContent: (chunk: string) => void
   onTrace?: (trace: AgentTrace) => void
+  onCitations?: (citations: Citation[]) => void
   onMeta?: (meta: StreamMeta) => void
   onError: (err: unknown) => void
   onDone: () => void
@@ -147,6 +178,15 @@ export async function streamChat(
               handlers.onTrace(JSON.parse(raw) as AgentTrace)
             } catch {
               /* 忽略损坏的 trace */
+            }
+          }
+        } else if (currentEvent === 'citations') {
+          // citations 事件（引用溯源映射，流式开始前一次）：ref → 文档信息，无处理器静默丢弃
+          if (handlers.onCitations) {
+            try {
+              handlers.onCitations(JSON.parse(raw) as Citation[])
+            } catch {
+              /* 忽略损坏的 citations */
             }
           }
         } else if (currentEvent === 'meta') {

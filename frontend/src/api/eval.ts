@@ -12,6 +12,7 @@ export interface EvalItem {
   datasetId: number
   question: string
   expectedDocIds: string | null
+  expectedAnswer?: string | null
   category: string | null
   source: string
   enabled: number
@@ -39,6 +40,10 @@ export interface EvalMetric {
   retrievedDocNames: string | null
   expectedDocIds: string | null
   expectedDocNames: string | null
+  /** 标准答案（黄金集冗余投影，答案评测展示用） */
+  expectedAnswer?: string | null
+  /** 系统生成答案（answerEval 时 LLM 生成，与标准答案对照展示） */
+  generatedAnswer?: string | null
   metricName: string
   score: number
   detail: string | null
@@ -46,10 +51,17 @@ export interface EvalMetric {
   attempt?: number | null
   remark?: string | null
   rewrite?: boolean | null
+  /** 该条是否仅检索期望文档（per-question 上限对照；重评可覆盖原 run 设置） */
+  perQuestion?: boolean | null
   paradigm?: string | null
   category?: string | null
   traceId?: string | null
-  agentTrace?: string | null
+}
+
+/** 通用分页返回（后端 PageResult 镜像；total 按 item 计） */
+export interface MetricsPage {
+  total: number
+  records: EvalMetric[]
 }
 
 export async function listDatasets(): Promise<EvalDataset[]> {
@@ -69,7 +81,7 @@ export async function listItems(datasetId: number): Promise<EvalItem[]> {
 
 export async function addItems(
   datasetId: number,
-  items: { question: string; expectedDocIds: string[]; category?: string }[],
+  items: { question: string; expectedDocIds: string[]; expectedAnswer?: string; category?: string }[],
 ): Promise<{ added: number }> {
   const { data } = await http.post<{ added: number }>(`/eval/datasets/${datasetId}/items`, items)
   return data
@@ -83,6 +95,10 @@ export interface LiveRagImportResult {
   docsIngested: number
   docsFailed: number
   itemsSkipped: number
+  /** 语料归入的文档集合 ID（未指定时自动按数据集名建） */
+  collectionId: number
+  /** 语料归入的文档集合名 */
+  collectionName: string
   elapsedMs: number
 }
 
@@ -91,6 +107,8 @@ export async function importLiveRag(opts: {
   sampleSize?: number
   forceRefresh?: boolean
   datasetName?: string
+  /** 语料归入的文档集合 ID；空则自动按数据集名查/建同名集合 */
+  collectionId?: number
 }): Promise<LiveRagImportResult> {
   // 同步导入 2-5 分钟，覆盖全局 60s 超时（10 分钟）
   const { data } = await http.post<LiveRagImportResult>('/eval/datasets/import/liverag', opts, {
@@ -108,6 +126,10 @@ export async function triggerRun(
     paradigm?: string
     /** 指定只跑这些条目 id（精确子集）；非空时覆盖 category/limit，用于多范式同题对照 */
     itemIds?: number[]
+    /** 是否启用答案质量评测（生成答案 + LLM-as-judge 打分） */
+    answerEval?: boolean
+    /** per-question 检索模式：检索限定在该题 expected_doc_ids 内（实验开关） */
+    perQuestion?: boolean
   },
 ): Promise<{ runId: number }> {
   const { data } = await http.post<{ runId: number }>('/eval/runs', { datasetId, ...opts })
@@ -124,8 +146,14 @@ export async function getRun(runId: number): Promise<EvalRun> {
   return data
 }
 
-export async function getMetrics(runId: number): Promise<EvalMetric[]> {
-  const { data } = await http.get<EvalMetric[]>(`/eval/runs/${runId}/metrics`)
+/**
+ * 指标明细（item 级分页）：page/size 针对 item（每 item 含其全部指标行），
+ * total 为 item 总数；后端不再返回 agent_trace 大字段。
+ */
+export async function getMetrics(runId: number, page = 1, size = 20): Promise<MetricsPage> {
+  const { data } = await http.get<MetricsPage>(`/eval/runs/${runId}/metrics`, {
+    params: { page, size },
+  })
   return data
 }
 
@@ -163,7 +191,7 @@ export async function retryRun(runId: number): Promise<{ runId: number }> {
 export async function reevaluateItem(
   runId: number,
   itemId: number,
-  opts?: { rewriteEnabled?: boolean; remark?: string; paradigm?: string },
+  opts?: { rewriteEnabled?: boolean; remark?: string; paradigm?: string; perQuestion?: boolean },
 ): Promise<{ runId: number; itemId: number; attempt: number }> {
   const { data } = await http.post(`/eval/runs/${runId}/items/${itemId}/reevaluate`, opts)
   return data

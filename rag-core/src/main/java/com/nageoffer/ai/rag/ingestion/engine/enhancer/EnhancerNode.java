@@ -18,6 +18,7 @@ import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -41,8 +42,12 @@ public class EnhancerNode implements IngestionNode {
             EnhanceType.QUESTIONS, "ingestion/enhancer/questions",
             EnhanceType.METADATA, "ingestion/enhancer/metadata");
 
-    /** [暂时屏蔽] 设为 false 跳过 Enhancer 整篇增强，保持 chunk content 为原始解析内容（标题等只进 metadata）。恢复改 true */
-    private static final boolean ENHANCER_ENABLED = false;
+    /**
+     * Enhancer 开关（默认关闭）：false 跳过整篇增强，保持 chunk content 为原始解析内容（标题等只进 metadata）。
+     * 由 {@code rag.ingestion.enhancer-enabled} 控制，无需改代码重发布即可恢复。
+     */
+    @Value("${rag.ingestion.enhancer-enabled:false}")
+    private boolean enhancerEnabled;
 
     public EnhancerNode(ObjectMapper objectMapper,
                         @Qualifier("ingestionChatClient") ChatClient chatClient,
@@ -59,10 +64,10 @@ public class EnhancerNode implements IngestionNode {
 
     @Override
     public NodeResult execute(IngestionContext context, NodeConfig config) {
-        // [暂时屏蔽] 跳过 LLM 整篇增强，保持 chunk content 为原始解析内容（标题等结构信息只进
-        // metadata.outline_path，不写进 content）。恢复时把 ENHANCER_ENABLED 改回 true
-        if (!ENHANCER_ENABLED) {
-            return NodeResult.ok("Enhancer 已暂时屏蔽，跳过增强");
+        // 开关关闭时跳过 LLM 整篇增强，保持 chunk content 为原始解析内容（标题等结构信息只进
+        // metadata.outline_path，不写进 content）
+        if (!enhancerEnabled) {
+            return NodeResult.ok("Enhancer 未启用（rag.ingestion.enhancer-enabled=false），跳过增强");
         }
         EnhancerSettings settings = parseSettings(config.getSettings());
         if (settings.getTasks() == null || settings.getTasks().isEmpty()) {

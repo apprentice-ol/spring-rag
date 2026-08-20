@@ -115,6 +115,10 @@ public class IndexerNode implements IngestionNode {
                                           Map<String, Object> contextMeta, IndexerSettings settings) {
         Map<String, Object> meta = new HashMap<>();
         meta.put("doc_id", context.getTaskId());
+        // 集合归属：检索侧按 collection 过滤的依据（null=独立文件，不写该键）
+        if (context.getCollectionId() != null) {
+            meta.put("collection_id", context.getCollectionId());
+        }
         if (context.getSource() != null && StringUtils.hasText(context.getSource().getFileName())) {
             meta.put("doc_name", context.getSource().getFileName());
         }

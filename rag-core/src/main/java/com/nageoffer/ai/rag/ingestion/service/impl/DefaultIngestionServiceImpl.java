@@ -5,18 +5,16 @@ import com.nageoffer.ai.rag.ingestion.engine.enums.SourceType;
 import com.nageoffer.ai.rag.ingestion.service.IngestionEngineService;
 import com.nageoffer.ai.rag.ingestion.service.IngestionService;
 import com.nageoffer.ai.rag.ingestion.service.IngestionResult;
-import java.io.IOException;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 入库服务（P1 改造：从线性 ETL 改为走节点引擎）。
+ * 入库服务（把字节 + 来源交给 {@link IngestionEngineService}，由节点引擎编排）。
  *
- * <p>原来的 readerSelector→TokenTextSplitter→vectorStore.add 线性链已退役，
- * 现在把字节 + 来源交给 {@link IngestionEngineService}，由节点引擎编排（P1 走默认 4 节点 stub）。
- * 节点真实化见 P2（Parser/Fetcher）/P3（Chunker/Indexer）/P4（Enhancer/Enricher）。
+ * <p><b>刻意不加 @Transactional</b>：链路里的写操作（IndexerNode 多批 INSERT 本就无整体事务、
+ * sa_document 单条 insert、S3 上传非事务、节点日志异步落库早已逃逸事务）之间没有原子性需求，
+ * 而事务会把 MinerU 轮询（最长 300s+）/ Enricher LLM / S3 上传全部圈进同一个 DB 连接，
+ * MQ 并发消费时直接耗尽连接池。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -24,18 +22,17 @@ public class DefaultIngestionServiceImpl implements IngestionService {
 
     private final IngestionEngineService engineService;
 
-    /** P1 用内存默认 pipeline；P2 从 props.getDefaultPipelineId() 读。 */
+    /** 默认 pipeline（P2 从 props.getDefaultPipelineId() 读） */
     private static final String DEFAULT_PIPELINE = "default";
 
     @Override
-    @Transactional
-    public IngestionResult ingest(Resource resource, String filename, String mimeType, Long collectionId, Boolean plainText) throws IOException {
-        byte[] bytes = resource.getInputStream().readAllBytes();
+    public IngestionResult ingest(byte[] bytes, String filename, String mimeType,
+                                  Long collectionId, Boolean plainText, String docId) {
         DocumentSource source = DocumentSource.builder()
                 .type(SourceType.FILE)
                 .location(filename)
                 .fileName(filename)
                 .build();
-        return engineService.executeTask(DEFAULT_PIPELINE, source, bytes, mimeType, collectionId, plainText);
+        return engineService.executeTask(DEFAULT_PIPELINE, source, bytes, mimeType, collectionId, plainText, docId);
     }
 }

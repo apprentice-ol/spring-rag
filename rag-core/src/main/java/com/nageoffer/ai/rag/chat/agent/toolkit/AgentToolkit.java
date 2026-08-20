@@ -10,6 +10,7 @@ import com.nageoffer.ai.rag.chat.retrieval.MultiChannelRetrievalEngine;
 import com.nageoffer.ai.rag.chat.retrieval.RetrievedChunk;
 import com.nageoffer.ai.rag.chat.retrieval.SearchChannel;
 import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
 import com.nageoffer.ai.rag.chat.retrieval.WebSearchChannel;
 import com.nageoffer.ai.rag.common.util.JsonResponseParser;
 import com.nageoffer.ai.rag.config.properties.AgentProperties;
@@ -214,11 +215,7 @@ public class AgentToolkit {
     // ==================== 小工具 ====================
 
     static String preview(String content) {
-        if (!StringUtils.hasText(content)) {
-            return "";
-        }
-        String s = content.replaceAll("\\s+", " ").trim();
-        return s.length() > 120 ? s.substring(0, 120) + "…" : s;
+        return TextPreviews.preview(content, 120);
     }
 
     private static int asInt(Object o, int fallback) {

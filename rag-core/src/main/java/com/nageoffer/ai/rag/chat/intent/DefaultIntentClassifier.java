@@ -2,7 +2,9 @@ package com.nageoffer.ai.rag.chat.intent;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.nageoffer.ai.rag.chat.util.LlmCallGuard;
 import com.nageoffer.ai.rag.config.prompt.PromptStore;
+import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,6 +23,8 @@ import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 @Slf4j
 @Service
 public class DefaultIntentClassifier implements IntentClassifier {
+
+    private static final Duration CLASSIFY_TIMEOUT = Duration.ofSeconds(30);
 
     private final ChatClient ingestionChatClient;
     private final Gson gson;
@@ -41,11 +45,11 @@ public class DefaultIntentClassifier implements IntentClassifier {
             // system/user 均不传 param → 不走 StringTemplate，prompt 中的 JSON 花括号原样发送
             String systemText = promptStore.raw("chat/intent/classify-system");
             String userText = promptStore.raw("chat/intent/classify-user") + "\n\n用户问题：" + question;
-            String response = ingestionChatClient.prompt()
+            String response = LlmCallGuard.call(() -> ingestionChatClient.prompt()
                     .system(systemText)
                     .user(userText)
                     .call()
-                    .content();
+                    .content(), CLASSIFY_TIMEOUT, "意图分类");
 
             log.info("[意图分类] LLM 原始响应: {}", response);
             return parseResponse(question, response);

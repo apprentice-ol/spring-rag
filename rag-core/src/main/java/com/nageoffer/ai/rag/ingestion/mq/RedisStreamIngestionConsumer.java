@@ -44,8 +44,21 @@ public class RedisStreamIngestionConsumer {
     /** 占位消息：建组前 XADD 一条以触发 Redis 自动创建 stream（createGroup 不自动 MKSTREAM） */
     private static final String INIT_PAYLOAD = "__STREAM_INIT__";
 
-    /** 消费者名（单消费者；多实例部署需改为实例唯一，如 hostname/pid） */
-    private static final String CONSUMER_NAME = "ingestion-1";
+    /**
+     * 消费者名（实例唯一）：同 group 下不同 consumer 名各自拿到不同消息（负载分摊）。
+     * 此前硬编码 "ingestion-1"，多实例共用同名 consumer 会互抢同一条消息、负载不均。
+     */
+    private static final String CONSUMER_NAME = buildConsumerName();
+
+    private static String buildConsumerName() {
+        String host;
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception e) {
+            host = "unknown-host";
+        }
+        return host + "-" + ProcessHandle.current().pid();
+    }
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;

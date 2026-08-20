@@ -13,6 +13,21 @@ const loading = ref(false)
 const filterDataset = ref<number | undefined>(undefined)
 const filterStatus = ref<string | undefined>(undefined)
 
+// 运行表分页（受控）：非受控 + 内联对象字面量会被重渲染重建、pageSize 被重置，size 选择器选了立即弹回
+const runPageSize = ref(20)
+const runPage = ref(1)
+const runPagination = computed(() => ({
+  current: runPage.value,
+  pageSize: runPageSize.value,
+  showSizeChanger: true,
+  pageSizeOptions: ['10', '20', '50'],
+  showTotal: (t: number) => `共 ${t} 条`,
+}))
+function onRunTableChange(pag: { current?: number; pageSize?: number }) {
+  runPage.value = pag.current ?? 1
+  runPageSize.value = pag.pageSize ?? 20
+}
+
 let pollTimer: number | null = null
 
 const datasetNameMap = computed(() => {
@@ -23,6 +38,7 @@ const datasetNameMap = computed(() => {
 
 async function load() {
   loading.value = true
+  runPage.value = 1
   try {
     runs.value = await listRuns({ datasetId: filterDataset.value, status: filterStatus.value })
   } finally {
@@ -51,6 +67,9 @@ onMounted(load)
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
 })
+
+// 供父组件在切回本 tab 时刷新（tab 面板保活不会重新挂载，别处触发的新 run 不刷新就发现不了）
+defineExpose({ reload: load })
 
 function openDetail(id: number) {
   // 跳转到运行详情独立页（hash 子路由 #/admin/eval/runs/{id}）
@@ -158,7 +177,8 @@ const STATUS_COLOR: Record<string, string> = {
         :data-source="tableData"
         :columns="columns"
         :loading="loading"
-        :pagination="{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50'], showTotal: (t: number) => `共 ${t} 条` }"
+        :pagination="runPagination"
+        @change="onRunTableChange"
         size="middle"
         row-key="id"
         :scroll="{ x: 1010 }"

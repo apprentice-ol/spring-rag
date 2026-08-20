@@ -8,6 +8,7 @@ import com.nageoffer.ai.rag.chat.retrieval.SearchContext;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,12 +65,17 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
             return chunks;
         }
 
+        // 全文 SHA-256 较贵（candidate 池可达 40+ 条，数千字符/条）：同一 chunk 在本次 process 里
+        // 会被多轮用 key（建映射/排名/排序/回写），以对象身份缓存保证每 chunk 恰好计算一次。
+        // merged 列表与各通道结果里的 chunk 是同一对象引用，缓存全程命中。
+        Map<RetrievedChunk, String> keyCache = new IdentityHashMap<>();
+
         // 1. 建立内容 -> 原始 chunk 的映射（去重键使用全文 SHA-256，与 DeduplicationPostProcessor 一致）；
         //    同内容多通道命中时，保留原始相似度(originalScore)最高的那个，便于后续展示真实相关度
         Map<String, RetrievedChunk> contentMap = new LinkedHashMap<>();
         Map<String, Double> bestOriginal = new HashMap<>();
         for (RetrievedChunk chunk : chunks) {
-            String key = keyOf(chunk.getContent());
+            String key = keyOf(chunk, keyCache);
             double orig = chunk.getOriginalScore() != null ? chunk.getOriginalScore()
                     : (chunk.getScore() != null ? chunk.getScore() : 0.0);
             if (!contentMap.containsKey(key) || orig > bestOriginal.getOrDefault(key, 0.0)) {
@@ -85,7 +91,7 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
             Map<String, Integer> rankMap = new HashMap<>();
             List<RetrievedChunk> channelChunks = channelResult.getChunks();
             for (int i = 0; i < channelChunks.size(); i++) {
-                String k = keyOf(channelChunks.get(i).getContent());
+                String k = keyOf(channelChunks.get(i), keyCache);
                 if (!rankMap.containsKey(k)) {
                     rankMap.put(k, i + 1); // 1-based rank
                 }
@@ -108,18 +114,26 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
             rrfScores.put(contentKey, score);
         }
 
-        // 4. 按 RRF 分数降序排列
-        List<RetrievedChunk> fused = contentMap.values().stream()
-                .sorted(Comparator.<RetrievedChunk, Double>comparing(
-                        c -> rrfScores.get(keyOf(c.getContent())), Comparator.reverseOrder())
-                        .thenComparing(c -> c.getScore() != null ? c.getScore() : 0, Comparator.reverseOrder()))
-                .collect(Collectors.toList());
+        // 4. 按 RRF 分数降序排列（分数与决胜值先取好再排，比较器内零次哈希）
+        record FusedEntry(RetrievedChunk chunk, String key, double rrf, double tiebreak) {
+        }
+        List<FusedEntry> entries = new ArrayList<>(contentMap.size());
+        for (Map.Entry<String, RetrievedChunk> e : contentMap.entrySet()) {
+            RetrievedChunk chunk = e.getValue();
+            double tiebreak = chunk.getScore() != null ? chunk.getScore() : 0;
+            entries.add(new FusedEntry(chunk, e.getKey(), rrfScores.get(e.getKey()), tiebreak));
+        }
+        entries.sort(Comparator.comparingDouble(FusedEntry::rrf).reversed()
+                .thenComparing(Comparator.comparingDouble(FusedEntry::tiebreak).reversed()));
+        List<RetrievedChunk> fused = new ArrayList<>(entries.size());
+        for (FusedEntry entry : entries) {
+            fused.add(entry.chunk());
+        }
 
         // 5. 更新 score 为 RRF 融合分；originalScore 保留最高原始相似度（展示用，不受 RRF 影响）
-        for (RetrievedChunk chunk : fused) {
-            String key = keyOf(chunk.getContent());
-            chunk.setScore(rrfScores.get(key));
-            chunk.setOriginalScore(bestOriginal.get(key));
+        for (FusedEntry entry : entries) {
+            entry.chunk().setScore(entry.rrf());
+            entry.chunk().setOriginalScore(bestOriginal.get(entry.key()));
         }
 
         // 6. 按 budget 的 candidateLimit 截断
@@ -132,8 +146,10 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
         return fused;
     }
 
-    private String keyOf(String content) {
-        return DigestUtil.sha256Hex(content == null ? "" : content);
+    /** chunk 全文 SHA-256 去重键（按对象身份缓存，同一 chunk 只算一次） */
+    private String keyOf(RetrievedChunk chunk, Map<RetrievedChunk, String> keyCache) {
+        return keyCache.computeIfAbsent(chunk,
+                c -> DigestUtil.sha256Hex(c.getContent() == null ? "" : c.getContent()));
     }
 
     /**

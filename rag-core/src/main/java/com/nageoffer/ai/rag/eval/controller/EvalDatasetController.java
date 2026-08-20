@@ -87,7 +87,7 @@ public class EvalDatasetController {
      */
     @PostMapping("/import/liverag")
     public LiveRagImportResult importLiveRag(@RequestBody(required = false) LiveRagImportRequest req) {
-        return liveRagImporter.importSample(req == null ? new LiveRagImportRequest(null, null, null) : req);
+        return liveRagImporter.importSample(req == null ? new LiveRagImportRequest(null, null, null, null) : req);
     }
 
     @Data

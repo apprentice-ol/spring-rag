@@ -2,6 +2,7 @@ package com.nageoffer.ai.rag.chat.agent;
 
 import com.nageoffer.ai.rag.chat.dao.entity.AgentTraceEntity;
 import com.nageoffer.ai.rag.ingestion.domain.dto.PageResult;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +14,9 @@ public interface AgentTraceService {
 
     /** 按关联的 assistant 消息 id 查最近一条轨迹（对话页历史消息回看轨迹用），无则 null。 */
     AgentTraceEntity getByMessageId(Long messageId);
+
+    /** 批量按消息 id 查 traceId（历史消息加载时一次回填，跳 OpenObserve 全链路用），无则空 Map。 */
+    Map<Long, String> traceIdsByMessageIds(Collection<Long> messageIds);
 
     /** 分页列表（可按 paradigm / question 关键词过滤）。 */
     PageResult<AgentTraceEntity> page(int page, int size, String paradigm, String keyword);

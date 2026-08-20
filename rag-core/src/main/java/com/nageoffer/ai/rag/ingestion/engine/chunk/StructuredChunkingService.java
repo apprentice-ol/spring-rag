@@ -52,6 +52,8 @@ public class StructuredChunkingService {
 
     private final BlockAwareChunkerDispatcher blockAwareChunkerDispatcher;
     private final ChunkingStrategyFactory chunkingStrategyFactory;
+    private final BlockSanitizer blockSanitizer;
+    private final ChunkJunkFilter chunkJunkFilter;
 
     /**
      * 不分块哨兵：chunkSize/targetChars 取该值时整篇文档合成单个 chunk，不再切分
@@ -95,12 +97,75 @@ public class StructuredChunkingService {
             return wholeDocumentChunk(blocks, fallbackText);
         }
         if (blocks != null && !blocks.isEmpty()) {
-            return blockAwareChunkerDispatcher.dispatch(blocks, toBlockChunkConfig(options, rowsPerChunk));
+            // 分块前清洗解析噪声（乱码/重复标题/导航行），两处分块入口共用同一份规则
+            BlockSanitizer.SanitizeResult sanitized = blockSanitizer.sanitize(blocks);
+            // overlap 按文档主语言校准：中文信息密度高，重叠预算约为英文的一半
+            int overlap = overlapForLanguage(languageSample(sanitized.blocks(), fallbackText));
+            List<VectorChunk> chunks = blockAwareChunkerDispatcher.dispatch(
+                    sanitized.blocks(), toBlockChunkConfig(options, rowsPerChunk, overlap));
+            // 分块后过滤碎块（英文残片/纯符号块），并重排 index
+            return chunkJunkFilter.filter(chunks);
         }
         if (!StringUtils.hasText(fallbackText)) {
             return List.of();
         }
         return chunkingStrategyFactory.requireStrategy(mode).chunk(fallbackText, options);
+    }
+
+    /** CJK 占比阈值：≥10% 视为中文主文档（中英混排的中文业务文档通常远高于此）。 */
+    private static final double CJK_DOMINANT_RATIO = 0.10;
+
+    /** 中文文档相邻 chunk 重叠字符数（约 30-50 个汉字，占 1400 预算 <11%）。 */
+    private static final int OVERLAP_CJK_CHARS = 100;
+
+    /** 英文文档相邻 chunk 重叠字符数（约 30-50 词）。 */
+    private static final int OVERLAP_NON_CJK_CHARS = 200;
+
+    /**
+     * 取语言判定样本：优先 blocks 渲染文本（block-aware 主路径），缺失时用 fallbackText；
+     * 只采样前 4000 字符（语言判定不需要全文，控制长文档开销）。
+     */
+    private static String languageSample(List<Block> blocks, String fallbackText) {
+        String sample = null;
+        if (blocks != null && !blocks.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (Block b : blocks) {
+                if (b instanceof com.nageoffer.ai.rag.ingestion.engine.parser.model.ParagraphBlock p
+                        && p.text() != null) {
+                    sb.append(p.text()).append('\n');
+                    if (sb.length() >= 4000) {
+                        break;
+                    }
+                }
+            }
+            sample = sb.toString();
+        }
+        if (!StringUtils.hasText(sample)) {
+            sample = fallbackText;
+        }
+        return sample == null ? "" : sample.substring(0, Math.min(sample.length(), 4000));
+    }
+
+    /** 按语言选 overlap 字符数：CJK 占比达标取中文预算，否则英文预算。 */
+    private static int overlapForLanguage(String sample) {
+        if (sample.isBlank()) {
+            return OVERLAP_NON_CJK_CHARS;
+        }
+        int cjk = 0;
+        int total = 0;
+        for (int i = 0; i < sample.length(); i++) {
+            char c = sample.charAt(i);
+            if (Character.isWhitespace(c)) {
+                continue;
+            }
+            total++;
+            if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF) {
+                cjk++;
+            }
+        }
+        return total > 0 && (double) cjk / total >= CJK_DOMINANT_RATIO
+                ? OVERLAP_CJK_CHARS
+                : OVERLAP_NON_CJK_CHARS;
     }
 
     /**
@@ -183,16 +248,18 @@ public class StructuredChunkingService {
     /**
      * 从 legacy ChunkingOptions 派生 BlockChunkConfig，使 block-aware 与文本策略共用同一组体量参数
      * <p>
-     * maxChars 预算优先取 chunkSize（固定大小）/ targetChars（语义感知）；overlap 同理
-     * rowsPerChunk 由调用方透传，缺省取硬上限默认值
+     * maxChars 预算优先取 chunkSize（固定大小）/ targetChars（语义感知）
+     * rowsPerChunk 由调用方透传，缺省取硬上限默认值；
+     * overlap 由调用方按文档语言选定（见 {@link #overlapForLanguage}）
      */
-    private BlockChunkConfig toBlockChunkConfig(ChunkingOptions options, Integer rowsPerChunk) {
+    private BlockChunkConfig toBlockChunkConfig(ChunkingOptions options, Integer rowsPerChunk, int overlap) {
         // 单段切分上限与 packMax 对齐（1800），不再消费 chunk-size(512)：
         // 否则长段落会被 512 预切成碎片，packer 合并不充分，块数虚高（比 ragent 多一倍）。
         int maxChars = 1800;
-        // block-aware 结构化分块不做 overlap（B 计划）：相邻 chunk 按语义边界切分，不需要字符重叠。
-        // ChunkerSettings.overlapSize 配置项保留但 block-aware 路径不再消费
-        int overlap = 0;
+        // overlap 只作用于 ParagraphChunker→BoundaryAwareSplitter 的长段落二次切分
+        // （相邻片段尾部按边界点重叠），防止跨块边界的事实在两侧 embedding 都不完整。
+        // ChunkPacker 的块级 overlap（overlapTail）未接线不激活——整块复制会与去重逻辑冲突。
+        // 2026-08 起按语言校准：中文 100 字符 / 英文 200 字符（同字符数下中文 token 量约英文 4-5 倍）。
         int rows = (rowsPerChunk != null && rowsPerChunk > 0) ? rowsPerChunk : DEFAULT_ROWS_PER_CHUNK;
         // packer 合并窗口：标准 target=1400（段落累加目标）、min=600（不足时忍一次吸入）、max=1800（硬上限）。
         // CODE/TABLE 原子块不参与合并（对齐 ragent：MERGEABLE_TYPES 仅 PARAGRAPH/LIST/IMAGE），

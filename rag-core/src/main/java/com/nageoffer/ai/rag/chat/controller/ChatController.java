@@ -1,15 +1,18 @@
 package com.nageoffer.ai.rag.chat.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.nageoffer.ai.rag.chat.agent.AgentTraceService;
 import com.nageoffer.ai.rag.chat.dao.entity.ConversationEntity;
 import com.nageoffer.ai.rag.chat.dao.entity.MessageEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.ConversationMapper;
 import com.nageoffer.ai.rag.chat.dao.mapper.MessageMapper;
 import com.nageoffer.ai.rag.chat.service.ChatService;
+import com.nageoffer.ai.rag.ingestion.domain.dto.PageResult;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryConversation;
 import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -36,13 +39,16 @@ public class ChatController {
     private final ChatService chatService;
     private final ConversationMapper conversationMapper;
     private final MessageMapper messageMapper;
+    private final AgentTraceService agentTraceService;
 
     public ChatController(ChatService chatService,
                           ConversationMapper conversationMapper,
-                          MessageMapper messageMapper) {
+                          MessageMapper messageMapper,
+                          AgentTraceService agentTraceService) {
         this.chatService = chatService;
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
+        this.agentTraceService = agentTraceService;
     }
 
 
@@ -70,11 +76,20 @@ public class ChatController {
 
 
 
+    /** 会话列表（分页，updatedAt 倒序；id 决胜避免同刻排序抖动） */
     @GetMapping("/conversations")
-    public List<ConversationEntity> listConversations() {
-        return conversationMapper.selectList(
+    public PageResult<ConversationEntity> listConversations(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        page = Math.max(page, 1);
+        size = Math.min(Math.max(size, 1), 100);
+        long total = conversationMapper.selectCount(new LambdaQueryWrapper<>());
+        List<ConversationEntity> records = conversationMapper.selectList(
                 new LambdaQueryWrapper<ConversationEntity>()
-                        .orderByDesc(ConversationEntity::getUpdatedAt));
+                        .orderByDesc(ConversationEntity::getUpdatedAt)
+                        .orderByDesc(ConversationEntity::getId)
+                        .last("LIMIT " + size + " OFFSET " + (long) (page - 1) * size));
+        return new PageResult<>(total, records);
     }
 
     @PostMapping("/conversations")
@@ -90,12 +105,34 @@ public class ChatController {
 
 
 
+    /**
+     * 会话消息（id 游标分页，按时间升序返回）。
+     * <p>默认返回最近 limit 条；带 {@code beforeId} 返回更早一页（聊天「向上加载更早」语义），
+     * 返回条数小于 limit 即已到最早。</p>
+     */
     @GetMapping("/conversations/{conversationId}/messages")
-    public List<MessageEntity> getMessages(@PathVariable String conversationId) {
-        return messageMapper.selectList(
-                new LambdaQueryWrapper<MessageEntity>()
-                        .eq(MessageEntity::getConversationId, conversationId)
-                        .orderByAsc(MessageEntity::getCreatedAt));
+    public List<MessageEntity> getMessages(@PathVariable String conversationId,
+                                           @RequestParam(required = false) Long beforeId,
+                                           @RequestParam(defaultValue = "50") int limit) {
+        limit = Math.min(Math.max(limit, 1), 200);
+        LambdaQueryWrapper<MessageEntity> qw = new LambdaQueryWrapper<MessageEntity>()
+                .eq(MessageEntity::getConversationId, conversationId)
+                .orderByDesc(MessageEntity::getId);
+        if (beforeId != null) {
+            qw.lt(MessageEntity::getId, beforeId);
+        }
+        List<MessageEntity> desc = messageMapper.selectList(qw.last("LIMIT " + limit));
+        // 批量回填 traceId：历史消息无需先点“轨迹”即可显示“链路”入口
+        List<Long> assistantIds = desc.stream()
+                .filter(m -> "assistant".equals(m.getRole()) && m.getId() != null)
+                .map(MessageEntity::getId)
+                .toList();
+        if (!assistantIds.isEmpty()) {
+            Map<Long, String> traceIds = agentTraceService.traceIdsByMessageIds(assistantIds);
+            desc.forEach(m -> m.setTraceId(traceIds.get(m.getId())));
+        }
+        Collections.reverse(desc);
+        return desc;
     }
 
     @Transactional

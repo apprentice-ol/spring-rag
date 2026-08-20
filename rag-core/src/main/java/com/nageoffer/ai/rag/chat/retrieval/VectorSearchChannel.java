@@ -2,13 +2,24 @@ package com.nageoffer.ai.rag.chat.retrieval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nageoffer.ai.rag.chat.util.LlmCallGuard;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
 import com.pgvector.PGvector;
 import java.io.IOException;
+import java.time.Duration;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
@@ -24,6 +35,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @RequiredArgsConstructor
 public class VectorSearchChannel implements SearchChannel {
+
+    private static final Duration EMBED_TIMEOUT = Duration.ofSeconds(15);
+    private static final int QUERY_TIMEOUT_SECONDS = 8;
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingModel embeddingModel;
@@ -58,42 +72,80 @@ public class VectorSearchChannel implements SearchChannel {
 
         double threshold = context.getThreshold();
 
-        // embed query
-        float[] queryVector = embeddingModel.embed(query);
+        // embed query (bounded: embedding HTTP hang must not leak pool threads forever)
+        float[] queryVector;
+        try {
+            queryVector = LlmCallGuard.call(() -> embeddingModel.embed(query), EMBED_TIMEOUT, "vector embedding");
+        } catch (Exception e) {
+            log.warn("[VectorSearch] embedding failed, vector channel returns empty: {}", e.getMessage());
+            return SearchChannelResult.builder()
+                    .channelType(SearchChannelType.VECTOR)
+                    .channelName(getName())
+                    .chunks(List.of())
+                    .latencyMs(System.currentTimeMillis() - t0)
+                    .build();
+        }
 
         // 对齐 ragent PgVectorRetrieverService：ef_search=200 + iterative_scan=relaxed_order。
         // 默认 ef 偏小 + strict_order 会产生"召回悬崖"——漏掉语义稍远但内容命中的步骤块，
         // 剩下 cosine 分高但泛泛的概述块（"分两类"等高频词）。relaxed_order 让 HNSW 填满 LIMIT。
-        // iterative_scan 用 SET（session 级；SET LOCAL 对该 GUC 在部分 pgvector 版本不生效），
-        // 它对所有向量检索都有益，session 残留无副作用。
-        jdbcTemplate.execute("SET hnsw.ef_search = 200");
-        jdbcTemplate.execute("SET hnsw.iterative_scan = relaxed_order");
+        //
+        // GUC 是会话级：SET 与 SELECT 必须落在同一条连接上（分开 execute 可能各借不同池连接，
+        // 既可能 GUC 未生效、又污染归还池后的随机会话），查询结束 finally 复位避免残留。
+        // （SET LOCAL 对 iterative_scan 在部分 pgvector 版本不生效，故用 SET + RESET。）
+        Long collectionId = context.getCollectionId();
+        Set<String> restrictedDocIds = context.getRestrictedDocIds();
 
-        // pgvector cosine 距离：<=> 返回 0~2，1 - <=> 转为相似度 0~1。
-        // 关键：ORDER BY 用裸 <=> 让 HNSW 索引命中；阈值过滤移到 Java 侧——
-        // 旧版 WHERE 1-(embedding<=>?)>=? 的表达式会使 HNSW 退化为近似全表扫描。
-        String sql = "SELECT content, metadata, 1 - (embedding <=> ?::vector) AS similarity " +
-                     "FROM spring_ai_store_vector " +
-                     "ORDER BY embedding <=> ?::vector LIMIT ?";
+        StringBuilder sql = new StringBuilder("SELECT content, metadata, 1 - (embedding <=> ?::vector) AS similarity ")
+                .append("FROM spring_ai_store_vector");
+        List<Object> sqlParams = new ArrayList<>();
+        sqlParams.add(new PGvector(queryVector));
+        List<String> where = new ArrayList<>();
+        if (collectionId != null) {
+            where.add("metadata->>'collection_id' = ?");
+            sqlParams.add(String.valueOf(collectionId));
+        }
+        if (restrictedDocIds != null && !restrictedDocIds.isEmpty()) {
+            where.add("metadata->>'doc_id' IN (" + String.join(",", Collections.nCopies(restrictedDocIds.size(), "?")) + ")");
+            sqlParams.addAll(restrictedDocIds);
+        }
+        if (!where.isEmpty()) {
+            sql.append(" WHERE ").append(String.join(" AND ", where));
+        }
+        sql.append(" ORDER BY embedding <=> ?::vector LIMIT ?");
+        sqlParams.add(new PGvector(queryVector));
+        sqlParams.add(topK);
 
-        List<RetrievedChunk> candidates = jdbcTemplate.query(
-                sql,
-                new Object[]{new PGvector(queryVector), new PGvector(queryVector), topK},
-                (rs, rowNum) -> {
-                    String content = rs.getString("content");
-                    double score = rs.getDouble("similarity");
-                    String metaJson = rs.getString("metadata");
-                    Map<String, Object> meta;
-                    try {
-                        meta = objectMapper.readValue(metaJson, new TypeReference<Map<String, Object>>() {});
-                    } catch (IOException e) {
-                        log.warn("[向量检索] 解析 metadata JSON 失败: {}", e.getMessage());
-                        meta = Map.of();
+        List<RetrievedChunk> candidates = jdbcTemplate.execute((ConnectionCallback<List<RetrievedChunk>>) conn -> {
+            try (Statement st = conn.createStatement()) {
+                st.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                st.execute("SET hnsw.ef_search = 200");
+                st.execute("SET hnsw.iterative_scan = relaxed_order");
+            }
+            try {
+                try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                    ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                    for (int i = 0; i < sqlParams.size(); i++) {
+                        ps.setObject(i + 1, sqlParams.get(i));
                     }
-                    RetrievedChunk c = new RetrievedChunk(content, score, meta, SearchChannelType.VECTOR);
-                    c.setOriginalScore(score);
-                    return c;
-                });
+                    try (ResultSet rs = ps.executeQuery()) {
+                        List<RetrievedChunk> rows = new ArrayList<>();
+                        while (rs.next()) {
+                            rows.add(mapRow(rs));
+                        }
+                        return rows;
+                    }
+                }
+            } finally {
+                // 归还连接池前复位，GUC 不泄漏给后续无关查询
+                try (Statement st = conn.createStatement()) {
+                    st.execute("RESET hnsw.ef_search");
+                    st.execute("RESET hnsw.iterative_scan");
+                } catch (SQLException e) {
+                    log.debug("[向量检索] RESET hnsw GUC 失败（忽略）: {}", e.getMessage());
+                }
+            }
+        });
 
         // 阈值过滤移到 Java 侧：取回结果已按相似度降序，过滤不破坏顺序
         List<RetrievedChunk> chunks = candidates.stream()
@@ -107,7 +159,7 @@ public class VectorSearchChannel implements SearchChannel {
             for (int i = 0; i < Math.min(chunks.size(), 5); i++) {
                 RetrievedChunk c = chunks.get(i);
                 log.info("[向量检索]   #{} 得分={} 预览=\"{}\"",
-                        i + 1, c.getScore(), truncate(c.getContent(), 80));
+                        i + 1, c.getScore(), TextPreviews.truncate(c.getContent(), 80));
             }
             if (chunks.size() > 5) {
                 log.info("[向量检索]   ... 还有 {} 条", chunks.size() - 5);
@@ -122,8 +174,20 @@ public class VectorSearchChannel implements SearchChannel {
                 .build();
     }
 
-    private static String truncate(String text, int maxLen) {
-        if (text == null) return "";
-        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
+    /** 行 → RetrievedChunk（metadata JSON 容错解析，失败按空元数据继续） */
+    private RetrievedChunk mapRow(ResultSet rs) throws SQLException {
+        String content = rs.getString("content");
+        double score = rs.getDouble("similarity");
+        String metaJson = rs.getString("metadata");
+        Map<String, Object> meta;
+        try {
+            meta = objectMapper.readValue(metaJson, new TypeReference<Map<String, Object>>() {});
+        } catch (IOException e) {
+            log.warn("[向量检索] 解析 metadata JSON 失败: {}", e.getMessage());
+            meta = Map.of();
+        }
+        RetrievedChunk c = new RetrievedChunk(content, score, meta, SearchChannelType.VECTOR);
+        c.setOriginalScore(score);
+        return c;
     }
 }

@@ -57,9 +57,19 @@ services:
   openobserve:
     image: openobserve/openobserve:latest
     container_name: rag-openobserve
+    restart: unless-stopped
+    mem_limit: 2g
     environment:
       ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-admin@dev.local}            # OO 管理员账号（真实值放服务器 .env；默认是 dev 假值）
       ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-DevOnly@Local}
+      # ---- 4G 内存优化（官方环境变量文档：openobserve.ai/docs/administration/configuration/environment-variables）----
+      # 默认 ZO_MEM_TABLE_MAX_SIZE=0 即总内存 50%（本机≈1.85G），启动重放 WAL + 合并时会 OOM；显式压小：
+      ZO_MEM_TABLE_MAX_SIZE: "512"        # MemTable 总内存上限（默认=总内存 50%）
+      ZO_MAX_FILE_SIZE_IN_MEMORY: "128"   # 单个 MemTable 上限（默认 256MB）
+      ZO_MAX_FILE_SIZE_ON_DISK: "64"      # 单个 WAL 文件上限（默认 64MB）
+      ZO_MAX_FILE_RETENTION_TIME: "300"   # WAL/MemTable 最长驻留 5 分钟即落盘（默认 600s）
+      ZO_FILE_PUSH_INTERVAL: "30"         # WAL 转 parquet 周期（默认 60s），减少积压
+      ZO_COMPACT_FAST_MODE: "false"       # 官方：关闭快速合并可减少约 50% 合并内存（略慢）
     ports: ["5080:5080"]
     volumes:
       - oo-data:/data
@@ -70,6 +80,11 @@ services:
       context: .
       dockerfile: docker/app/Dockerfile
     container_name: rag-app
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     depends_on:
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
@@ -118,6 +133,9 @@ services:
       # OO Web UI 浏览器可达地址（前端「链路追踪」页跳转用；容器内 openobserve:5080 浏览器访问不到，故用服务器外网 IP）
       OPENOBSERVE_WEB_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}:5080
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
+      # 遥测步骤日志（step.input/output 大 JSON）级别：评测跑批期是磁盘 I/O 主要写入源，
+      # 跑批前可改 OFF 减压（代价：OpenObserve 里 step 输入/输出明文缺失，span 本身仍在）
+      TELEMETRY_STEP_LOG_LEVEL: ${TELEMETRY_STEP_LOG_LEVEL:-INFO}
       # ---- 关键词检索：bm25（pg_search，postgres 为自定义镜像）----
       RAG_SEARCH_CHANNELS_KEYWORD_MODE: bm25
       # ---- VLM 图片描述（图片块入库时生成 description，否则图片不可检索）----

@@ -25,6 +25,9 @@ import org.springframework.stereotype.Component;
         topic = "${rag.mq.topic:ingestion}",
         consumerGroup = "${rag.mq.consumer-group:ingestion-consumer}",
         consumeMode = ConsumeMode.CONCURRENTLY)
+// 注：消费线程保持框架默认（20），实际执行并发由 IngestionTaskExecutor 的信号量限流（排队等待）。
+// 不能用注解 consumeThreadMax 收线程数——rocketmq-spring 2.3.5 注解无 consumeThreadMin 属性，
+// 只设 max=5 时 min 仍是默认 20，RocketMQ 校验 min<=max 直接启动失败。
 public class IngestionConsumer implements RocketMQListener<MessageWrapper<IngestionMessage>> {
 
     /** 入库执行器（共享 ETL 逻辑，与 Redis Stream 消费者复用同一份逻辑） */

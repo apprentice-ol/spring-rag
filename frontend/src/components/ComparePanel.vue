@@ -131,7 +131,10 @@ async function runEval() {
       })
       runIds[a] = runId
       evalResults.value[a] = { runId, status: 'RUNNING', metrics: null }
-    } catch {
+    } catch (e: unknown) {
+      // 透传后端报错（如「已有 N 个评测运行中」的并发上限提示），不再静默只标 FAILED
+      message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        || `范式 ${paradigmLabel(a)} 触发失败`)
       evalResults.value[a] = { runId: -1, status: 'FAILED', metrics: null }
     }
   }

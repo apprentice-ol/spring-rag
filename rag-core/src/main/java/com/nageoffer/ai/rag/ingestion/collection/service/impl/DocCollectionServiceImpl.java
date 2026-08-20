@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,10 @@ public class DocCollectionServiceImpl implements DocCollectionService {
     private final DocumentMapper documentMapper;
     private final JdbcTemplate jdbcTemplate;
 
+    /** 向量表名（与 spring.ai.vectorstore.pgvector.table-name 同源，避免硬编码漂移） */
+    @Value("${spring.ai.vectorstore.pgvector.table-name:spring_ai_store_vector}")
+    private String vectorTable;
+
     @Override
     @Transactional
     public Long create(String name, String description) {
@@ -49,6 +54,44 @@ public class DocCollectionServiceImpl implements DocCollectionService {
             throw new ClientException("集合名称已存在: " + name);
         }
         return c.getId();
+    }
+
+    @Override
+    @Transactional
+    public Long ensureCollection(String name, String description) {
+        if (!StringUtils.hasText(name)) {
+            throw new ClientException("集合名称不能为空");
+        }
+        String trimmed = name.trim();
+        DocCollectionEntity existing = collectionMapper.selectOne(new LambdaQueryWrapper<DocCollectionEntity>()
+                .eq(DocCollectionEntity::getName, trimmed));
+        if (existing != null) {
+            return existing.getId();
+        }
+        DocCollectionEntity c = new DocCollectionEntity();
+        c.setName(trimmed);
+        c.setDescription(description);
+        try {
+            collectionMapper.insert(c);
+            return c.getId();
+        } catch (DuplicateKeyException e) {
+            // 并发首建同名集合：另一请求已建，重查复用
+            return collectionMapper.selectOne(new LambdaQueryWrapper<DocCollectionEntity>()
+                            .eq(DocCollectionEntity::getName, trimmed))
+                    .getId();
+        }
+    }
+
+    @Override
+    public String requireCollection(Long id) {
+        if (id == null) {
+            throw new ClientException("集合 ID 不能为空");
+        }
+        DocCollectionEntity c = collectionMapper.selectById(id);
+        if (c == null) {
+            throw new ClientException("目标集合不存在: " + id);
+        }
+        return c.getName();
     }
 
     @Override
@@ -126,7 +169,39 @@ public class DocCollectionServiceImpl implements DocCollectionService {
         int updated = documentMapper.update(null, new LambdaUpdateWrapper<DocumentEntity>()
                 .in(DocumentEntity::getDocId, docIds)
                 .set(DocumentEntity::getCollectionId, collectionId));
+        syncVectorCollectionMetadata(collectionId, docIds);
         log.info("[Collection] 归集: collectionId={}, docIds={}, 更新={}", collectionId, docIds.size(), updated);
         return updated;
+    }
+
+    /**
+     * 归集时同步向量表 metadata 的 collection_id。
+     * <p>检索过滤读的是向量 metadata（{@code metadata->>'collection_id'}），而归集此前只改 sa_document——
+     * 两边错位后，按集合隔离的检索（评测 resolveCollection / 查询 collectionId 过滤）会限定到一个空集，
+     * 全部 0 召回（服务器实际踩过：LiveRAG 导入时无集合，归集 1 后向量 metadata 仍为空）。
+     * collectionId=null（移出集合）时从 metadata 删除该键。</p>
+     */
+    private void syncVectorCollectionMetadata(Long collectionId, List<String> docIds) {
+        try {
+            String placeholders = String.join(",", java.util.Collections.nCopies(docIds.size(), "?"));
+            List<Object> params = new java.util.ArrayList<>(docIds);
+            int synced;
+            if (collectionId != null) {
+                String sql = "UPDATE " + vectorTable + " SET metadata = jsonb_set(metadata, '{collection_id}', to_jsonb(?::text)) "
+                        + "WHERE metadata->>'doc_id' IN (" + placeholders + ")";
+                params.add(String.valueOf(collectionId));
+                synced = jdbcTemplate.update(sql, params.toArray());
+            } else {
+                String sql = "UPDATE " + vectorTable + " SET metadata = metadata - 'collection_id' "
+                        + "WHERE metadata->>'doc_id' IN (" + placeholders + ")";
+                synced = jdbcTemplate.update(sql, params.toArray());
+            }
+            log.info("[Collection] 向量 metadata 同步: collectionId={}, 同步向量 {} 条", collectionId, synced);
+        } catch (Exception e) {
+            // 同步失败不阻断归集（sa_document 已更新），但必须留下可排查的完整告警
+            log.error("[Collection] 向量 metadata 同步失败（sa_document 与向量表 collection_id 已错位，"
+                    + "检索按集合过滤将查不到这些文档，请重试归集或手工修数据）: collectionId={}, docIds={}",
+                    collectionId, docIds, e);
+        }
     }
 }

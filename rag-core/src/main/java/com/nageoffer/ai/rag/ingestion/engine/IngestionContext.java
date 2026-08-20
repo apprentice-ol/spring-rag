@@ -37,6 +37,10 @@ public class IngestionContext {
     private List<String> questions;
     private Map<String, Object> metadata;
 
+    /** 所属集合 ID（来自上传入口）；IndexerNode 写入 chunk metadata.collection_id，供检索侧按集合过滤。
+     *  null=独立文件（不属于任何集合）。 */
+    private Long collectionId;
+
     /** 运行时分块路线 override：true=纯文本（丢弃 blocks，走 legacy 边界切分，不保 block 元数据）；
      *  null/false=语义感知（block-aware，保留结构元数据）。由上传入口注入，优先于 pipeline 配置。 */
     private Boolean plainTextChunking;

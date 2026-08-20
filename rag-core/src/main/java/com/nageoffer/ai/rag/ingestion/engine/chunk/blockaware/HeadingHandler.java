@@ -69,11 +69,8 @@ public class HeadingHandler {
         return List.copyOf(next);
     }
 
-    /** 无主题词的通用代码子标题（与 CodeChunker 黑名单一致） */
+    /** 无主题词的通用代码子标题（与 CodeChunker 共用 {@link CodeHeadings} 黑名单） */
     private static boolean isGenericCodeHeading(String text) {
-        String t = text.replaceAll("^#+\\s*", "").trim();
-        return t.equals("实现代码") || t.equals("代码") || t.equals("代码示例")
-                || t.equals("示例") || t.equals("Code") || t.equals("Implementation")
-                || t.equals("代码实现");
+        return CodeHeadings.isGeneric(text);
     }
 }

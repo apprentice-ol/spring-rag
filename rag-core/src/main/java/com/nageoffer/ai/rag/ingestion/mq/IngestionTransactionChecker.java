@@ -3,6 +3,7 @@ package com.nageoffer.ai.rag.ingestion.mq;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.nageoffer.ai.rag.common.mq.DelegatingTransactionListener;
 import com.nageoffer.ai.rag.common.mq.MessageWrapper;
+import com.nageoffer.ai.rag.common.mq.MqProperties;
 import com.nageoffer.ai.rag.common.mq.TransactionChecker;
 import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
 import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
@@ -42,14 +43,17 @@ public class IngestionTransactionChecker implements TransactionChecker {
     /** 事务监听器，用于注册当前 checker 到对应 topic */
     private final DelegatingTransactionListener transactionListener;
 
+    /** MQ 配置（topic 与 Producer 用同一配置源，避免硬编码脱节） */
+    private final MqProperties mqProperties;
+
     /**
      * 初始化：向 {@link DelegatingTransactionListener} 注册本 checker。
      * <p>topic 取自 {@link IngestionTopic#INGESTION}。</p>
      */
     @PostConstruct
     public void init() {
-        transactionListener.registerChecker(IngestionTopic.INGESTION, this);
-        log.info("[IngestionTransactionChecker] 已注册 topic={}", IngestionTopic.INGESTION);
+        transactionListener.registerChecker(mqProperties.getTopic(), this);
+        log.info("[IngestionTransactionChecker] 已注册 topic={}", mqProperties.getTopic());
     }
 
     /**

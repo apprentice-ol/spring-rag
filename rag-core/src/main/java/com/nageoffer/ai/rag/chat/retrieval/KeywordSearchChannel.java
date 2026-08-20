@@ -2,17 +2,15 @@ package com.nageoffer.ai.rag.chat.retrieval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
+
+import java.io.IOException;
+import java.util.*;
 
 /**
  * 关键词检索通道（metadata.keywords + 文档名路由）。
@@ -129,7 +127,27 @@ public class KeywordSearchChannel implements SearchChannel {
         }
         sql.append(String.join(" + ", selectGroups));
         sql.append(") AS hit_cnt FROM spring_ai_store_vector WHERE ");
-        sql.append(String.join(" OR ", whereGroups));
+        // collection 过滤（可选）：值直拼（Long 无注入面），不动下方 params 既有绑定顺序——
+        // 原实现的 SELECT/WHERE 占位符按循环混合追加，插参数会错位
+        Long collectionId = context.getCollectionId();
+        Set<String> restrictedDocIds = context.getRestrictedDocIds();
+        boolean hasDocFilter = restrictedDocIds != null && !restrictedDocIds.isEmpty();
+        if (collectionId != null || hasDocFilter) {
+            List<String> filters = new ArrayList<>();
+            if (collectionId != null) {
+                filters.add("metadata->>'collection_id' = " + collectionId);
+            }
+            if (hasDocFilter) {
+                filters.add("metadata->>'doc_id' IN ("
+                        + String.join(",", Collections.nCopies(restrictedDocIds.size(), "?")) + ")");
+                params.addAll(restrictedDocIds);
+            }
+            sql.append(String.join(" AND ", filters)).append(" AND (");
+            sql.append(String.join(" OR ", whereGroups));
+            sql.append(")");
+        } else {
+            sql.append(String.join(" OR ", whereGroups));
+        }
         // 命中数降序；同分按文档内阅读顺序（doc 路由会把整篇文档拉进来，chunk_index 还原原文顺序）
         sql.append(" ORDER BY hit_cnt DESC, (metadata::jsonb ->> 'chunk_index')::int ASC LIMIT ?");
         params.add(topK);
@@ -163,7 +181,7 @@ public class KeywordSearchChannel implements SearchChannel {
                 RetrievedChunk c = chunks.get(i);
                 log.info("[关键词检索]   #{} 命中比={} 预览=\"{}\"",
                         i + 1, c.getScore() != null ? String.format("%.2f", c.getScore()) : "N/A",
-                        truncate(c.getContent(), 80));
+                        TextPreviews.truncate(c.getContent(), 80));
             }
             if (chunks.size() > 3) {
                 log.info("[关键词检索]   ... 还有 {} 条", chunks.size() - 3);
@@ -176,10 +194,5 @@ public class KeywordSearchChannel implements SearchChannel {
                 .chunks(chunks)
                 .latencyMs(elapsed)
                 .build();
-    }
-
-    private static String truncate(String text, int maxLen) {
-        if (text == null) return "";
-        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 }

@@ -1,5 +1,6 @@
 package com.nageoffer.ai.rag.common.mq;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
@@ -42,8 +43,16 @@ public class DelegatingTransactionListener implements RocketMQLocalTransactionLi
     /** 事务回查逻辑，per-topic，所有实例共享（Spring Bean 注册） */
     private final ConcurrentMap<String, TransactionChecker> checkerMap = new ConcurrentHashMap<>();
 
+    /** 本地事务执行模板（无状态，单例复用，避免每次回调重建） */
+    private TransactionTemplate transactionTemplate;
+
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    @PostConstruct
+    void initTransactionTemplate() {
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
 
     /**
      * 注册本地事务逻辑（由 {@link RocketMqProducer#sendInTransaction} 调用）。
@@ -53,6 +62,15 @@ public class DelegatingTransactionListener implements RocketMQLocalTransactionLi
      */
     public void registerLocalTransaction(String txId, Consumer<Object> localTransaction) {
         localTransactionMap.put(txId, localTransaction);
+    }
+
+    /**
+     * 注销本地事务逻辑（发送失败时由 {@link RocketMqProducer#sendInTransaction} 调用，防止 Map 泄漏）。
+     *
+     * @param txId 事务 ID
+     */
+    public void unregisterLocalTransaction(String txId) {
+        localTransactionMap.remove(txId);
     }
 
     /**
@@ -81,7 +99,7 @@ public class DelegatingTransactionListener implements RocketMQLocalTransactionLi
             return RocketMQLocalTransactionState.ROLLBACK;
         }
         try {
-            new TransactionTemplate(transactionManager).executeWithoutResult(status -> localTransaction.accept(arg));
+            transactionTemplate.executeWithoutResult(status -> localTransaction.accept(arg));
             return RocketMQLocalTransactionState.COMMIT;
         } catch (Exception e) {
             log.error("[事务消息] 本地事务执行失败, txId={}", txId, e);

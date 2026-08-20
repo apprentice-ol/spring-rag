@@ -2,10 +2,14 @@ package com.nageoffer.ai.rag.chat.retrieval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nageoffer.ai.rag.chat.util.TextPreviews;
 import jakarta.annotation.PostConstruct;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -148,10 +152,30 @@ public class Bm25KeywordSearchChannel implements SearchChannel {
         }
         String queryString = String.join(" ", terms);
 
+        // collection 过滤（可选）：metadata 条件作为 filter 与 @@@ 组合，paradedb 迭代补足 LIMIT
+        Long collectionId = context.getCollectionId();
+        Set<String> restrictedDocIds = context.getRestrictedDocIds();
+        StringBuilder sql = new StringBuilder("SELECT content, metadata, pdb.score(content) AS bm25_score FROM ")
+                .append(TABLE_NAME)
+                .append(" WHERE content @@@ ?");
+        List<Object> sqlParams = new ArrayList<>();
+        sqlParams.add(queryString);
+        if (collectionId != null) {
+            sql.append(" AND metadata->>'collection_id' = ?");
+            sqlParams.add(String.valueOf(collectionId));
+        }
+        if (restrictedDocIds != null && !restrictedDocIds.isEmpty()) {
+            sql.append(" AND metadata->>'doc_id' IN (")
+                    .append(String.join(",", Collections.nCopies(restrictedDocIds.size(), "?")))
+                    .append(")");
+            sqlParams.addAll(restrictedDocIds);
+        }
+        sql.append(" ORDER BY pdb.score(content) DESC LIMIT ?");
+        sqlParams.add(topK);
+
         List<RetrievedChunk> chunks = jdbcTemplate.query(
-                "SELECT content, metadata, pdb.score(content) AS bm25_score FROM " + TABLE_NAME
-                        + " WHERE content @@@ ? ORDER BY pdb.score(content) DESC LIMIT ?",
-                new Object[]{queryString, topK},
+                sql.toString(),
+                sqlParams.toArray(),
                 (rs, rowNum) -> {
                     String content = rs.getString("content");
                     double score = rs.getDouble("bm25_score");
@@ -176,7 +200,7 @@ public class Bm25KeywordSearchChannel implements SearchChannel {
                 RetrievedChunk c = chunks.get(i);
                 log.info("[关键词检索][bm25]   #{} BM25分={} 预览=\"{}\"",
                         i + 1, c.getScore() != null ? String.format("%.2f", c.getScore()) : "N/A",
-                        truncate(c.getContent(), 80));
+                        TextPreviews.truncate(c.getContent(), 80));
             }
             if (chunks.size() > 3) {
                 log.info("[关键词检索][bm25]   ... 还有 {} 条", chunks.size() - 3);
@@ -198,10 +222,5 @@ public class Bm25KeywordSearchChannel implements SearchChannel {
                 .chunks(List.of())
                 .latencyMs(System.currentTimeMillis() - startTime)
                 .build();
-    }
-
-    private static String truncate(String text, int maxLen) {
-        if (text == null) return "";
-        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 }

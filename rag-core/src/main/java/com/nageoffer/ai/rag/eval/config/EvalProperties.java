@@ -19,6 +19,9 @@ public class EvalProperties {
     /** 跑批并发数（虚拟线程 + Semaphore 限流；单实例足够，多实例部署再换 Redisson 信号量） */
     private int concurrency = 8;
 
+    /** 全局并发的 run 数上限：超出同步报错（fail-fast）。不设上限时连点 N 次就是 N×concurrency 路 LLM 并发 */
+    private int maxConcurrentRuns = 2;
+
     /** LiveRAG 基准数据导入配置（rag.eval.liverag.*） */
     private LiveRag liverag = new LiveRag();
 

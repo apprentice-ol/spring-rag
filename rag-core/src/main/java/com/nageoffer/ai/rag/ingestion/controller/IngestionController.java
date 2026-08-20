@@ -11,10 +11,9 @@ import com.nageoffer.ai.rag.ingestion.service.IngestionResult;
 import com.nageoffer.ai.rag.ingestion.domain.dto.PageResult;
 import com.nageoffer.ai.rag.ingestion.domain.entity.DocumentEntity;
 import com.nageoffer.ai.rag.ingestion.domain.entity.IngestionTaskEntity;
-import com.nageoffer.ai.rag.ingestion.domain.entity.IngestionTaskNodeEntity;
+
 import com.nageoffer.ai.rag.ingestion.mapper.DocumentMapper;
 import com.nageoffer.ai.rag.ingestion.mapper.IngestionTaskMapper;
-import com.nageoffer.ai.rag.ingestion.mapper.IngestionTaskNodeMapper;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
@@ -29,6 +28,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -64,7 +64,6 @@ public class IngestionController {
     private final IngestionProducer ingestionProducer;
     private final DocumentMapper documentMapper;
     private final IngestionTaskMapper taskMapper;
-    private final IngestionTaskNodeMapper taskNodeMapper;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectStorageClient objectStorageClient;
     private final RagStorageProperties storageProperties;
@@ -90,13 +89,8 @@ public class IngestionController {
         }
 
         try {
-            ByteArrayResource resource = new ByteArrayResource(file.getBytes()) {
-                @Override
-                public String getFilename() {
-                    return filename;
-                }
-            };
-            IngestionResult result = ingestionService.ingest(resource, filename, mimeType, collectionId, plainText);
+            // 直传 bytes（docId 传 null 由引擎生成），避免 multipart→Resource→readAllBytes 的多份拷贝
+            IngestionResult result = ingestionService.ingest(file.getBytes(), filename, mimeType, collectionId, plainText, null);
             log.info("[上传] 同步入库完成: file={}, docId={}, chunks={}",
                     filename, result.docId(), result.chunkCount());
             return result;
@@ -314,7 +308,11 @@ public class IngestionController {
         String endpoint = storageProperties.getS3().getEndpoint();
         String base = endpoint.endsWith("/") ? endpoint.substring(0, endpoint.length() - 1) : endpoint;
         java.net.URI uri = java.net.URI.create(base + "/" + storageProperties.getKbBucket() + "/" + key);
-        try (InputStream is = uri.toURL().openStream()) {
+        // 显式连接/读取超时：openStream() 无超时，RustFS 卡住时请求线程会被无限阻塞
+        java.net.URLConnection conn = uri.toURL().openConnection();
+        conn.setConnectTimeout(10_000);
+        conn.setReadTimeout(30_000);
+        try (InputStream is = conn.getInputStream()) {
             return is.readAllBytes();
         }
     }
@@ -327,6 +325,7 @@ public class IngestionController {
      * 删除关联数据：sa_document → sa_ingestion_task → sa_ingestion_task_node → 向量表（向量）
      * </p>
      */
+    @Transactional
     @DeleteMapping("/{docId}")
     public Map<String, Object> deleteDocument(@PathVariable String docId) {
         log.info("[删除] 开始: docId={}", docId);
@@ -340,16 +339,11 @@ public class IngestionController {
             return Map.of("docId", docId, "status", "NOT_FOUND");
         }
 
-        // 2. 删除关联的入库任务节点日志
-        List<IngestionTaskEntity> tasks = taskMapper.selectList(
-                new LambdaQueryWrapper<IngestionTaskEntity>()
-                        .eq(IngestionTaskEntity::getDocId, docId));
-        for (IngestionTaskEntity task : tasks) {
-            int nodeDeleted = taskNodeMapper.delete(
-                    new LambdaQueryWrapper<IngestionTaskNodeEntity>()
-                            .eq(IngestionTaskNodeEntity::getTaskId, task.getTaskId()));
-            log.debug("[删除] 清除任务节点: taskId={}, 删除={}条", task.getTaskId(), nodeDeleted);
-        }
+        // 2. 删除关联的入库任务节点日志（子查询一条 SQL，替代按 task 循环 N 次删除）
+        int nodeDeleted = jdbcTemplate.update(
+                "DELETE FROM sa_ingestion_task_node WHERE task_id IN "
+                        + "(SELECT task_id FROM sa_ingestion_task WHERE doc_id = ?)", docId);
+        log.debug("[删除] 清除任务节点: docId={}, 删除={}条", docId, nodeDeleted);
 
         // 3. 删除入库任务
         int taskDeleted = taskMapper.delete(
@@ -363,6 +357,7 @@ public class IngestionController {
                     "DELETE FROM " + vectorTable + " WHERE metadata->>'doc_id' = ?", docId);
             log.info("[删除] 清除向量: docId={}, table={}, 删除={}条", docId, vectorTable, vectorDeleted);
         } catch (Exception e) {
+            // 尽力删：向量清除失败不阻断业务表清理（异常已捕获，不影响事务提交）
             log.warn("[删除] 向量清除异常: {}", e.getMessage());
         }
 
@@ -401,13 +396,15 @@ public class IngestionController {
         String bucket = storageProperties.getAssetBucket();
         try {
             log.info("[资产代理] 尝试读取: bucket={}, file={}", bucket, fileName);
-            InputStream is = objectStorageClient.getObject(bucket, fileName);
-            byte[] bytes = is.readAllBytes();
-            String contentType = resolveAssetMime(fileName);
-            log.info("[资产代理] 成功: bucket={}, file={}, size={}b", bucket, fileName, bytes.length);
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(contentType))
-                    .body(new ByteArrayResource(bytes));
+            // try-with-resources 关闭 SDK ResponseInputStream：不关闭会泄漏 SDK/HTTP 连接池
+            try (InputStream is = objectStorageClient.getObject(bucket, fileName)) {
+                byte[] bytes = is.readAllBytes();
+                String contentType = resolveAssetMime(fileName);
+                log.info("[资产代理] 成功: bucket={}, file={}, size={}b", bucket, fileName, bytes.length);
+                return ResponseEntity.ok()
+                        .contentType(MediaType.parseMediaType(contentType))
+                        .body(new ByteArrayResource(bytes));
+            }
         } catch (Exception e) {
             log.warn("[资产代理] 读取失败: bucket={}, file={}, 原因: {}", bucket, fileName, e.getMessage());
             return ResponseEntity.notFound().build();

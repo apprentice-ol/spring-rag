@@ -1,11 +1,26 @@
 package com.nageoffer.ai.rag.common.util;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+
 /**
  * 文本清理工具类
  * <p>
- * 提供统一的文本清理逻辑，用于文档解析后的文本规范化
+ * 提供统一的文本清理逻辑，用于文档解析后的文本规范化。
+ * 正则全部预编译（本类在入库解析热路径上按文档反复调用）。
+ * </p>
  */
 public final class TextCleanupUtil {
+
+    /** 行尾空格/制表符（含尾随换行符） */
+    private static final Pattern TRAILING_BLANKS = Pattern.compile("[ \\t]+\\n");
+
+    /** 3 个及以上连续换行压缩为 2 个（cleanup() 默认规则） */
+    private static final Pattern BLANK_LINES_3_PLUS = Pattern.compile("\\n{3,}");
+
+    /** maxConsecutiveLines 参数化的连续空行规则缓存（取值离散且小，避免每次调用拼串编译） */
+    private static final Map<Integer, Pattern> BLANK_LINE_RULES = new ConcurrentHashMap<>();
 
     private TextCleanupUtil() {
     }
@@ -27,15 +42,13 @@ public final class TextCleanupUtil {
             return "";
         }
 
-        return text
-                // 移除 BOM 标记
-                .replace("﻿", "")
-                // 移除行尾的空格和制表符
-                .replaceAll("[ \\t]+\\n", "\n")
-                // 压缩连续的空行（3个以上压缩为2个）
-                .replaceAll("\\n{3,}", "\n\n")
-                // 去除首尾空白
-                .trim();
+        // 移除 BOM 标记
+        String result = text.replace("﻿", "");
+        // 移除行尾的空格和制表符
+        result = TRAILING_BLANKS.matcher(result).replaceAll("\n");
+        // 压缩连续的空行（3个以上压缩为2个）
+        result = BLANK_LINES_3_PLUS.matcher(result).replaceAll("\n\n");
+        return result.trim();
     }
 
     /**
@@ -64,15 +77,20 @@ public final class TextCleanupUtil {
         }
 
         if (trimTrailingSpaces) {
-            result = result.replaceAll("[ \\t]+\\n", "\n");
+            result = TRAILING_BLANKS.matcher(result).replaceAll("\n");
         }
 
         if (compressEmptyLines && maxConsecutiveLines > 0) {
-            String pattern = "\\n{" + (maxConsecutiveLines + 1) + ",}";
-            String replacement = "\n".repeat(maxConsecutiveLines);
-            result = result.replaceAll(pattern, replacement);
+            result = blankLineRule(maxConsecutiveLines).matcher(result)
+                    .replaceAll("\n".repeat(maxConsecutiveLines));
         }
 
         return result.trim();
+    }
+
+    /** (maxConsecutiveLines+1) 个及以上换行的压缩规则，按参数缓存编译结果 */
+    private static Pattern blankLineRule(int maxConsecutiveLines) {
+        return BLANK_LINE_RULES.computeIfAbsent(maxConsecutiveLines,
+                n -> Pattern.compile("\\n{" + (n + 1) + ",}"));
     }
 }

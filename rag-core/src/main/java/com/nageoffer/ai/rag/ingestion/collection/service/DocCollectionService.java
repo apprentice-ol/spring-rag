@@ -9,6 +9,15 @@ public interface DocCollectionService {
     /** 建集合，返回 id */
     Long create(String name, String description);
 
+    /**
+     * 按名查/建集合（存在即复用），返回 id。供导入器等程序化归集用——
+     * 与 create 的区别：重名不抛异常而是复用；并发首建冲突按唯一约束兜底重查。
+     */
+    Long ensureCollection(String name, String description);
+
+    /** 校验集合存在，返回集合名；不存在抛 ClientException（供归集前防脏引用） */
+    String requireCollection(Long id);
+
     /** 列集合（含实时聚合的文档数 docCount） */
     List<DocCollectionEntity> list();
 

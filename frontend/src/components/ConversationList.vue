@@ -1,12 +1,30 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { PlusOutlined, DeleteOutlined, MessageOutlined, MenuFoldOutlined } from '@ant-design/icons-vue'
-import { conversations, activeId, selectConversation, newConversation, removeConversation } from '../composables/useChatState'
+import {
+  conversations, activeId, selectConversation, newConversation, removeConversation,
+  conversationTotal, loadMoreConversations,
+} from '../composables/useChatState'
 
 /** 选中会话后是否需要外层切换到聊天视图（移动端 tab 布局用） */
 const emit = defineEmits<{ chat: []; collapse: [] }>()
 
 /** 是否显示"收起会话栏"按钮（仅桌面端 ChatPanel 传入；移动端对话 Tab 不显示） */
 defineProps<{ showCollapse?: boolean }>()
+
+/** 列表滚动到底部自动加载下一页（分页接口配合，免全量拉取） */
+const loadingMore = ref(false)
+async function onScrollBottom(e: Event) {
+  const el = e.target as HTMLElement
+  if (loadingMore.value || conversations.value.length >= conversationTotal.value) return
+  if (el.scrollTop + el.clientHeight < el.scrollHeight - 8) return
+  loadingMore.value = true
+  try {
+    await loadMoreConversations()
+  } finally {
+    loadingMore.value = false
+  }
+}
 
 async function onSelect(convId: string) {
   await selectConversation(convId)
@@ -44,7 +62,7 @@ async function onRemove(convId: string) {
         </a-button>
       </div>
     </div>
-    <div class="conv-list">
+    <div class="conv-list" @scroll.passive="onScrollBottom">
       <div
         v-for="c in conversations"
         :key="c.conversationId"
@@ -58,7 +76,8 @@ async function onRemove(convId: string) {
           <template #icon><DeleteOutlined /></template>
         </a-button>
       </div>
-      <div v-if="!conversations.length" class="conv-empty">暂无对话</div>
+      <div v-if="loadingMore" class="conv-empty">加载中…</div>
+      <div v-else-if="!conversations.length" class="conv-empty">暂无对话</div>
     </div>
   </div>
 </template>

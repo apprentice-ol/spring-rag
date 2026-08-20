@@ -96,9 +96,12 @@ CREATE TABLE IF NOT EXISTS sa_message (
     conversation_id VARCHAR(64)  NOT NULL,
     role            VARCHAR(16)  NOT NULL,   -- user / assistant
     content         TEXT         NOT NULL,
-    created_at      TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMP    NOT NULL DEFAULT NOW(),
+    citations       JSONB        NULL        -- RAG 回答的引用溯源（[{ref,docId,docName,chunkCount,preview,sourceLocation}]）
 );
 CREATE INDEX IF NOT EXISTS idx_sa_msg_conv ON sa_message (conversation_id);
+-- 旧库补列（幂等；init 模式 always，每次启动安全执行）
+ALTER TABLE sa_message ADD COLUMN IF NOT EXISTS citations JSONB;
 
 -- ===== 节点级执行日志（P7）=====
 CREATE TABLE IF NOT EXISTS sa_ingestion_task_node (
@@ -196,6 +199,13 @@ ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NUL
 ALTER TABLE sa_eval_run    ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NULL DEFAULT 'naive';
 -- 条目分类（冗余自 sa_eval_item.category，便于运行记录按分类展示/筛选）
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS category VARCHAR(32);
+-- 答案质量评测展示（answerEval）：标准答案 + 系统生成答案
+-- （expected_answer 冗余自 sa_eval_item；generated_answer 为评测时 LLM 生成，落库供前端对照）
+ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS expected_answer TEXT;
+ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS generated_answer TEXT;
+-- per-question 检索模式标识（仅检索期望文档；重评可覆盖原 run 设置，
+-- 上限对照记录须与常规记录区分展示，避免误读分数）
+ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS per_question BOOLEAN NOT NULL DEFAULT false;
 
 -- ===== 评测体系中文释义（表/列注释，DB 客户端可见）=====
 COMMENT ON TABLE sa_eval_dataset IS '评测数据集';

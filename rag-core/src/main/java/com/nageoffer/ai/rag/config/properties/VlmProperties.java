@@ -27,4 +27,7 @@ public class VlmProperties {
 
     /** VLM 失败时抛错中断该文档入库（对齐 ragent：绝不产生"有图无描述"的残缺数据）；false=降级为无描述图片块 */
     private boolean failOnError = false;
+
+    /** 图片描述并行调用的 VLM 并发数（虚拟线程 + 信号量限流；文档图片多时避免逐图串行秒级往返） */
+    private int concurrency = 5;
 }

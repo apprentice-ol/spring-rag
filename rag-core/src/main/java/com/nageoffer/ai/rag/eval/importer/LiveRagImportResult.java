@@ -18,6 +18,10 @@ public record LiveRagImportResult(
         int docsFailed,
         /** 因文档全部入库失败而被跳过的题数 */
         int itemsSkipped,
+        /** 语料归入的文档集合 ID */
+        long collectionId,
+        /** 语料归入的文档集合名（自动建时与数据集同名） */
+        String collectionName,
         /** 总耗时 ms */
         long elapsedMs
 ) {

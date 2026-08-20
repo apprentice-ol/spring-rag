@@ -8,6 +8,8 @@ import com.nageoffer.ai.rag.chat.dao.entity.AgentTraceEntity;
 import com.nageoffer.ai.rag.chat.dao.mapper.AgentTraceMapper;
 import com.nageoffer.ai.rag.ingestion.domain.dto.PageResult;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +59,24 @@ public class AgentTraceServiceImpl implements AgentTraceService {
                 .eq(AgentTraceEntity::getMessageId, messageId)
                 .orderByDesc(AgentTraceEntity::getId)
                 .last("LIMIT 1"));
+    }
+
+    @Override
+    public Map<Long, String> traceIdsByMessageIds(Collection<Long> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            return Map.of();
+        }
+        List<AgentTraceEntity> rows = agentTraceMapper.selectList(
+                new LambdaQueryWrapper<AgentTraceEntity>()
+                        .in(AgentTraceEntity::getMessageId, messageIds)
+                        .isNotNull(AgentTraceEntity::getTraceId)
+                        .select(AgentTraceEntity::getMessageId, AgentTraceEntity::getTraceId)
+                        .orderByAsc(AgentTraceEntity::getId));
+        Map<Long, String> traceIds = new HashMap<>();
+        for (AgentTraceEntity row : rows) {
+            traceIds.putIfAbsent(row.getMessageId(), row.getTraceId());
+        }
+        return traceIds;
     }
 
     @Override

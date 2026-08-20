@@ -56,6 +56,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import com.nageoffer.ai.rag.common.util.JsonUtil;
+import org.redisson.api.RLock;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -88,14 +91,42 @@ public class EvalRunner {
     private final ObjectMapper objectMapper;
     private final EvalProperties evalProperties;
     private final QueryRewriter queryRewriter;
+    /** 答案质量评测（answerEval）用：生成答案 + LLM-as-judge 都走裸 client（不带查询链 Advisor）。
+     *  字段注入 + @Qualifier：ChatClient 有两个实现 bean，lombok 构造器注入无法带限定符 */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.beans.factory.annotation.Qualifier("ingestionChatClient")
+    private org.springframework.ai.chat.client.ChatClient ingestionChatClient;
 
     private final EvalRunMapper evalRunMapper;
     private final EvalItemMapper evalItemMapper;
     private final EvalMetricMapper evalMetricMapper;
     private final DocumentMapper documentMapper;
+    /** 单条重评 attempt 分配的分布式锁（并发同 item 重评防 attempt 冲突） */
+    private final org.redisson.api.RedissonClient redissonClient;
+    /** 集合隔离防呆检查用（集合在向量库的实际向量数） */
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    /** 向量表名（与 spring.ai.vectorstore.pgvector.table-name 同源） */
+    @org.springframework.beans.factory.annotation.Value("${spring.ai.vectorstore.pgvector.table-name:spring_ai_store_vector}")
+    private String vectorTable;
 
     /** 进度回写间隔：每 N 条 item 落一次 done 进度（降频减 DB 写，最终值由 run() 收尾补齐） */
     private static final int PROGRESS_INTERVAL = 10;
+
+    /** 未指定范围与数量时的默认抽样比例（全量的 10%，至少 1 条）；防止误触全量评测打爆下游 */
+    private static final double DEFAULT_SAMPLE_RATIO = 0.10;
+
+    /**
+     * 全局 item 级限流（bean 单例，所有 run 共享）：此前每 run 各 new 一个 Semaphore，
+     * 多 run 并行时全局 LLM 并发 = run 数 × concurrency，会打穿下游限流。
+     * 收敛为全局恒等于 rag.eval.concurrency（run 级并发另由 EvalConcurrencyGuard 上限保护）。
+     */
+    private Semaphore itemLimiter;
+
+    @jakarta.annotation.PostConstruct
+    void initItemLimiter() {
+        this.itemLimiter = new Semaphore(evalProperties.getConcurrency());
+    }
 
     /**
      * 后台跑批入口（由 EvalService.triggerRun 在虚拟线程里调用）。
@@ -119,16 +150,15 @@ public class EvalRunner {
                     .eq(EvalItemEntity::getEnabled, 1));
             if (CollUtil.isNotEmpty(onlyItemIds)) {
                 // 重试场景：限定为本次任务实际评测过的条目，不再按分类筛选/抽样
-                evalItemEntityList.removeIf(item -> !onlyItemIds.contains(item.getId()));
+                // HashSet 免 O(n²)（List.contains 线性扫，全量 895 条时明显）
+                java.util.Set<Long> only = new java.util.HashSet<>(onlyItemIds);
+                evalItemEntityList.removeIf(item -> !only.contains(item.getId()));
             } else {
-                // 按分类筛选（category 为空则不限）
-                if (StrUtil.isEmpty(category)) {
-                    evalItemEntityList.removeIf(item -> !category.equals(item.getCategory()));
-                }
-                // 按数量抽样（随机；limit 为空/≤0 则跑全量匹配条目）
-                if (limit != null && limit > 0 && limit < evalItemEntityList.size()) {
-                    Collections.shuffle(evalItemEntityList);
-                    evalItemEntityList = new ArrayList<>(evalItemEntityList.subList(0, limit));
+                ScopeResult scope = applyScopeAndSample(evalItemEntityList, category, limit);
+                evalItemEntityList = scope.items();
+                if (scope.note() != null) {
+                    updateRunNote(runId, params, scope.note());
+                    log.info("[Eval] run {} 抽样说明: {}", runId, scope.note());
                 }
             }
 
@@ -148,20 +178,24 @@ public class EvalRunner {
             List<String> list = evalItemEntityList.stream().flatMap(item -> parseDocIds(item.getExpectedDocIds()).stream()).distinct().toList();
             // 预查期望文档名（doc_id → name），写入 metric.detail 供前端展示期望/实际召回对比
             final Map<String, String> expectedNameMap = this.loadDocNames(list);
+            // 预查期望文档集合归属（doc_id → collection_id）：评测检索按期望文档所在集合过滤，
+            // 排除独立文件与其他集合（如自传 PDF）对混合语料评测的污染
+            final Map<String, Long> docCollectionMap = this.loadDocCollections(list);
 
             List<MetricScorer> scorers = buildScorers();
             AtomicInteger doneCount = new AtomicInteger();
             AtomicInteger retrievedItemCount = new AtomicInteger();
             Map<String, List<Double>> scoreAggregate = new ConcurrentHashMap<>();
             // 信号量限流：控制同时跑的 item 数，防止下游（LLM embed / rerank / DB）被打爆。
-            // 并发度由 rag.eval.concurrency 配置（默认 8）；agent 范式越重（react 多次 LLM）越要调小
-            Semaphore semaphore = new Semaphore(evalProperties.getConcurrency());
+            // 用全局单例 itemLimiter（多 run 共享）：全局并发恒 = rag.eval.concurrency，
+            // 不随并行 run 数线性放大；并发度由 rag.eval.concurrency 配置（默认 8）
+            Semaphore semaphore = itemLimiter;
 
             try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 List<Future<?>> futures = new ArrayList<>(evalItemEntityList.size());
                 for (EvalItemEntity item : evalItemEntityList) {
                     futures.add(executor.submit(() -> runItemWithOwnTrace(runId, item, scorers, params,
-                            doneCount, scoreAggregate, retrievedItemCount, expectedNameMap, semaphore)));
+                            doneCount, scoreAggregate, retrievedItemCount, expectedNameMap, docCollectionMap, semaphore)));
                 }
                 for (Future<?> future : futures) {
                     try {
@@ -198,10 +232,147 @@ public class EvalRunner {
      * <p>① 整批不再共用一个 traceId（批量可读性）；② item trace 与 item 同生命周期（root span 随 item 结束 end），
      * 避免 HTTP root 早结束后子 span export 丢失（OO 查不到的根因）。
      */
+    /** 范围 + 抽样的应用结果：筛选/抽样后的条目 + 决策说明（无说明场景为 null）。 */
+    record ScopeResult(List<EvalItemEntity> items, String note) {
+    }
+
+    /**
+     * 范围与抽样规则（2026-08 修复：旧版 gate 条件写反——选了范围反而跳过筛选跑全量）：
+     * <ul>
+     *   <li>① 选范围 + 无数量 → 范围全量；</li>
+     *   <li>② 选范围 + 数量在范围内 → 范围内随机抽 N；</li>
+     *   <li>③ 选范围 + 数量 ≥ 范围条数 → 范围全量并写说明（note 供前端展示）；</li>
+     *   <li>④ 无范围 → 全量随机抽 N；无数量则按默认比例抽样（至少 1 条），避免误跑全量。</li>
+     * </ul>
+     */
+    static ScopeResult applyScopeAndSample(List<EvalItemEntity> items, String category, Integer limit) {
+        List<EvalItemEntity> list = new ArrayList<>(items);
+        int totalEnabled = list.size();
+        String note = null;
+        if (StrUtil.isNotEmpty(category)) {
+            list.removeIf(item -> !category.equals(item.getCategory()));
+            int scopeSize = list.size();
+            if (scopeSize == 0) {
+                note = "分类「" + category + "」无启用条目，实际评测 0 条";
+            } else if (limit != null && limit > 0) {
+                if (limit < scopeSize) {
+                    Collections.shuffle(list);
+                    list = new ArrayList<>(list.subList(0, limit));
+                } else {
+                    // 规则③：数量 ≥ 范围条数 → 全量评测，写说明供前端展示
+                    note = "抽样数量 " + limit + " ≥ 范围内条目数 " + scopeSize + "，已全量评测该范围";
+                }
+            }
+        } else {
+            if (limit != null && limit > 0) {
+                if (limit < totalEnabled) {
+                    Collections.shuffle(list);
+                    list = new ArrayList<>(list.subList(0, limit));
+                }
+            } else {
+                // 规则④：未选范围也未指定数量 → 按默认比例抽样（至少 1 条），避免误跑全量
+                int sampleSize = Math.max(1, (int) Math.ceil(totalEnabled * DEFAULT_SAMPLE_RATIO));
+                if (sampleSize < totalEnabled) {
+                    Collections.shuffle(list);
+                    list = new ArrayList<>(list.subList(0, sampleSize));
+                }
+                note = "未指定范围与数量，按 " + Math.round(DEFAULT_SAMPLE_RATIO * 100)
+                        + "% 比例抽样 " + list.size() + "/" + totalEnabled + " 条";
+            }
+        }
+        return new ScopeResult(list, note);
+    }
+
+    // ---------- 答案质量评测（#5 LLM-as-judge） ----------
+
+    /** 裁判判定：两维分数 0~1 + 一句话理由。 */
+    record JudgeVerdict(double correctness, double faithfulness, String reason) {
+    }
+
+    private static final String ANSWER_GEN_PROMPT = """
+            Answer the question based ONLY on the provided documents.
+            If the documents do not contain the answer, say you don't know. Answer in English, concisely.""";
+
+    private static final String JUDGE_PROMPT = """
+            You are a strict, impartial grader. Given the question, the retrieved documents (context),
+            the reference (golden) answer, and the system-generated answer, score two dimensions as integers 0-10:
+            1. correctness: factual agreement with the reference answer (key facts, numbers, entities).
+               Extra harmless details don't hurt; wrong facts do. Missing key facts lower the score.
+            2. faithfulness: whether the generated answer is strictly grounded in the retrieved documents
+               (every factual claim must be supported by the context; no fabricated facts beyond it).
+            Output ONLY one line of JSON: {"correctness": n, "faithfulness": n, "reason": "one short sentence"}""";
+
+    /** 检索 chunk → 评测用上下文（对齐 StreamChatPipeline 的 <documents> 形态，按序拼接）。 */
+    private static String buildEvalContext(List<RetrievedChunk> chunks) {
+        StringBuilder sb = new StringBuilder("<documents>\n");
+        int idx = 1;
+        for (RetrievedChunk c : chunks) {
+            sb.append("<content ref=\"").append(idx++).append("\">\n")
+                    .append(c.getContent() == null ? "" : c.getContent()).append("\n</content>\n");
+        }
+        return sb.append("</documents>").toString();
+    }
+
+    /** 生成答案（裸 client，与线上 ragChatClient 的系统提示不同——评测基准用统一简化提示，跨 run 可比）。 */
+    private String generateAnswer(String question, String contextText) {
+        return ingestionChatClient.prompt()
+                .system(ANSWER_GEN_PROMPT)
+                .user(contextText + "\n\nQuestion: " + question)
+                .call()
+                .content();
+    }
+
+    /**
+     * LLM-as-judge 打分：输出 JSON 解析为 0~1 分数（n/10）。
+     * 解析失败返回 null（调用方跳过该题答案指标）。
+     */
+    private JudgeVerdict judgeAnswer(String question, String contextText, String generated, String expected) throws Exception {
+        String response = ingestionChatClient.prompt()
+                .system(JUDGE_PROMPT)
+                .user("Question: " + question
+                        + "\n\nRetrieved documents:\n" + contextText
+                        + "\n\nReference answer: " + expected
+                        + "\n\nGenerated answer: " + generated)
+                .call()
+                .content();
+        if (response == null) {
+            return null;
+        }
+        // 统一走 JsonUtil 的平衡花括号提取（比 indexOf/lastIndexOf 更抗正文干扰，且容错围栏/尾逗号）
+        com.google.gson.JsonObject node = JsonUtil.firstJsonObject(response);
+        if (node == null) {
+            return null;
+        }
+        return new JudgeVerdict(
+                node.has("correctness") && !node.get("correctness").isJsonNull()
+                        ? node.get("correctness").getAsDouble() / 10.0 : 0,
+                node.has("faithfulness") && !node.get("faithfulness").isJsonNull()
+                        ? node.get("faithfulness").getAsDouble() / 10.0 : 0,
+                node.has("reason") && !node.get("reason").isJsonNull()
+                        ? node.get("reason").getAsString() : "");
+    }
+
+    /**
+     * 把抽样说明写回 run 的 param_snapshot（note 字段），供前端运行详情展示
+     * "数量超范围已全量评测 / 按比例抽了多少条"等决策信息。写失败只记日志，不影响跑批。
+     */
+    private void updateRunNote(Long runId, EvalParamSnapshot params, String note) {
+        try {
+            EvalRunEntity update = new EvalRunEntity();
+            update.setId(runId);
+            update.setParamSnapshot(objectMapper.writeValueAsString(params.withNote(note)));
+            update.setUpdateTime(LocalDateTime.now());
+            evalRunMapper.updateById(update);
+        } catch (Exception ex) {
+            log.warn("[Eval] run {} 写抽样说明失败: {}", runId, ex.getMessage());
+        }
+    }
+
     private void runItemWithOwnTrace(Long runId, EvalItemEntity item, List<MetricScorer> scorers,
                                      EvalParamSnapshot params, AtomicInteger doneCount,
                                      Map<String, List<Double>> scoreAggregate, AtomicInteger retrievedCount,
-                                     Map<String, String> expectedNameMap, Semaphore semaphore) {
+                                     Map<String, String> expectedNameMap, Map<String, Long> docCollectionMap,
+                                     Semaphore semaphore) {
         // 开 item 独立的 root trace（无父）：metric.trace_id 记 item 自己的 traceId（前端/OO 跳转一致），
         // 子 span 由 ContextPropagation 传播挂到 item root 下。startRoot 已把 traceId 写 MDC。
         try (TelemetrySpan root = ragTelemetry.openTrace("eval.item")) {
@@ -212,7 +383,7 @@ public class EvalRunner {
                 semaphore.acquire();
                 try {
                     ItemScore itemScore = runOneItem(runId, item, scorers, params, doneCount,
-                            scoreAggregate, retrievedCount, expectedNameMap);
+                            scoreAggregate, retrievedCount, expectedNameMap, docCollectionMap);
                     root.traceOutput(itemScore.error() != null
                             ? "error: " + itemScore.error()
                             : "retrieved=" + itemScore.gotDocIds());
@@ -232,7 +403,8 @@ public class EvalRunner {
     /** 单条检索打分结果（纯计算，不落库）。error 非 null 表示检索失败。 */
     private record ItemScore(List<String> gotDocIds, List<String> gotDocNames,
                              long latency, String error, Map<String, Double> scores,
-                             String agentTrace, String traceId, int llmCalls) {}
+                             String agentTrace, String traceId, int llmCalls,
+                             String generatedAnswer) {}
 
     /**
      * 跑单个评测条目（批量跑批用）：检索打分 → 落库（attempt=0）→ 累计聚合 → 进度回写。
@@ -249,8 +421,8 @@ public class EvalRunner {
     private ItemScore runOneItem(Long runId, EvalItemEntity item, List<MetricScorer> scorers,
                                  EvalParamSnapshot params, AtomicInteger doneCount,
                                  Map<String, List<Double>> scoreAggregate, AtomicInteger retrievedCount,
-                                 Map<String, String> expectedNameMap) {
-        ItemScore itemScore = scoreItem(item, params, scorers);
+                                 Map<String, String> expectedNameMap, Map<String, Long> docCollectionMap) {
+        ItemScore itemScore = scoreItem(item, params, scorers, docCollectionMap);
         boolean retrieved = persistMetrics(runId, item, itemScore, params, 0, null, expectedNameMap);
         // 聚合只算原始批（attempt=0）
         if (itemScore.error() == null) {
@@ -288,7 +460,8 @@ public class EvalRunner {
      * @param scorers 指标打分器列表
      * @return 检索打分结果（含召回 docIds/指标分/agent 轨迹/traceId）；error 非 null 表示检索失败
      */
-    private ItemScore scoreItem(EvalItemEntity item, EvalParamSnapshot params, List<MetricScorer> scorers) {
+    private ItemScore scoreItem(EvalItemEntity item, EvalParamSnapshot params, List<MetricScorer> scorers,
+                                Map<String, Long> docCollectionMap) {
         List<String> retrievedDocIds = List.of();
         List<String> retrievedDocNames = List.of();
         long latencyMillis = 0;
@@ -297,8 +470,10 @@ public class EvalRunner {
         String agentTrace = null;
         String traceId = null;
         int llmCalls = 0;
+        String generatedAnswer = null;
         try {
             String question = item.getQuestion();
+            List<String> expectedDocIds = parseDocIds(item.getExpectedDocIds());
             // rewrite 开 → LLM 改写后塞进 rewrittenQuery；关 → 原始 question
             String rewrittenQuery = params.rewrite() ? queryRewriter.rewrite(question) : question;
             SearchContext searchContext = SearchContext.builder()
@@ -306,6 +481,13 @@ public class EvalRunner {
                     .rewrittenQuery(rewrittenQuery)
                     .topK(params.topK())
                     .threshold(params.threshold())
+                    // 检索范围隔离：期望文档同属一个集合时限定该集合（LiveRAG 题只查 cid=2，不再捞到自传 PDF）。
+                    // 防呆：sa_document 的集合归属与向量 metadata 可能错位（归集只改了 sa_document 的历史缺口），
+                    // 集合在向量库一条向量都没有时，隔离等于把检索限死在空集 → 必然 0 召回，退回全库并告警
+                    .collectionId(resolveSafeCollection(expectedDocIds, docCollectionMap, item.getId()))
+                    // per-question 实验：检索限定在该题期望文档内（模拟官方独立语料，验证混合语料是否唯一瓶颈）
+                    .restrictedDocIds(params.perQuestionEnabled() && !expectedDocIds.isEmpty()
+                            ? new LinkedHashSet<>(expectedDocIds) : null)
                     .budget(RetrievalBudget.builder()
                             .recallBudget(params.recallBudget())
                             .candidateLimit(params.candidateLimit())
@@ -346,15 +528,37 @@ public class EvalRunner {
             }
             retrievedDocIds = new ArrayList<>(docIdSet);
             retrievedDocNames = new ArrayList<>(docNameSet);
-            List<String> expectedDocIds = parseDocIds(item.getExpectedDocIds());
             for (MetricScorer scorer : scorers) {
                 scores.put(scorer.name(), scorer.score(retrievedDocIds, expectedDocIds));
+            }
+            // 答案质量评测（#5 LLM-judge）：检索有结果且存有黄金答案才生成+打分；
+            // 失败不阻断（分数缺省不打，检索指标照常落库）
+            if (params.answerEvalEnabled() && !retrievedChunks.isEmpty()
+                    && StrUtil.isNotBlank(item.getExpectedAnswer())) {
+                try {
+                    String contextText = buildEvalContext(retrievedChunks);
+                    generatedAnswer = generateAnswer(question, contextText);
+                    JudgeVerdict verdict = judgeAnswer(question, contextText, generatedAnswer, item.getExpectedAnswer());
+                    if (verdict != null) {
+                        scores.put("answer_correctness", verdict.correctness());
+                        scores.put("answer_faithfulness", verdict.faithfulness());
+                        llmCalls += 2;
+                    }
+                    String genPreview = generatedAnswer == null ? "" : generatedAnswer;
+                    log.info("[Eval] 答案评测 item={}: correctness={}, faithfulness={}, 生成=\"{}\"",
+                            item.getId(), verdict != null ? verdict.correctness() : null,
+                            verdict != null ? verdict.faithfulness() : null,
+                            genPreview.length() > 80 ? genPreview.substring(0, 80) + "..." : genPreview);
+                } catch (Exception ex) {
+                    log.warn("[Eval] 答案评测失败（跳过，不影响检索指标）item={}: {}", item.getId(), ex.getMessage());
+                }
             }
         } catch (Exception ex) {
             log.warn("[Eval] item {} agent({}) 失败: {}", item.getId(), params.effectiveParadigm(), ex.getMessage());
             error = ex.getMessage();
         }
-        return new ItemScore(retrievedDocIds, retrievedDocNames, latencyMillis, error, scores, agentTrace, traceId, llmCalls);
+        return new ItemScore(retrievedDocIds, retrievedDocNames, latencyMillis, error, scores,
+                agentTrace, traceId, llmCalls, generatedAnswer);
     }
 
     /**
@@ -394,6 +598,8 @@ public class EvalRunner {
             metricEntity.setRetrievedDocNames(retrievedNamesJson);
             metricEntity.setExpectedDocIds(expectedIdsJson);
             metricEntity.setExpectedDocNames(expectedNamesJson);
+            metricEntity.setExpectedAnswer(item.getExpectedAnswer());
+            metricEntity.setGeneratedAnswer(itemScore.generatedAnswer());
             metricEntity.setMetricName(entry.getKey());
             metricEntity.setScore(BigDecimal.valueOf(entry.getValue()).setScale(4, RoundingMode.HALF_UP));
             metricEntity.setDetail(detail);
@@ -401,6 +607,7 @@ public class EvalRunner {
             metricEntity.setAttempt(attempt);
             metricEntity.setRemark(remark);
             metricEntity.setRewrite(params.rewrite());
+            metricEntity.setPerQuestion(params.perQuestionEnabled());
             metricEntity.setParadigm(params.effectiveParadigm());
             metricEntity.setCategory(item.getCategory());
             metricEntity.setAgentTrace(itemScore.agentTrace());
@@ -425,9 +632,11 @@ public class EvalRunner {
         metricEntity.setDetail(toJson(Map.of("error", itemScore.error())));
         metricEntity.setExpectedDocIds(expectedIdsJson);
         metricEntity.setExpectedDocNames(expectedNamesJson);
+        metricEntity.setExpectedAnswer(item.getExpectedAnswer());
         metricEntity.setAttempt(attempt);
         metricEntity.setRemark(remark);
         metricEntity.setRewrite(params.rewrite());
+        metricEntity.setPerQuestion(params.perQuestionEnabled());
         metricEntity.setParadigm(params.effectiveParadigm());
         metricEntity.setCategory(item.getCategory());
         metricEntity.setAgentTrace(itemScore.agentTrace());
@@ -442,13 +651,14 @@ public class EvalRunner {
      * @return 本次重评的 attempt 序号
      */
     /**
-     * 单条重评（保留历史）：复用原 run 参数快照，rewrite/paradigm 用入参覆盖（便于对比裸检索 vs 改写、不同范式），
-     * 跑一次检索打分，写 attempt=max+1 的指标行。不修改 run 聚合/done/total。
+     * 单条重评（保留历史）：复用原 run 参数快照，rewrite/paradigm/perQuestion 用入参覆盖
+     * （便于对比裸检索 vs 改写、不同范式、是否限定期望文档），跑一次检索打分，写 attempt=max+1 的指标行。不修改 run 聚合/done/total。
      *
-     * @param paradigm agent 范式；null/空 则沿用原 run 范式
+     * @param paradigm    agent 范式；null/空 则沿用原 run 范式
+     * @param perQuestion 仅检索期望文档；null 则沿用原 run 设置
      * @return 本次重评的 attempt 序号
      */
-    public int reevaluateSingle(Long runId, Long itemId, boolean rewrite, String remark, String paradigm) {
+    public int reevaluateSingle(Long runId, Long itemId, boolean rewrite, String remark, String paradigm, Boolean perQuestion) {
 
         EvalRunEntity runEntity = evalRunMapper.selectById(runId);
         if (runEntity == null) {
@@ -460,12 +670,36 @@ public class EvalRunner {
             throw new ClientException("条目不存在: " + itemId);
         }
 
-        // 复用原 run 参数快照，rewrite/paradigm 用入参覆盖（paradigm 为空则沿用原 run）
+        // 复用原 run 参数快照，rewrite/paradigm/perQuestion 用入参覆盖（paradigm/perQuestion 为空则沿用原 run）
         EvalParamSnapshot baseParams = parseParams(runEntity.getParamSnapshot());
         String effectiveParadigm = (paradigm != null && !paradigm.isBlank()) ? paradigm : baseParams.paradigm();
+        Boolean effectivePerQuestion = perQuestion != null ? perQuestion : baseParams.perQuestion();
+        // 重评语义：条目有标准答案时强制生成系统回答 + judge 打分（不依赖原 run 是否开过 answerEval），
+        // 保证每次重评都产出「系统回答 vs 标准答案」对照落库
+        boolean evalAnswer = baseParams.answerEvalEnabled() || StrUtil.isNotBlank(item.getExpectedAnswer());
         EvalParamSnapshot params = new EvalParamSnapshot(baseParams.topK(), baseParams.threshold(),
-                baseParams.recallBudget(), baseParams.candidateLimit(), baseParams.contextTopK(), rewrite, effectiveParadigm);
-        int attempt = nextAttempt(runId, itemId);
+                baseParams.recallBudget(), baseParams.candidateLimit(), baseParams.contextTopK(), rewrite,
+                effectiveParadigm, baseParams.note(), evalAnswer ? Boolean.TRUE : null, effectivePerQuestion);
+
+        // attempt 分配加分布式锁：nextAttempt 是 read-then-write，并发同 item 重评会拿到相同 attempt
+        //（历史行冲突）。attempt 定即释放锁，检索/落库不在锁内（锁持有毫秒级）
+        int attempt;
+        RLock attemptLock = redissonClient.getLock("eval:reeval:" + runId + ":" + itemId);
+        boolean locked = false;
+        try {
+            locked = attemptLock.tryLock(3, 10, TimeUnit.SECONDS);
+            if (!locked) {
+                throw new ClientException("该条目正在重评，请稍后再试");
+            }
+            attempt = nextAttempt(runId, itemId);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ClientException("重评获取锁被中断");
+        } finally {
+            if (locked) {
+                attemptLock.unlock();
+            }
+        }
 
         // 单条重评是同步 HTTP 请求（Span.current() = HTTP server span）：直接把 trace 级 IO 写到 HTTP 根 span，
         // 一个请求一个 trace、Langfuse 列表 IO 稳定显示（不依赖子 LLM span 的 gen_ai.*，ReAct 多轮下常丢）。
@@ -476,7 +710,8 @@ public class EvalRunner {
         ragTelemetry.tag("eval.paradigm", effectiveParadigm);
         ragTelemetry.traceInput(item.getQuestion());
 
-        ItemScore itemScore = this.scoreItem(item, params, buildScorers());
+        ItemScore itemScore = this.scoreItem(item, params, buildScorers(),
+                loadDocCollections(parseDocIds(item.getExpectedDocIds())));
         Map<String, String> docNameMap = loadDocNames(parseDocIds(item.getExpectedDocIds()));
         this.persistMetrics(runId, item, itemScore, params, attempt, remark, docNameMap);
         boolean hit = itemScore.error() == null && !itemScore.gotDocIds().isEmpty();
@@ -561,6 +796,8 @@ public class EvalRunner {
         int contextTopK = chatProperties.getContextTopK();
         boolean rewrite = false;
         String paradigm = "naive";
+        Boolean answerEval = null;
+        Boolean perQuestion = null;
         if (json != null && !json.isBlank()) {
             try {
                 JsonNode node = objectMapper.readTree(json);
@@ -571,11 +808,14 @@ public class EvalRunner {
                 contextTopK = node.path("contextTopK").asInt(contextTopK);
                 rewrite = node.path("rewrite").asBoolean(rewrite);
                 paradigm = node.path("paradigm").asText(paradigm);
+                answerEval = node.hasNonNull("answerEval") ? node.path("answerEval").asBoolean() : null;
+                perQuestion = node.hasNonNull("perQuestion") ? node.path("perQuestion").asBoolean() : null;
             } catch (Exception e) {
                 log.warn("[Eval] param_snapshot 解析失败，用 ChatProperties 默认: {}", e.getMessage());
             }
         }
-        return new EvalParamSnapshot(topK, threshold, recallBudget, candidateLimit, contextTopK, rewrite, paradigm);
+        return new EvalParamSnapshot(topK, threshold, recallBudget, candidateLimit, contextTopK, rewrite,
+                paradigm, null, answerEval, perQuestion);
     }
 
     private List<String> parseDocIds(String json) {
@@ -630,6 +870,73 @@ public class EvalRunner {
                 DocumentEntity::getName,
                 (name1, name2) -> name1, // 处理重复 key 的情况
                 LinkedHashMap::new));
+    }
+
+    /** 预查期望文档的集合归属（doc_id → collection_id），供检索时按集合过滤（评测不检索集合外文档）。 */
+    private Map<String, Long> loadDocCollections(Collection<String> docIds) {
+        if (docIds == null || docIds.isEmpty()) {
+            return Map.of();
+        }
+        List<DocumentEntity> documents = documentMapper.selectList(new LambdaQueryWrapper<DocumentEntity>()
+                .in(DocumentEntity::getDocId, docIds)
+                .select(DocumentEntity::getDocId, DocumentEntity::getCollectionId));
+        Map<String, Long> map = new LinkedHashMap<>();
+        for (DocumentEntity d : documents) {
+            if (d.getCollectionId() != null) {
+                map.put(d.getDocId(), d.getCollectionId());
+            }
+        }
+        return map;
+    }
+
+    /**
+     * 推断单条 item 的检索集合：期望文档全部归属同一集合 → 该集合（检索范围隔离，
+     * 排除独立文件与其他集合的污染）；混合/无集合 → null（不过滤，保持全库语义）。
+     */
+    private static Long resolveCollection(List<String> expectedDocIds, Map<String, Long> docCollectionMap) {
+        if (expectedDocIds == null || expectedDocIds.isEmpty() || docCollectionMap.isEmpty()) {
+            return null;
+        }
+        Long resolved = null;
+        for (String docId : expectedDocIds) {
+            Long cid = docCollectionMap.get(docId);
+            if (cid == null) {
+                return null; // 任一期望文档无集合（独立文件）→ 全库模式
+            }
+            if (resolved == null) {
+                resolved = cid;
+            } else if (!resolved.equals(cid)) {
+                return null; // 期望文档跨集合 → 不过滤
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * resolveCollection 的防呆版：解析出的集合在向量库一条向量都没有时退回全库。
+     * <p>触发场景：sa_document 的集合归属与向量 metadata 错位（历史归集只改 sa_document 不同步向量，
+     * 或期望文档的向量根本不在本库——数据集从他处迁移）。此时按集合隔离 = 检索限死空集 → 必然 0 召回，
+     * 全 run 被标 FAILED（服务器实际踩过）。退全库会引入跨集合噪声，但对"全错"是严格改善。</p>
+     */
+    private Long resolveSafeCollection(List<String> expectedDocIds, Map<String, Long> docCollectionMap, Long itemId) {
+        Long cid = resolveCollection(expectedDocIds, docCollectionMap);
+        if (cid == null) {
+            return null;
+        }
+        try {
+            Long count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM " + vectorTable + " WHERE metadata->>'collection_id' = ?",
+                    Long.class, String.valueOf(cid));
+            if (count == null || count == 0) {
+                log.warn("[Eval] item {} 期望文档所在集合 {} 在向量库无任何向量"
+                        + "（归集未同步向量 metadata 或期望文档不在本库），退回全库检索", itemId, cid);
+                return null;
+            }
+        } catch (Exception e) {
+            log.warn("[Eval] item {} 集合 {} 向量数检查失败，保守退回全库检索: {}", itemId, cid, e.getMessage());
+            return null;
+        }
+        return cid;
     }
 
     /** 对象 → JSON 字符串；序列化失败返回 null（不抛异常，避免阻断落库）。 */

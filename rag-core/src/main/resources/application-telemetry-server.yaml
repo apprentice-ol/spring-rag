@@ -20,12 +20,15 @@ telemetry:
 
   # 内容捕获与摘要限额（与本地版一致）
   limits:
-    summarize: false                 # 保留完整输入/输出 JSON
-    truncate: false
-    max-span-io: 100000000
-    summarize-max-string: 100000000
-    summarize-max-preview: 1000000
-    summarize-max-map-entries: 1000000
+    # 服务器实测：不摘要/不截断时，单次 trace 可达 22~36MB、日志包 5~8MB，
+    # OpenObserve 单请求要吞 8~17s，磁盘 I/O 被打满（top wa 93%），最终 OO 崩溃退出。
+    # 改为摘要 + 截断，单包降到 KB 级；完整 IO 仍可在本地/排查时临时开启。
+    summarize: true                   # 输入/输出做摘要
+    truncate: true                    # 超长字段截断
+    max-span-io: 8192                 # 单个 span 最大捕获 8KB（原 1 亿）
+    summarize-max-string: 2000
+    summarize-max-preview: 500
+    summarize-max-map-entries: 100
 
   # ---------------------------------------------------------------
   # 2. Collector：服务器不用 collector，必须显式 false（默认 true 会连 localhost:4318）

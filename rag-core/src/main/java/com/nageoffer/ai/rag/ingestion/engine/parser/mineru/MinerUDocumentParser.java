@@ -29,9 +29,6 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -113,9 +110,11 @@ public class MinerUDocumentParser implements DocumentParser {
             return;
         }
         RPermitExpirableSemaphore semaphore = redissonClient.getPermitExpirableSemaphore(properties.getSemaphoreName());
-        semaphore.setPermits(properties.getConcurrencyLimit());
-        log.info("MinerU 分布式解析限流初始化: semaphoreName={}, maxConcurrent={}",
-                properties.getSemaphoreName(), properties.getConcurrencyLimit());
+        // trySetPermits 仅在尚未设置时生效：setPermits 是强制覆盖，
+        // 多实例滚动启动时会清掉其他实例的在途许可计数，破坏正在执行的限流
+        boolean initialized = semaphore.trySetPermits(properties.getConcurrencyLimit());
+        log.info("MinerU 分布式解析限流初始化: semaphoreName={}, maxConcurrent={}, firstInit={}",
+                properties.getSemaphoreName(), properties.getConcurrencyLimit(), initialized);
     }
 
     @Override
@@ -216,9 +215,6 @@ public class MinerUDocumentParser implements DocumentParser {
         // 4. 下载 zip
         byte[] zipBytes = minerUClient.downloadZip(status.zipUrl());
 
-        // [调试] 本地保存一份 zip，查看 MinerU 返回结构（看完可删除此调用）
-        dumpZipLocally(zipBytes, documentId);
-
         // 5. 解包为 ParsedDocument（按 unpackMode 选路线：markdown 旧路线 / content_list 结构化表格）
         ParsedDocument parsed = resultUnpacker.unpack(zipBytes, sourceFile, documentId, unpackMode);
 
@@ -230,25 +226,6 @@ public class MinerUDocumentParser implements DocumentParser {
         mergedMeta.put("mimeType", mimeType == null ? "" : mimeType);
 
         return ParsedDocument.of(parsed.blocks(), mergedMeta);
-    }
-
-    /**
-     * [调试] 把 MinerU 返回的 zip 保存到本地，便于查看其内部结构（markdown + 图片）
-     * <p>
-     * 默认存到 {@code D:/mineru-dump/mineru_{documentId}.zip}，存盘失败不影响解析流程。
-     * 看完 zip 结构后可删除本方法及其调用（dumpZipLocally）。
-     */
-    private void dumpZipLocally(byte[] zipBytes, String documentId) {
-        try {
-            Path dir = Paths.get("D:", "mineru-dump");
-            Files.createDirectories(dir);
-            Path file = dir.resolve("mineru_" + documentId + ".zip");
-            Files.write(file, zipBytes);
-            log.info("[调试] MinerU zip 已保存到本地: {} ({} 字节，解压后可见 .md 和图片)",
-                    file.toAbsolutePath(), zipBytes.length);
-        } catch (Exception e) {
-            log.warn("[调试] MinerU zip 本地保存失败（不影响解析）: {}", e.getMessage());
-        }
     }
 
     /**

@@ -3,9 +3,11 @@ package com.nageoffer.ai.rag.eval.service.impl;
 import cn.hutool.core.util.ObjUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.extension.toolkit.Db;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nageoffer.ai.rag.common.exception.ClientException;
 import com.nageoffer.ai.rag.config.properties.ChatProperties;
+import com.nageoffer.ai.rag.eval.config.EvalConcurrencyGuard;
 import com.nageoffer.ai.rag.eval.dao.entity.EvalDatasetEntity;
 import com.nageoffer.ai.rag.eval.dao.entity.EvalItemEntity;
 import com.nageoffer.ai.rag.eval.dao.entity.EvalMetricEntity;
@@ -19,11 +21,11 @@ import com.nageoffer.ai.rag.eval.domain.EvalParamSnapshot;
 import com.nageoffer.ai.rag.eval.domain.EvalRunOptions;
 import com.nageoffer.ai.rag.eval.runner.EvalRunner;
 import com.nageoffer.ai.rag.eval.service.EvalService;
+import com.nageoffer.ai.rag.ingestion.domain.dto.PageResult;
 import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -49,9 +51,8 @@ public class EvalServiceImpl implements EvalService {
     private final ChatProperties chatProperties;
     private final EvalRunner evalRunner;
     private final ObjectMapper objectMapper;
-
-    /** 评测跑批专用虚拟线程池（应用生命周期存活） */
-    private final ExecutorService evalExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** run 级并发治理（全局上限 + 优雅停机），替代此前无界且永不关闭的本地线程池 */
+    private final EvalConcurrencyGuard concurrencyGuard;
 
     @Override
     @Transactional
@@ -83,7 +84,7 @@ public class EvalServiceImpl implements EvalService {
         if (items == null || items.isEmpty()) {
             return;
         }
-        int count = 0;
+        List<EvalItemEntity> entities = new ArrayList<>(items.size());
         for (EvalItemRequest req : items) {
             if (!StringUtils.hasText(req.question())) {
                 throw new ClientException("question 不能为空");
@@ -92,15 +93,19 @@ public class EvalServiceImpl implements EvalService {
             e.setDatasetId(datasetId);
             e.setQuestion(req.question());
             e.setExpectedDocIds(req.expectedDocIds() == null ? null : toJson(req.expectedDocIds()));
+            e.setExpectedAnswer(req.expectedAnswer());
             e.setCategory(req.category());
             e.setItemKey(req.itemKey());
             e.setSource(StringUtils.hasText(req.source()) ? req.source() : "builtin");
             e.setEnabled(1);
-            itemMapper.insert(e);
-            count++;
+            entities.add(e);
         }
-        d.setItemCount((d.getItemCount() == null ? 0 : d.getItemCount()) + count);
-        datasetMapper.updateById(d);
+        // 批量插入（此前逐条 insert = N 次 DB 往返，LiveRAG 50 题 = 50 次）
+        Db.saveBatch(entities);
+        // 原子累加 itemCount（此前 read-modify-write，并发 addItems 丢更新——deleteItem 已是正确示范）
+        datasetMapper.update(null, new LambdaUpdateWrapper<EvalDatasetEntity>()
+                .eq(EvalDatasetEntity::getId, datasetId)
+                .setSql("item_count = item_count + " + entities.size()));
     }
 
     @Override
@@ -137,7 +142,10 @@ public class EvalServiceImpl implements EvalService {
                 baseParams != null ? baseParams.candidateLimit() : chatProperties.getCandidateLimit(),
                 baseParams != null ? baseParams.contextTopK() : chatProperties.getContextTopK(),
                 baseParams != null ? baseParams.rewrite() : Boolean.TRUE.equals(options.rewriteEnabled()),
-                paradigm);
+                paradigm,
+                null,
+                Boolean.TRUE.equals(options.answerEval()) ? Boolean.TRUE : null,
+                Boolean.TRUE.equals(options.perQuestion()) ? Boolean.TRUE : null);
 
         EvalRunEntity evalRunEntity = new EvalRunEntity();
         evalRunEntity.setDatasetId(options.datasetId());
@@ -151,7 +159,7 @@ public class EvalServiceImpl implements EvalService {
         runMapper.insert(evalRunEntity);
 
         Long runId = evalRunEntity.getId();
-        evalExecutor.submit(ContextPropagator.wrap(() -> {
+        concurrencyGuard.submitRun(ContextPropagator.wrap(() -> {
             try {
                 // itemIds 非空时走精确子集（agent 对照用：多范式同题），否则按 category/limit 抽样
                 evalRunner.run(runId, options.category(), options.limit(), options.itemIds());
@@ -185,14 +193,52 @@ public class EvalServiceImpl implements EvalService {
         return runMapper.selectList(qw);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>item 级分页 + 列裁剪：一次 run 的 metric 行数 = item 数 × 指标数，且每行冗余携带同一 item 的
+     * 大文本（question/expectedAnswer/agentTrace/detail）。LiveRAG 895 题 ≈ 6300+ 行数十 MB，
+     * 全量返回既慢又撑爆前端。按 item 分页两步查询（先页内 item id，再取这些 item 的行），
+     * 并排除 agent_trace 列（前端不渲染，DB 照写）。</p>
+     */
     @Override
-    public List<EvalMetricEntity> getMetrics(Long runId) {
-        return metricMapper.selectList(new LambdaQueryWrapper<EvalMetricEntity>()
+    public PageResult<EvalMetricEntity> getMetrics(Long runId, int page, int size) {
+        page = Math.max(page, 1);
+        size = Math.min(Math.max(size, 1), 200);
+        // total = DISTINCT item 数（COUNT(DISTINCT)，不能用 selectCount+groupBy——多行会报错）
+        List<java.util.Map<String, Object>> totalRows = metricMapper.selectMaps(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<EvalMetricEntity>()
+                        .select("COUNT(DISTINCT item_id) AS cnt")
+                        .eq("run_id", runId));
+        long total = totalRows.isEmpty() || totalRows.get(0) == null
+                ? 0 : ((Number) totalRows.get(0).get("cnt")).longValue();
+        if (total == 0) {
+            return new PageResult<>(0, List.of());
+        }
+        // 页内 item id（DISTINCT item_id 分页）
+        List<Long> pageItemIds = metricMapper.selectList(new LambdaQueryWrapper<EvalMetricEntity>()
+                        .select(EvalMetricEntity::getItemId)
+                        .eq(EvalMetricEntity::getRunId, runId)
+                        .groupBy(EvalMetricEntity::getItemId)
+                        .orderByAsc(EvalMetricEntity::getItemId)
+                        .last("LIMIT " + size + " OFFSET " + (long) (page - 1) * size))
+                .stream().map(EvalMetricEntity::getItemId).toList();
+        if (pageItemIds.isEmpty()) {
+            return new PageResult<>(total, List.of());
+        }
+        // 页内 item 的全部指标行；排除 agent_trace 大文本列（前端不渲染，DB 照写，只是不回传）
+        List<EvalMetricEntity> records = metricMapper.selectList(new LambdaQueryWrapper<EvalMetricEntity>()
+                .select(EvalMetricEntity.class, i -> !"agent_trace".equals(i.getColumn()))
                 .eq(EvalMetricEntity::getRunId, runId)
+                .in(EvalMetricEntity::getItemId, pageItemIds)
                 .orderByAsc(EvalMetricEntity::getItemId)
                 .orderByAsc(EvalMetricEntity::getId));
+        return new PageResult<>(total, records);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>级联删除 run/metric（此前只删 items，孤儿 run/metric 越积越多且仍可查询到）。</p>
+     */
     @Override
     @Transactional
     public void deleteDataset(Long datasetId) {
@@ -200,10 +246,26 @@ public class EvalServiceImpl implements EvalService {
         if (d == null) {
             throw new ClientException("数据集不存在: " + datasetId);
         }
+        List<Long> runIds = runMapper.selectList(new LambdaQueryWrapper<EvalRunEntity>()
+                        .select(EvalRunEntity::getId)
+                        .eq(EvalRunEntity::getDatasetId, datasetId))
+                .stream().map(EvalRunEntity::getId).toList();
+        if (!runIds.isEmpty()) {
+            boolean hasRunning = runMapper.selectCount(new LambdaQueryWrapper<EvalRunEntity>()
+                    .eq(EvalRunEntity::getDatasetId, datasetId)
+                    .eq(EvalRunEntity::getStatus, "RUNNING")) > 0;
+            if (hasRunning) {
+                throw new ClientException("数据集有正在运行的评测，无法删除（请先等待完成或删除该 run）");
+            }
+            metricMapper.delete(new LambdaQueryWrapper<EvalMetricEntity>()
+                    .in(EvalMetricEntity::getRunId, runIds));
+            runMapper.deleteByIds(runIds);
+        }
         itemMapper.delete(new LambdaQueryWrapper<EvalItemEntity>()
                 .eq(EvalItemEntity::getDatasetId, datasetId));
         datasetMapper.deleteById(datasetId);
-        log.info("[Eval] 删除数据集及条目: datasetId={}, name={}", datasetId, d.getName());
+        log.info("[Eval] 级联删除数据集及条目/运行/指标: datasetId={}, name={}, runs={}",
+                datasetId, d.getName(), runIds.size());
     }
 
     @Override
@@ -275,7 +337,9 @@ public class EvalServiceImpl implements EvalService {
                 .distinct()
                 .toList();
         if (onlyItemIds.isEmpty()) {
-            throw new ClientException("原运行无评测记录，无法重试");
+            // 原 run 因落库失败/进程中断没有任何 metric 时，回退为按原参数全量重跑，而不是直接拒绝
+            log.warn("[Eval] 重试 run {} 无评测记录，回退为全量重跑", runId);
+            onlyItemIds = null;
         }
 
         // 复用原 run 的检索参数快照，保证重试与原任务同参数
@@ -292,9 +356,11 @@ public class EvalServiceImpl implements EvalService {
 
         Long newRunId = run.getId();
         final List<Long> scope = onlyItemIds;
-        evalExecutor.submit(ContextPropagator.wrap(() -> {
+        // 无 metric 回退时跑全量（limit 取极大值绕开默认 10% 抽样）
+        final Integer retryLimit = scope == null ? Integer.MAX_VALUE : null;
+        concurrencyGuard.submitRun(ContextPropagator.wrap(() -> {
             try {
-                evalRunner.run(newRunId, null, null, scope);
+                evalRunner.run(newRunId, null, retryLimit, scope);
             } catch (Exception e) {
                 log.error("[Eval] 重试跑批异常 runId={}", newRunId, e);
             }
@@ -303,10 +369,26 @@ public class EvalServiceImpl implements EvalService {
         return newRunId;
     }
 
+    /**
+     * 启动恢复：进程被杀/崩溃时遗留的 RUNNING/PENDING run 永远卡住且无法重试，
+     * 应用就绪后统一标记为 FAILED，前端即可重试或删除。
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void recoverInterruptedRuns() {
+        int affected = runMapper.update(null, new LambdaUpdateWrapper<EvalRunEntity>()
+                .in(EvalRunEntity::getStatus, "RUNNING", "PENDING")
+                .set(EvalRunEntity::getStatus, "FAILED")
+                .set(EvalRunEntity::getFinishedAt, LocalDateTime.now())
+                .set(EvalRunEntity::getUpdateTime, LocalDateTime.now()));
+        if (affected > 0) {
+            log.warn("[Eval] 启动恢复：将 {} 个中断的 RUNNING/PENDING run 标记为 FAILED", affected);
+        }
+    }
+
     @Override
-    public int reevaluateItem(Long runId, Long itemId, Boolean rewriteEnabled, String remark, String paradigm) {
+    public int reevaluateItem(Long runId, Long itemId, Boolean rewriteEnabled, String remark, String paradigm, Boolean perQuestion) {
         // 单条检索 ~1-2s（含 LLM 改写），同步执行即可；不动 run 聚合/done/total（保留历史）
-        return evalRunner.reevaluateSingle(runId, itemId, Boolean.TRUE.equals(rewriteEnabled), remark, paradigm);
+        return evalRunner.reevaluateSingle(runId, itemId, Boolean.TRUE.equals(rewriteEnabled), remark, paradigm, perQuestion);
     }
 
     private String toJson(Object o) {
