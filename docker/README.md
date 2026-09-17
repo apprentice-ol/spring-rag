@@ -21,7 +21,7 @@ docker/
 ├── docker-compose.server.yml                # 服务器编排（无 collector/langfuse，app 直连 OpenObserve）
 ├── .env / .env.example                      # 凭据与账号（三方共用：compose 自动注入 / Spring config.import / 本地裸跑）
 ├── .dockerignore                            # app 镜像 build context 排除项（按根目录生效）
-└── build-local.sh                           # 构建产物：前端 dist 进 jar → 瘦 jar + lib/（rag-core/target/）
+└── build-local.sh                           # 构建产物：前端 dist 进 jar → 瘦 jar + lib/（platform-bootstrap/target/）
 ```
 
 ## 端口一览
@@ -40,10 +40,9 @@ docker/
 ```bash
 # ① 首次前置：见 docker/postgres/README.md 下载 pg-search.deb 放到 docker/postgres/
 # ② 凭据：cp .env.example .env，填 DEEPSEEK_API_KEY / BAILIAN_API_KEY（LANGFUSE_AUTH 可选）
-# ③ 构建产物并拷到项目根（app 镜像的 COPY 在根目录找 jar + lib；jar/lib 均被 gitignore）
-bash build-local.sh                                   # 前置 JDK 21 + Node，产出 rag-core/target/{jar, lib/}
-cp rag-core/target/rag-core-0.0.1-SNAPSHOT.jar .
-cp -r rag-core/target/lib .
+# ③ 构建产物（前置 JDK 21 + Node）——脚本会自动把 jar/lib 同步到项目根，
+#    因为 app 镜像的 COPY 是在「context 根」找它们，不同步就会静默用旧 jar
+bash build-local.sh
 # ④ 起整套
 docker compose up -d --build
 ```
@@ -58,14 +57,14 @@ docker compose up -d --build
 > 逐步操作手册（含 Nginx 反代、OO viewer 账号、验证清单、常见问题）见 **[../docs/deploy.md](../docs/deploy.md)**，本节为速览。
 
 ```bash
-# ① 本地构建产物
-bash build-local.sh          # → rag-core/target/{rag-core-0.0.1-SNAPSHOT.jar, lib/}
+# ① 本地构建产物（jar/lib 已由脚本同步到项目根，见上节 ③）
+bash build-local.sh
 
-# ② 上传（jar + lib + compose + docker/ 目录；服务器首次需 git clone 或整目录 scp）
-scp rag-core/target/rag-core-0.0.1-SNAPSHOT.jar  <服务器>:/项目根/
-scp -r rag-core/target/lib                        <服务器>:/项目根/
-scp docker-compose.server.yml                     <服务器>:/项目根/
-scp -r docker                                     <服务器>:/项目根/   # 至少 app/ 与 postgres/ 子目录
+# ② 上传（服务器项目根 = /srv/www/spring-rag；首次需 git clone 或整目录 scp）
+scp platform-bootstrap-0.0.1-SNAPSHOT.jar  root@<SERVER_IP>:/srv/www/spring-rag/
+scp -r lib                                 root@<SERVER_IP>:/srv/www/spring-rag/
+scp docker-compose.server.yml              root@<SERVER_IP>:/srv/www/spring-rag/
+scp -r docker                              root@<SERVER_IP>:/srv/www/spring-rag/   # 至少 app/ 与 postgres/ 子目录
 
 # ③ 服务器 .env（至少必填；账号类留空回退默认值）
 #    SERVER_IP=服务器外网IP

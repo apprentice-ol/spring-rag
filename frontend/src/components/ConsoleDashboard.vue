@@ -105,6 +105,7 @@ const modelRows = computed(() => {
     <!-- 页头：标题 + 运行状态 + 刷新 -->
     <div class="page-header">
       <div>
+        <span class="eyebrow">Workbench</span>
         <h1 class="page-title">控制台</h1>
         <p class="page-desc">数据规模 · 检索管线配置 · 服务健康状态</p>
       </div>
@@ -309,11 +310,13 @@ const modelRows = computed(() => {
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 .kpi-card:hover {
   border-color: var(--color-primary);
-  background: #f7fbff;
+  background: var(--color-hover-tint);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px var(--color-shadow-md);
 }
 .kpi-head {
   display: flex;
@@ -524,7 +527,7 @@ const modelRows = computed(() => {
 
 /* ── empty ── */
 .console-empty {
-  padding: 80px 20px;
+  padding: 32px 20px;
 }
 .empty-hint {
   font-size: 12px;

@@ -18,6 +18,9 @@ export interface AgentTraceRecord {
   messageId: number | null
   traceId: string | null
   paradigm: string
+  /** 执行指纹三元组之二/之三（旧记录无此字段） */
+  workflowId?: string | null
+  promptHash?: string | null
   question: string | null
   steps: string | null
   llmCallCount: number | null
@@ -49,6 +52,8 @@ export function parseSteps(s: string | null): AgentTraceStep[] {
 export function toAgentTrace(rec: AgentTraceRecord): AgentTrace {
   return {
     paradigm: rec.paradigm,
+    workflowId: rec.workflowId ?? null,
+    promptHash: rec.promptHash ?? null,
     steps: parseSteps(rec.steps),
     llmCallCount: rec.llmCallCount ?? 0,
     startTimeMs: 0,

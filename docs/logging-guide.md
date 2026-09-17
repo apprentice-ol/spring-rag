@@ -1,6 +1,6 @@
-# springai-rag 日志使用规范
+# customer-platform 日志使用规范
 
-> 本规范适用于 `rag-core` 模块。落地一套统一的日志/可观测性用法，保证：trace 能串、日志能查、字段能聚合、不爆量。
+> 本规范适用于 `app` 模块。落地一套统一的日志/可观测性用法，保证：trace 能串、日志能查、字段能聚合、不爆量。
 
 ---
 
@@ -135,7 +135,7 @@ MDC 字段由 logback 的 `OpenTelemetryAppender` 捕获为日志属性、随 OT
 |---|---|---|
 | `traceId` / `spanId` | OTel 自动 | trace 关联 |
 | `rag_step` / `step_id` | `RagTelemetry.step` | 当前步骤名 + spanId |
-| `conversation_id` / `request_type` | `StreamChatPipeline.execute` | 会话/请求类型 |
+| `conversation_id` / `request_type` | `ChatOrchestrator.execute` | 会话/请求类型 |
 | `llm_model` / `llm_role` / `llm_temperature` / `llm_max_tokens` | `LlmTraceAdvisor.before` | LLM 调用参数 |
 | `llm_prompt_tokens` / `llm_completion_tokens` / `llm_total_tokens` | `LlmTraceAdvisor.after` | LLM token 用量 |
 
@@ -183,7 +183,7 @@ MDC 字段由 logback 的 `OpenTelemetryAppender` 捕获为日志属性、随 OT
 ## 9. 配置
 
 - **`logback-spring.xml`**：CONSOLE + OPEN_TELEMETRY 双 appender；OTLP 端点由 `application-telemetry.yaml` 的 `telemetry.collector.*` 桥接，OpenObserve 凭据走环境变量（`OPENOBSERVE_URL` / `OO_USERNAME` / `OO_PASSWORD`）
-- **`application.yaml`**：`logging.level` 控制级别。当前开发期：`com.nageoffer.ai.rag: DEBUG`、`org.springframework.ai: DEBUG`、`DispatcherServlet: DEBUG`、`ibatis: DEBUG`
+- **`application.yaml`**：`logging.level` 控制级别。当前开发期：`com.jjx.customer.platform: DEBUG`、`org.springframework.ai: DEBUG`、`DispatcherServlet: DEBUG`、`ibatis: DEBUG`
 - **trace 采样**：`management.tracing.sampling.probability: 1.0`（全采样，开发期；生产可调低）
 
 ---

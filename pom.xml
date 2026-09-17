@@ -11,16 +11,29 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.nageoffer.ai</groupId>
-    <artifactId>springai-rag</artifactId>
+    <groupId>com.jjx.customer</groupId>
+    <artifactId>customer-platform</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
-    <name>springai-rag</name>
+    <name>customer-platform</name>
     <description>基于 Spring AI 1.1 的 RAG 文档入库与问答（ragent 的 Spring AI 重写版）</description>
 
     <modules>
-        <module>rag-common</module>
-        <module>rag-core</module>
+        <module>platform-agent-framework</module>
+        <module>platform-shared</module>
+        <module>platform-observe</module>
+        <module>platform-cache</module>
+        <module>platform-knowledge</module>
+        <module>platform-prompt</module>
+        <module>platform-ingestion</module>
+        <module>platform-storage</module>
+        <module>platform-business</module>
+        <module>platform-delivery</module>
+        <module>platform-eval</module>
+        <module>platform-mcp</module>
+        <module>platform-common</module>
+        <module>platform-console</module>
+        <module>platform-bootstrap</module>
     </modules>
 
     <properties>
@@ -48,13 +61,69 @@
             </dependency>
             <!-- 内部模块 -->
             <dependency>
-                <groupId>com.nageoffer.ai</groupId>
-                <artifactId>rag-common</artifactId>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-shared</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.nageoffer.ai</groupId>
-                <artifactId>rag-core</artifactId>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-cache</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-observe</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-knowledge</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-storage</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-prompt</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-ingestion</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-business</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-delivery</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-eval</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-agent-framework</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-bootstrap</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

@@ -1,19 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
+import { CopyOutlined } from '@ant-design/icons-vue'
 import { streamChat, type AgentTrace } from '../api/chat'
 import { listDatasets, listItems, triggerRun, getRun, type EvalDataset } from '../api/eval'
-import { PARADIGMS, paradigmLabel } from './evalShared'
+import { activeParadigms, paradigmLabel, statusText } from './evalShared'
+import { RUN_STATUS_COLOR, fmtLatency } from '../utils/format'
+import { copyWithToast } from '../composables/useClipboard'
 import AgentTraceTree from './AgentTraceTree.vue'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import MarkdownIt from 'markdown-it'
 
-const paradigmOpts = PARADIGMS.map(p => ({ label: p.label, value: p.value }))
+/** 用户可选范式（历史 naive/react 不进对照列表）；desc 作 checkbox 的 hover 说明 */
+const paradigmOpts = activeParadigms()
 
 const activeTab = ref<'live' | 'eval'>('live')
 
 // ===== Live 并发对照 =====
 const question = ref('RAG是什么')
-const liveAgents = ref<string[]>(['naive', 'react'])
+const liveAgents = ref<string[]>(['knowledge', 'react_loop'])
 const liveRunning = ref(false)
 interface LiveColumn {
   trace: AgentTrace | null
@@ -24,6 +29,12 @@ interface LiveColumn {
   t0: number
 }
 const liveColumns = ref<Record<string, LiveColumn>>({})
+
+/** Live 回答走 markdown 渲染（与聊天窗一致的观感；简单场景无需 hljs） */
+const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
+function renderMd(t: string): string {
+  return t ? md.render(t) : ''
+}
 
 async function runLive() {
   if (!question.value.trim() || liveAgents.value.length === 0) return
@@ -70,7 +81,7 @@ async function runLive() {
 // ===== Eval 指标对照 =====
 const datasets = ref<EvalDataset[]>([])
 const datasetId = ref<number | undefined>()
-const evalAgents = ref<string[]>(['naive', 'react'])
+const evalAgents = ref<string[]>(['knowledge', 'react_loop'])
 const evalLimit = ref(5)
 const evalRunning = ref(false)
 interface EvalResult {
@@ -162,7 +173,7 @@ async function runEval() {
 
 function metricOf(agent: string, name: string): string {
   const m = evalResults.value[agent]?.metrics
-  if (!m || !m[name]) return '-'
+  if (!m || !m[name]) return '—'
   return (m[name].mean ?? 0).toFixed(3)
 }
 
@@ -178,98 +189,140 @@ const evalRows = computed(() =>
   evalAgents.value.map((a) => ({
     key: a,
     paradigm: paradigmLabel(a),
-    status: evalResults.value[a]?.status ?? '-',
+    status: evalResults.value[a]?.status ?? '',
     recall5: metricOf(a, 'recall_at_5'),
     precision5: metricOf(a, 'precision_at_5'),
     mrr: metricOf(a, 'mrr'),
     ndcg5: metricOf(a, 'ndcg_at_5'),
   })),
 )
+const hasEvalResult = computed(() => Object.keys(evalResults.value).length > 0)
 </script>
 
 <template>
-  <div class="compare-panel">
-    <a-tabs v-model:activeKey="activeTab">
+  <div class="compare-panel page-scroll">
+    <div class="page-header">
+      <div>
+        <span class="eyebrow">Agent Compare</span>
+        <h2 class="page-title">Agent 对照</h2>
+        <p class="page-desc">同一问题 / 同一批题目并发跑多个范式，横向对比回答过程与检索指标</p>
+      </div>
+    </div>
+
+    <a-tabs v-model:activeKey="activeTab" class="compare-tabs">
       <!-- ===== Live 并发对照 ===== -->
       <a-tab-pane key="live" tab="Live 并发对照">
-        <div class="toolbar">
-          <a-input
-            v-model:value="question"
-            placeholder="输入问题，并发跑选中的 agent 范式"
-            style="max-width: 360px"
-            @press-enter="runLive"
-          />
-          <a-checkbox-group v-model:value="liveAgents" :options="paradigmOpts" />
-          <a-button type="primary" :loading="liveRunning" @click="runLive">发送对照</a-button>
+        <div class="filter-card">
+          <div class="filter-row">
+            <a-input
+              v-model:value="question"
+              placeholder="输入问题，并发跑选中的 agent 范式"
+              class="w-xl"
+              @press-enter="runLive"
+            />
+            <a-checkbox-group v-model:value="liveAgents" class="paradigm-checks">
+              <a-tooltip v-for="p in paradigmOpts" :key="p.value" :title="p.desc">
+                <a-checkbox :value="p.value">{{ p.label }}</a-checkbox>
+              </a-tooltip>
+            </a-checkbox-group>
+            <div class="filter-actions">
+              <a-button type="primary" :loading="liveRunning" @click="runLive">发送对照</a-button>
+            </div>
+          </div>
         </div>
-        <div class="cols">
+        <div v-if="liveRunning || Object.keys(liveColumns).length" class="cols">
           <div v-for="a in liveAgents" :key="a" class="col">
             <div class="col-head">
-              <a-tag color="purple">{{ paradigmLabel(a) }}</a-tag>
+              <a-tag color="purple" class="col-tag">{{ paradigmLabel(a) }}</a-tag>
               <span class="col-status">
-                <template v-if="liveColumns[a]?.error" class="err">错误</template>
+                <span v-if="liveColumns[a]?.error" class="err">错误</span>
                 <template v-else-if="liveColumns[a] && !liveColumns[a].done">运行中…</template>
                 <template v-else-if="liveColumns[a]">
-                  {{ liveColumns[a].latency }}ms · LLM ×{{ liveColumns[a].trace?.llmCallCount ?? 0 }}
+                  <span class="num">{{ fmtLatency(liveColumns[a].latency) }}</span>
+                  · LLM ×{{ liveColumns[a].trace?.llmCallCount ?? 0 }}
                 </template>
               </span>
+              <button
+                v-if="liveColumns[a]?.answer"
+                class="copy-btn"
+                title="复制回答"
+                @click="copyWithToast(liveColumns[a].answer)"
+              >
+                <CopyOutlined />
+              </button>
             </div>
             <AgentTraceTree :trace="liveColumns[a]?.trace ?? null" />
             <div class="answer">
-              <template v-if="liveColumns[a]?.answer">{{ liveColumns[a].answer }}</template>
+              <div v-if="liveColumns[a]?.answer" class="markdown-body md-answer" v-html="renderMd(liveColumns[a].answer)"></div>
               <a-spin
                 v-else-if="liveColumns[a] && !liveColumns[a].done && !liveColumns[a].error"
                 size="small"
               />
+              <span v-else-if="liveColumns[a]?.error" class="err-text">{{ liveColumns[a].error }}</span>
             </div>
           </div>
+        </div>
+        <div v-else class="filter-card live-empty">
+          <a-empty description="输入问题并选择范式，点「发送对照」开始并发对比" />
         </div>
       </a-tab-pane>
 
       <!-- ===== Eval 指标对照 ===== -->
       <a-tab-pane key="eval" tab="Eval 指标对照">
-        <div class="toolbar">
-          <a-select
-            v-model:value="datasetId"
-            style="width: 220px"
-            placeholder="选择数据集"
-          >
-            <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">
-              {{ d.name }} ({{ d.itemCount }})
-            </a-select-option>
-          </a-select>
-          <a-checkbox-group v-model:value="evalAgents" :options="paradigmOpts" />
-          <span class="lbl">抽样</span>
-          <a-input-number v-model:value="evalLimit" :min="1" :max="50" style="width: 80px" />
-          <a-button type="primary" :loading="evalRunning" @click="runEval">触发对照</a-button>
+        <div class="filter-card">
+          <div class="filter-row">
+            <a-select v-model:value="datasetId" class="w-lg" placeholder="选择数据集">
+              <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">
+                {{ d.name }} ({{ d.itemCount }})
+              </a-select-option>
+            </a-select>
+            <a-checkbox-group v-model:value="evalAgents" class="paradigm-checks">
+              <a-tooltip v-for="p in paradigmOpts" :key="p.value" :title="p.desc">
+                <a-checkbox :value="p.value">{{ p.label }}</a-checkbox>
+              </a-tooltip>
+            </a-checkbox-group>
+            <span class="filter-label">抽样</span>
+            <a-input-number v-model:value="evalLimit" :min="1" :max="50" class="w-xs" />
+            <div class="filter-actions">
+              <a-button type="primary" :loading="evalRunning" @click="runEval">触发对照</a-button>
+            </div>
+          </div>
         </div>
-        <a-table
-          :data-source="evalRows"
-          :columns="evalColumns"
-          :pagination="false"
-          size="small"
-          bordered
-          :scroll="{ x: 640 }"
-        >
-          <template #headerCell="{ column }">
-            <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="evalColumns">{{ column.title }}</span>
-          </template>
-        </a-table>
-        <p class="hint">
-          所有范式跑<strong>同一批问题</strong>（{{ evalQuestionCount ?? evalLimit }} 题），指标为 mean（Recall@5 / Precision@5 / MRR / nDCG@5），保证对照公平。延迟与 LLM 调用次数见 Live 对照或单 run 详情。
-        </p>
+        <div class="table-card">
+          <a-table
+            :data-source="evalRows"
+            :columns="evalColumns"
+            :pagination="false"
+            size="small"
+            :loading="evalRunning"
+            :scroll="{ x: 640 }"
+          >
+            <template #headerCell="{ column }">
+              <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="evalColumns">{{ column.title }}</span>
+            </template>
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'status'">
+                <a-tag v-if="record.status" :color="RUN_STATUS_COLOR[record.status] || 'default'">
+                  {{ statusText(record.status) }}
+                </a-tag>
+                <span v-else>—</span>
+              </template>
+              <span v-else-if="column.key !== 'paradigm'" class="num metric-cell">{{ record[column.key] }}</span>
+            </template>
+          </a-table>
+          <p class="hint">
+            所有范式跑<strong>同一批问题</strong>（{{ evalQuestionCount ?? evalLimit }} 题），指标为 mean（Recall@5 / Precision@5 / MRR / nDCG@5），保证对照公平。延迟与 LLM 调用次数见 Live 对照或单 run 详情。
+          </p>
+        </div>
       </a-tab-pane>
     </a-tabs>
   </div>
 </template>
 
 <style scoped>
-.compare-panel {
-  padding: 16px 20px;
-  height: 100%;
-  overflow-y: auto;
-  background: var(--color-bg);
-}
+.compare-tabs :deep(.ant-tabs-nav) { margin-bottom: 12px; }
+/* 范式 checkbox（自定义 slot 渲染，组自带 hover 说明） */
+.paradigm-checks { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
 .toolbar {
   display: flex;
   align-items: center;
@@ -292,23 +345,30 @@ const evalRows = computed(() =>
   min-width: 320px;
   max-width: 460px;
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-light);
   border-radius: var(--radius-lg);
   padding: 12px;
 }
 .col-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
 }
+.col-tag { margin: 0; }
 .col-status {
   font-size: 11px;
   color: var(--color-ink-secondary);
+  margin-left: auto;
 }
-.col-status .err {
-  color: var(--color-danger);
+.col-status .err { color: var(--color-danger); }
+.copy-btn {
+  border: none; background: none; cursor: pointer;
+  color: var(--color-ink-tertiary); font-size: 12px;
+  padding: 2px 6px; border-radius: var(--radius-sm);
+  transition: color 0.15s, background 0.15s;
 }
+.copy-btn:hover { color: var(--color-primary); background: var(--color-primary-light); }
 .answer {
   margin-top: 10px;
   padding-top: 10px;
@@ -316,12 +376,21 @@ const evalRows = computed(() =>
   font-size: 13px;
   line-height: 1.6;
   color: var(--color-ink);
-  white-space: pre-wrap;
   max-height: 320px;
   overflow-y: auto;
 }
+.md-answer { font-size: 13px; }
+.md-answer :deep(p) { margin: 0 0 6px; }
+.err-text {
+  font-size: 12px;
+  color: var(--color-danger);
+  word-break: break-all;
+}
+.live-empty { display: flex; justify-content: center; padding: 48px 20px; }
+.metric-cell { font-size: 12.5px; }
 .hint {
-  margin-top: 12px;
+  margin: 12px 20px 0;
+  padding-bottom: 14px;
   font-size: 12px;
   color: var(--color-ink-tertiary);
 }

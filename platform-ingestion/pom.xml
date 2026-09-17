@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>com.jjx.customer</groupId><artifactId>customer-platform</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
+    <artifactId>platform-ingestion</artifactId>
+    <name>platform-ingestion</name>
+    <description>入库域：文档解析 / 分块 / 增强 / 富化 / 向量写入</description>
+    <dependencies>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-prompt</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.commonmark</groupId><artifactId>commonmark</artifactId><version>${commonmark.version}</version></dependency>
+        <dependency><groupId>org.commonmark</groupId><artifactId>commonmark-ext-gfm-tables</artifactId><version>${commonmark.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-storage</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-shared</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-cache</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-observe</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-knowledge</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-jdbc</artifactId></dependency>
+        <dependency><groupId>com.baomidou</groupId><artifactId>mybatis-plus-spring-boot3-starter</artifactId><version>${mybatis-plus.version}</version></dependency>
+        <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-starter-model-openai</artifactId></dependency>
+        <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-tika-document-reader</artifactId></dependency>
+        <dependency><groupId>com.github.apprentice-ol.llm-observability</groupId><artifactId>llm-observability</artifactId><version>0.1.1</version></dependency>
+        <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+        <dependency><groupId>cn.hutool</groupId><artifactId>hutool-all</artifactId><version>${hutool-all.version}</version></dependency>
+    </dependencies>
+</project>

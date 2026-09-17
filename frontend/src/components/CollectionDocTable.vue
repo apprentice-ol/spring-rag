@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import {ref, watch, onMounted} from 'vue'
 import {message, Modal} from 'ant-design-vue'
-import {EyeOutlined, MinusCircleOutlined} from '@ant-design/icons-vue'
+import {EyeOutlined, FileTextOutlined, MinusCircleOutlined} from '@ant-design/icons-vue'
 import {pageDocuments, type DocumentInfo} from '../api/upload'
 import {assignDocs} from '../api/collection'
 import {useResizableColumns, vResize} from '../composables/useResizableColumns'
+import {INGEST_STATUS_COLOR as STATUS_COLOR, INGEST_STATUS_TEXT as STATUS_TEXT} from '../utils/format'
 
 /** 集合展开后的嵌套文档表（独立分页，列宽可拖拽）。 */
 const props = defineProps<{ collectionId: number; keyword?: string }>()
@@ -86,19 +87,6 @@ const columns = useResizableColumns([
   {title: '状态', dataIndex: 'status', key: 'status', width: 80},
   {title: '操作', key: 'action', width: 140},
 ])
-
-const STATUS_COLOR: Record<string, string> = {
-  DONE: 'green',
-  PROCESSING: 'processing',
-  PENDING: 'orange',
-  FAILED: 'red',
-}
-const STATUS_TEXT: Record<string, string> = {
-  DONE: '完成',
-  PROCESSING: '处理中',
-  PENDING: '待处理',
-  FAILED: '失败',
-}
 </script>
 
 <template>
@@ -125,7 +113,9 @@ const STATUS_TEXT: Record<string, string> = {
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'">
-          <a class="doc-name" @click="emit('preview', record)">{{ record.name }}</a>
+          <a class="doc-name" @click="emit('preview', record)">
+            <FileTextOutlined class="doc-name-icon" />{{ record.name }}
+          </a>
         </template>
         <template v-else-if="column.key === 'status'">
           <a-tag :color="STATUS_COLOR[record.status] || 'default'">{{
@@ -156,9 +146,21 @@ const STATUS_TEXT: Record<string, string> = {
 .doc-name {
   color: var(--color-ink);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-name-icon {
+  color: var(--color-ink-tertiary);
+  font-size: 13px;
 }
 
 .doc-name:hover {
+  color: var(--color-primary);
+}
+
+.doc-name:hover .doc-name-icon {
   color: var(--color-primary);
 }
 </style>

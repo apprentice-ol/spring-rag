@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { message } from 'ant-design-vue'
 import { DeploymentUnitOutlined, NodeIndexOutlined, FileSearchOutlined, CopyOutlined } from '@ant-design/icons-vue'
 import { getObserveLinks, type ObserveLinks } from '../api/eval'
+import { copyWithToast } from '../composables/useClipboard'
 
 /**
  * 链路追踪：跳转 OpenObserve 查看 RAG 全链路 trace / 日志。
@@ -22,15 +22,6 @@ onMounted(async () => {
     loading.value = false
   }
 })
-
-async function copy(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    message.success('已复制')
-  } catch {
-    message.info('请手动选中复制')
-  }
-}
 </script>
 
 <template>
@@ -38,6 +29,7 @@ async function copy(text: string) {
     <!-- 页头：标题 + 主操作（跳 OpenObserve） -->
     <div class="page-header">
       <div class="page-header-text">
+        <span class="eyebrow">Tracing</span>
         <h1 class="page-title">链路追踪</h1>
         <p class="page-desc">查看请求在 RAG 全链路的 trace —— 检索 / 查询改写 / 意图分类 / Rerank / LLM 生成各步骤的 span 与耗时，定位慢环节与异常。</p>
       </div>
@@ -48,10 +40,14 @@ async function copy(text: string) {
       </div>
     </div>
 
-    <div v-if="loading" class="state">加载中…</div>
-    <div v-else-if="loadError || !links" class="state error">
-      无法获取 OpenObserve 配置，请检查后端 <code>openobserve.web-url</code> 设置。
-    </div>
+    <div v-if="loading" class="state"><a-spin /></div>
+    <a-alert
+      v-else-if="loadError || !links"
+      type="error"
+      show-icon
+      message="无法获取 OpenObserve 配置"
+      description="请检查后端 openobserve.web-url 设置后刷新重试。"
+    />
 
     <template v-else>
       <!-- 跳转入口卡：双入口磁贴 -->
@@ -86,7 +82,7 @@ async function copy(text: string) {
           <div class="acct-row">
             <span class="acct-label">账号</span>
             <code>{{ links.email }}</code>
-            <a-button type="text" size="small" class="copy-btn" @click="copy(links.email)">
+            <a-button type="text" size="small" class="copy-btn" @click="copyWithToast(links.email, '账号')">
               <template #icon><CopyOutlined /></template>
             </a-button>
           </div>
@@ -94,7 +90,7 @@ async function copy(text: string) {
             <span class="acct-label">密码</span>
             <code>{{ pwdVisible ? links.password : '•••••••••' }}</code>
             <a-button type="link" size="small" @click="pwdVisible = !pwdVisible">{{ pwdVisible ? '隐藏' : '显示' }}</a-button>
-            <a-button type="text" size="small" class="copy-btn" @click="copy(links.password)">
+            <a-button type="text" size="small" class="copy-btn" :disabled="!pwdVisible" title="先点「显示」再复制" @click="copyWithToast(links.password, '密码')">
               <template #icon><CopyOutlined /></template>
             </a-button>
           </div>
@@ -143,7 +139,7 @@ async function copy(text: string) {
 .state code {
   background: var(--color-surface-secondary);
   padding: 0 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 /* 跳转入口磁贴 */
@@ -212,7 +208,7 @@ a.entry-tile {
 .acct-row code {
   background: var(--color-surface-secondary);
   padding: 1px 8px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-display);
   color: var(--color-ink);
 }
@@ -241,7 +237,7 @@ a.entry-tile {
 .tip-body code {
   background: var(--color-surface-secondary);
   padding: 0 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 @media (max-width: 768px) {

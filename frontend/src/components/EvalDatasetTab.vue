@@ -22,7 +22,7 @@ import {
   type EvalDataset,
   type EvalItem,
 } from '../api/eval'
-import { parseDocIds, SOURCE_LABEL, CATEGORY_DESC, PARADIGMS, paradigmLabel } from './evalShared'
+import { parseDocIds, SOURCE_LABEL, CATEGORY_DESC, activeParadigms, paradigmLabel } from './evalShared'
 import { listCollections, type DocCollection } from '../api/collection'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
@@ -397,7 +397,7 @@ interface ErrResp {
           <div class="filter-item">
             <span class="filter-label">范式</span>
             <a-select v-model:value="triggerParadigm" style="width: 180px">
-              <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">
+              <a-select-option v-for="p in activeParadigms()" :key="p.value" :value="p.value">
                 {{ p.label }} · {{ p.desc }}
               </a-select-option>
             </a-select>
@@ -408,7 +408,7 @@ interface ErrResp {
               v-model:value="triggerCategory"
               placeholder="全部分类"
               allow-clear
-              style="width: 140px"
+              class="w-sm"
               :options="categoryOptions.map((c) => ({ label: c, value: c }))"
             />
           </div>
@@ -443,9 +443,10 @@ interface ErrResp {
 
         <!-- 追加评测条目 -->
         <div class="add-row">
-          <a-textarea v-model:value="newQuestion" placeholder="用户问题" :auto-size="{ minRows: 1, maxRows: 3 }" style="flex: 2" />
-          <a-input v-model:value="newExpected" placeholder="期望 doc_id（逗号或换行分隔）" style="flex: 2" />
-          <a-input v-model:value="newExpectedAnswer" placeholder="标准答案（答案评测用，可选）" style="flex: 3" />
+          <span class="add-row-label"><PlusOutlined />追加条目</span>
+          <a-textarea v-model:value="newQuestion" placeholder="用户问题" :auto-size="{ minRows: 1, maxRows: 3 }" class="add-q" />
+          <a-input v-model:value="newExpected" placeholder="期望 doc_id（逗号或换行分隔）" class="add-expected" />
+          <a-input v-model:value="newExpectedAnswer" placeholder="标准答案（答案评测用，可选）" class="add-answer" />
           <a-button type="primary" @click="doAddItem">
             <template #icon><PlusOutlined /></template>添加
           </a-button>
@@ -506,8 +507,8 @@ interface ErrResp {
       @ok="saveDataset"
     >
       <a-form layout="vertical">
-        <a-form-item label="名称"><a-input v-model:value="editingName" /></a-form-item>
-        <a-form-item label="描述"><a-input v-model:value="editingDesc" /></a-form-item>
+        <a-form-item label="名称"><a-input v-model:value="editingName" placeholder="数据集名称" /></a-form-item>
+        <a-form-item label="描述"><a-input v-model:value="editingDesc" placeholder="可选" /></a-form-item>
       </a-form>
     </a-modal>
 
@@ -610,17 +611,37 @@ interface ErrResp {
   font-size: 12px;
   color: var(--color-ink-tertiary);
 }
-/* 追加条目表单行（表格卡内、条目表上方） */
+/* 追加条目表单行（表格卡内、条目表上方）：浅底块 + 行首标签 */
 .add-row {
   display: flex;
   gap: 8px;
-  align-items: stretch;
+  align-items: center;
   flex-wrap: wrap;
-  padding: 12px 20px 4px;
+  margin: 12px 20px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
 }
+.add-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-ink-secondary);
+  white-space: nowrap;
+}
+.add-row-label :deep(.anticon) {
+  color: var(--color-primary);
+  font-size: 12px;
+}
+.add-q { flex: 2 1 220px; }
+.add-expected { flex: 2 1 200px; }
+.add-answer { flex: 3 1 260px; }
 .select-hint {
-  text-align: center;
-  padding: 24px;
+  display: flex;
+  justify-content: center;
+  padding: 32px 24px;
   color: var(--color-ink-tertiary);
   font-size: 13px;
 }

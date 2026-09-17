@@ -231,11 +231,68 @@ export function categoryLabel(v: string | null | undefined): string {
   return CATEGORY_LABEL[v] ?? v
 }
 
-/** agent 范式选项（与后端 RagAgent 范式对齐：naive/react） */
+/**
+ * agent 范式选项（与后端 core.Agent 对齐）。静态默认 + refreshParadigms() 从 GET /agent/registry
+ * 拉取覆盖（后端加范式前端零改动）；paradigmLabel 对历史范式（naive/react）原样回退展示。
+ */
 export const PARADIGMS: { value: string; label: string; desc: string }[] = [
-  { value: 'naive', label: 'Naive', desc: '单次检索' },
-  { value: 'react', label: 'ReAct', desc: '自主循环' },
+  { value: 'knowledge', label: 'Knowledge', desc: '单次多通道检索直出答案，速度最快（eval 基线）' },
+  { value: 'ops_diagnose', label: '运维诊断', desc: '先追问补齐槽位，再按固定排查骨架分阶段调工具，支持 replan' },
+  { value: 'react_loop', label: 'ReAct Loop', desc: '模型自主循环：检索→评分→重排→决定何时停（原生 function calling）' },
+  { value: 'naive', label: 'Naive', desc: '单次检索（历史范式，已由 Knowledge 取代）' },
+  { value: 'react', label: 'ReAct', desc: 'prompt 驱动自主循环（历史范式，已由 ReAct Loop 取代）' },
 ]
+
+/** 历史范式值：后端已删（请求经 alias 映射），仅历史 run/轨迹的列展示用，不进用户可选列表 */
+const LEGACY_PARADIGM_VALUES = new Set(['naive', 'react'])
+
+export function isLegacyParadigm(v: string): boolean {
+  return LEGACY_PARADIGM_VALUES.has(v)
+}
+
+/** 用户可选范式（剔除历史项）。在渲染处调用，refreshParadigms 覆盖后仍生效。 */
+export function activeParadigms(): { value: string; label: string; desc: string }[] {
+  return PARADIGMS.filter((p) => !LEGACY_PARADIGM_VALUES.has(p.value))
+}
+
+/**
+ * 对话页专用范式选项：自动档打头（前端本地概念，不来自后端 registry）。
+ * 自动 = 请求不带 agent 参数，交给后端意图识别路由（诊断类进运维诊断，其余/识别不到走知识检索）；
+ * 显式选择某范式 = 强制按该范式（用户选择 > 意图识别 > 默认知识检索）。
+ */
+export const AUTO_PARADIGM: { value: string; label: string; desc: string } = {
+  value: '',
+  label: 'Auto',
+  desc: '意图识别自动路由：报错/日志类进运维诊断，其余走知识检索（推荐默认）',
+}
+
+/** 对话页范式选择器选项（自动档 + 各范式）；评测/筛选面板仍用 activeParadigms，不掺自动档 */
+export function chatParadigmOptions(): { value: string; label: string; desc: string }[] {
+  return [AUTO_PARADIGM, ...activeParadigms()]
+}
+
+/** 旧范式 → 新范式（与后端 AgentRegistry alias 一致）；新范式原样返回，空值回落默认 knowledge */
+export function normalizeParadigm(v: string | null | undefined): string {
+  if (v === 'naive') return 'knowledge'
+  if (v === 'react') return 'react_loop'
+  return v || 'knowledge'
+}
+
+/** 从后端能力清单刷新范式选项（App 挂载时调用一次；失败保留静态默认） */
+export async function refreshParadigms(): Promise<void> {
+  try {
+    const { data } = await (await import('../api/client')).http.get('/agent/registry')
+    const agents = data?.agents as { type: string; label: string; description: string }[] | undefined
+    if (Array.isArray(agents) && agents.length) {
+      const fresh = agents.map((a) => ({ value: a.type, label: a.label || a.type, desc: a.description || '' }))
+      // 历史范式（naive/react）保留在尾部，供旧 run 记录的 paradigm 列展示
+      const legacy = PARADIGMS.filter((p) => p.value === 'naive' || p.value === 'react')
+      PARADIGMS.splice(0, PARADIGMS.length, ...fresh, ...legacy)
+    }
+  } catch {
+    /* 后端未就绪时保留静态默认 */
+  }
+}
 
 /** 范式 value → 中文标签；未知值原样返回，空值返回 '-' */
 export function paradigmLabel(v: string | null | undefined): string {

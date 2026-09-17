@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { ArrowLeftOutlined, RobotOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined } from '@ant-design/icons-vue'
+import { ArrowLeftOutlined, RobotOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined, ThunderboltOutlined, FileTextOutlined, ApartmentOutlined } from '@ant-design/icons-vue'
+import AgentRegistryPanel from './components/AgentRegistryPanel.vue'
 import EvalDashboard from './components/EvalDashboard.vue'
 import ConsoleDashboard from './components/ConsoleDashboard.vue'
+import CacheDashboard from './components/CacheDashboard.vue'
 import DocumentManage from './components/DocumentManage.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import ChatView from './components/ChatView.vue'
@@ -10,6 +12,7 @@ import DocPreview from './components/DocPreview.vue'
 import TraceView from './components/TraceView.vue'
 import ComparePanel from './components/ComparePanel.vue'
 import AgentTracePanel from './components/AgentTracePanel.vue'
+import PromptManage from './components/PromptManage.vue'
 import TopTabs from './components/TopTabs.vue'
 import type { MainNavKey } from './components/TopTabs.vue'
 import { useHorizontalSplitter, useIsMobile } from './composables/useSplitter'
@@ -18,7 +21,9 @@ import { initChatState } from './composables/useChatState'
 const theme = {
   token: {
     colorPrimary: '#0064fa',
-    colorPrimaryHover: '#1657ff',
+    // 与 style.css --color-primary-hover/--color-primary-dark 保持同一值（全站仅一组蓝）
+    colorPrimaryHover: '#3381ff',
+    colorPrimaryActive: '#004fc4',
     borderRadius: 6,
     // antd 预设色板对齐 Semi 语义色（a-tag 跟随）
     colorPurple: '#0064fa',
@@ -49,12 +54,15 @@ const currentHash = ref(window.location.hash)
 
 function onHashChange() {
   currentHash.value = window.location.hash
+  normalizeAdminHash()
 }
 
 onMounted(() => {
   pingBackend()
   initChatState()
+  import('./components/evalShared').then((m) => m.refreshParadigms())
   window.addEventListener('hashchange', onHashChange)
+  normalizeAdminHash()
 })
 onUnmounted(() => {
   window.removeEventListener('hashchange', onHashChange)
@@ -74,11 +82,25 @@ const previewSplit = useHorizontalSplitter({
 
 // 管理后台：左侧菜单（控制台 / 评测），hash 路由 #/admin[/console|eval]
 const isAdminPage = computed(() => currentHash.value.startsWith('#/admin'))
+
+/** 内测页开关：false 时「缓存」「Agent 清单」不进左侧菜单，hash 直达也回落控制台 */
+const SHOW_INTERNAL_PAGES = false
+const HIDDEN_ADMIN_TABS = ['cache', 'agents']
+
 const adminTab = computed(() => {
-  const m = currentHash.value.match(/^#\/admin\/(.+)$/)
-  // 取首段：eval/runs/2 → eval（菜单高亮 + 模块分发；子路径 eval 自行解析）
-  return m ? m[1].split('/')[0] : 'console'
+  // 取首段且剥 query：eval/runs/2 → eval；prompt?key=x → prompt（query 由页面自行解析）
+  const m = currentHash.value.match(/^#\/admin\/([^?/]+)/)
+  const tab = m ? m[1] : 'console'
+  return !SHOW_INTERNAL_PAGES && HIDDEN_ADMIN_TABS.includes(tab) ? 'console' : tab
 })
+
+/** 隐藏页直达（如 #/admin/cache）→ 重定向控制台，地址栏与内容保持一致 */
+function normalizeAdminHash() {
+  const m = window.location.hash.match(/^#\/admin\/([^?/]+)/)
+  if (!SHOW_INTERNAL_PAGES && m && HIDDEN_ADMIN_TABS.includes(m[1])) {
+    window.location.hash = '#/admin/console'
+  }
+}
 
 function goAdmin() {
   window.location.hash = '#/admin'
@@ -151,6 +173,18 @@ function closePreview() {
                 <template #icon><FolderOpenOutlined /></template>
                 文档管理
               </a-menu-item>
+              <a-menu-item v-if="SHOW_INTERNAL_PAGES" key="cache">
+                <template #icon><ThunderboltOutlined /></template>
+                缓存
+              </a-menu-item>
+              <a-menu-item key="prompt">
+                <template #icon><FileTextOutlined /></template>
+                Prompt 资产
+              </a-menu-item>
+              <a-menu-item v-if="SHOW_INTERNAL_PAGES" key="agents">
+                <template #icon><ApartmentOutlined /></template>
+                Agent 清单
+              </a-menu-item>
               <a-menu-item key="eval">
                 <template #icon><BarChartOutlined /></template>
                 评测
@@ -172,6 +206,9 @@ function closePreview() {
           <a-layout-content class="admin-content">
             <ConsoleDashboard v-if="adminTab === 'console'" />
             <DocumentManage v-else-if="adminTab === 'docs'" />
+            <CacheDashboard v-else-if="adminTab === 'cache'" />
+            <PromptManage v-else-if="adminTab === 'prompt'" />
+            <AgentRegistryPanel v-else-if="adminTab === 'agents'" />
             <EvalDashboard v-else-if="adminTab === 'eval'" />
             <TraceView v-else-if="adminTab === 'trace'" />
             <ComparePanel v-else-if="adminTab === 'compare'" />
@@ -293,7 +330,7 @@ function closePreview() {
   border-bottom: 1px solid var(--color-border); z-index: 100; flex-shrink: 0;
 }
 .connection-status { display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 20px; font-size: 12px; background: var(--color-surface-secondary); border: 1px solid var(--color-border-light); }
-.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; transition: background 0.3s; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-ink-tertiary); transition: background 0.3s; }
 .connection-status.connected .status-dot { background: var(--color-success); box-shadow: 0 0 6px rgba(63,191,79,0.4); }
 .connection-status.disconnected .status-dot { background: var(--color-danger); box-shadow: 0 0 6px rgba(249,57,32,0.4); }
 .status-text { color: var(--color-ink-secondary); }

@@ -1,26 +1,33 @@
 /* ===== Design tokens =====
-   Semi Design 风格：品牌蓝 #0064fa、浅灰画布 #f6f7f9、白色卡片、
-   大圆角卡片、页头+筛选卡+表格卡的列表页结构。 */
+   Semi Design 底子 + 「检索证据台」视觉签名：品牌蓝 #0064fa、浅灰画布 #f6f7f9、
+   白色卡片、页头(eyebrow+标题)+筛选卡+表格卡的列表页结构、JetBrains Mono 数字/品牌、
+   引用角括号 motif（见 TopTabs 品牌标志 / ChatView 空状态）。 */
 :root {
   /* 画布与表面 */
   --color-bg: #f6f7f9;
   --color-bg-elevated: #ffffff;
   --color-surface: #ffffff;
   --color-surface-secondary: #f2f3f5;
+  /* hover 底色二态：中性（表格行）与品牌染（可点卡片） */
+  --color-hover-bg: #f7f8fa;
+  --color-hover-tint: #f3f8ff;
 
   /* 文字（Semi 中性灰阶） */
   --color-ink: #161a1e;
   --color-ink-secondary: #646a73;
   --color-ink-tertiary: #9da3a9;
+  --color-warning-ink: #b07810;
 
   /* 边框 */
   --color-border: #e6e8eb;
   --color-border-light: #f0f1f3;
 
-  /* 强调色（Semi 品牌蓝） */
+  /* 强调色（Semi 品牌蓝）：hover/active/focus 全站各只有一个值 */
   --color-primary: #0064fa;
+  --color-primary-hover: #3381ff;
   --color-primary-light: #e8f1ff;
   --color-primary-dark: #004fc4;
+  --color-focus-ring: rgba(0, 100, 250, 0.12);
 
   /* 信号色（Semi 语义色） */
   --color-success: #3fbf4f;
@@ -30,20 +37,25 @@
   --color-danger: #f93920;
   --color-danger-bg: #fdebe9;
 
-  /* 阴影：只用于浮层，表面不投影 */
+  /* 阴影：默认表面不投影；仅浮层与 hover 抬升用 */
   --color-shadow: rgba(22, 26, 30, 0.04);
   --color-shadow-md: rgba(22, 26, 30, 0.08);
 
-  /* 字体：body 用系统栈，display/数字用等宽 */
-  --font-display: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  /* 字体：body 用系统栈，display/数字用 JetBrains Mono（@fontsource 本地打包，必有） */
+  --font-display: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
   --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
 
-  /* 圆角：Semi medium=6 / 卡片 10 */
+  /* 圆角：Semi medium=6 / 卡片 10 / 大容器 14 */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
   --radius-xl: 14px;
+
+  /* 字阶：页面标题与区块标题的层级锚点 */
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 22px;
 }
 
 * {
@@ -71,14 +83,69 @@ body {
   color: #fff;
 }
 
+/* ===== 通用工具类 ===== */
+
+/* 页头 eyebrow：mono 大写微标签，标题上方的"仪表"层次 */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-tertiary);
+  margin-bottom: 6px;
+}
+.eyebrow::before {
+  content: '';
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-primary);
+}
+
+/* 等宽数字（KPI、指标、ID） */
+.num {
+  font-family: var(--font-display);
+  font-feature-settings: 'tnum';
+}
+
+/* 过滤器/表单控件统一宽度（替代散落的内联 style="width:Npx"） */
+.w-xs { width: 90px; }
+.w-sm { width: 140px; }
+.w-md { width: 200px; }
+.w-lg { width: 260px; }
+.w-xl { width: 320px; }
+
+/* 可点卡片的 hover 抬升 */
+.hover-lift {
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px var(--color-shadow-md);
+}
+
+/* 点阵网格背景：空状态 / 工作台首屏的"台面"质感 */
+.dot-grid {
+  background-image: radial-gradient(circle, rgba(22, 26, 30, 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
 /* ===== Ant Design 主题覆盖 ===== */
 
-/* 按钮：主按钮不投影（扁平），仅 hover 提亮 */
+/* 按钮：主按钮不投影（扁平），hover 用统一 hover 蓝 */
 .ant-btn-primary:not(:disabled) {
   box-shadow: none;
 }
 .ant-btn-primary:not(:disabled):hover {
   box-shadow: none;
+  background: var(--color-primary-hover);
+}
+.ant-btn-primary:not(:disabled):active {
+  background: var(--color-primary-dark);
 }
 
 /* 输入框 */
@@ -88,7 +155,7 @@ body {
 .ant-input:focus,
 .ant-input-focused {
   border-color: var(--color-primary) !important;
-  box-shadow: 0 0 0 2px rgba(91, 91, 214, 0.12) !important;
+  box-shadow: 0 0 0 2px var(--color-focus-ring) !important;
 }
 
 /* 上传拖拽区 */
@@ -117,12 +184,17 @@ body {
   border-bottom: 1px solid var(--color-border-light) !important;
 }
 .ant-table-tbody > tr:hover > td {
-  background: #f7f9fb !important;
+  background: var(--color-hover-bg) !important;
 }
 
 /* 卡片：细边框，无投影 */
 .ant-card {
   border-radius: var(--radius-lg);
+}
+
+/* 分页：全站统一外边距（替代各页 :deep 覆盖） */
+.ant-table-pagination.ant-pagination {
+  margin: 14px 16px;
 }
 
 /* ===== Semi 风格列表页通用骨架（页头 / 筛选卡 / 表格卡） ===== */
@@ -131,11 +203,11 @@ body {
   gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
 }
 .page-title {
-  margin: 0; font-size: 20px; font-weight: 600;
-  letter-spacing: -0.01em; line-height: 1.3; color: var(--color-ink);
+  margin: 0; font-size: var(--text-2xl); font-weight: 600;
+  letter-spacing: -0.015em; line-height: 1.3; color: var(--color-ink);
 }
-.page-desc { margin: 4px 0 0; font-size: 13px; color: var(--color-ink-tertiary); }
-.page-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+.page-desc { margin: 5px 0 0; font-size: 13px; color: var(--color-ink-tertiary); }
+.page-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; align-items: flex-end; }
 
 .filter-card {
   background: var(--color-surface);

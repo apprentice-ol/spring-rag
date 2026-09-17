@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import {
   listConversations, getMessages, deleteConversation,
-  type ConversationItem, type AgentTrace, type Citation,
+  type ConversationItem, type AgentTrace, type Citation, type ClarifyEvent,
 } from '../api/chat'
 
 /**
@@ -23,6 +23,8 @@ export interface Msg {
   trace?: AgentTrace
   /** 引用溯源（SSE citations 事件/历史加载获得；正文 [N] 角标据此渲染） */
   citations?: Citation[]
+  /** 运维诊断追问（SSE clarify 事件；缺失槽位问题列表，一次问齐，仅本轮内存态） */
+  clarify?: ClarifyEvent
 }
 
 export const conversations = ref<ConversationItem[]>([])

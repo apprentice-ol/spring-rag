@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>com.jjx.customer</groupId><artifactId>customer-platform</artifactId><version>0.0.1-SNAPSHOT</version><relativePath>../pom.xml</relativePath></parent>
+    <artifactId>platform-observe</artifactId>
+    <name>platform-observe</name>
+    <description>观测域：OpenObserve / Langfuse 集成</description>
+    <dependencies>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-common</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-shared</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+        <dependency><groupId>com.github.apprentice-ol.llm-observability</groupId><artifactId>llm-observability-backends</artifactId><version>0.1.1</version></dependency>
+        <dependency><groupId>com.squareup.okhttp3</groupId><artifactId>okhttp</artifactId><version>4.12.0</version></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-tracing-bridge-otel</artifactId></dependency>
+        <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-otlp</artifactId></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-agent-framework</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-cache</artifactId><version>${project.version}</version></dependency>
+    </dependencies>
+</project>

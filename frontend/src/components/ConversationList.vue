@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { Empty } from 'ant-design-vue'
 import { PlusOutlined, DeleteOutlined, MessageOutlined, MenuFoldOutlined } from '@ant-design/icons-vue'
 import {
   conversations, activeId, selectConversation, newConversation, removeConversation,
@@ -8,6 +9,8 @@ import {
 
 /** 选中会话后是否需要外层切换到聊天视图（移动端 tab 布局用） */
 const emit = defineEmits<{ chat: []; collapse: [] }>()
+
+const aEmpty = Empty
 
 /** 是否显示"收起会话栏"按钮（仅桌面端 ChatPanel 传入；移动端对话 Tab 不显示） */
 defineProps<{ showCollapse?: boolean }>()
@@ -63,21 +66,27 @@ async function onRemove(convId: string) {
       </div>
     </div>
     <div class="conv-list" @scroll.passive="onScrollBottom">
-      <div
-        v-for="c in conversations"
-        :key="c.conversationId"
-        class="conv-item"
-        :class="{ active: c.conversationId === activeId }"
-        @click="onSelect(c.conversationId)"
-      >
-        <MessageOutlined class="conv-item-icon" />
-        <span class="conv-item-title">{{ c.title }}</span>
-        <a-button type="text" size="small" class="conv-item-del" @click.stop="onRemove(c.conversationId)">
-          <template #icon><DeleteOutlined /></template>
-        </a-button>
-      </div>
-      <div v-if="loadingMore" class="conv-empty">加载中…</div>
-      <div v-else-if="!conversations.length" class="conv-empty">暂无对话</div>
+      <transition-group name="fade-up">
+        <div
+          v-for="c in conversations"
+          :key="c.conversationId"
+          class="conv-item"
+          :class="{ active: c.conversationId === activeId }"
+          @click="onSelect(c.conversationId)"
+        >
+          <MessageOutlined class="conv-item-icon" />
+          <span class="conv-item-title">{{ c.title }}</span>
+          <a-button type="text" size="small" class="conv-item-del" @click.stop="onRemove(c.conversationId)">
+            <template #icon><DeleteOutlined /></template>
+          </a-button>
+        </div>
+      </transition-group>
+      <div v-if="loadingMore" class="conv-empty"><a-spin size="small" /></div>
+      <a-empty v-else-if="!conversations.length" :image="aEmpty.PRESENTED_IMAGE_SIMPLE" class="conv-empty-img">
+        <template #description>
+          <span class="conv-empty">暂无对话，点击右上角 + 新建</span>
+        </template>
+      </a-empty>
     </div>
   </div>
 </template>
@@ -94,7 +103,8 @@ async function onRemove(convId: string) {
   flex-shrink: 0;
 }
 .conv-head-title {
-  font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+  font-family: var(--font-display);
+  font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
   color: var(--color-ink-tertiary); text-transform: uppercase;
 }
 .conv-new-btn { color: var(--color-ink-secondary); }
@@ -115,6 +125,7 @@ async function onRemove(convId: string) {
 .conv-item:hover .conv-item-del { opacity: 1; }
 .conv-item-del:hover { color: var(--color-danger); }
 .conv-empty { padding: 20px; text-align: center; font-size: 12px; color: var(--color-ink-tertiary); }
+.conv-empty-img { padding-top: 32px; }
 
 @media (max-width: 768px) {
   .conv-item-del { opacity: 1; } /* 移动端无 hover */

@@ -27,6 +27,11 @@ import DocPreview from './DocPreview.vue'
 import CollectionDocTable from './CollectionDocTable.vue'
 import CollectionPickerModal from './CollectionPickerModal.vue'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import {
+  INGEST_STATUS_COLOR as STATUS_COLOR,
+  INGEST_STATUS_TEXT as STATUS_TEXT,
+  fmtTime,
+} from '../utils/format'
 
 // ── 查询条件（仅作用于独立文件段）──
 const keyword = ref('')
@@ -135,18 +140,6 @@ const SOURCE_LABEL: Record<string, string> = {
   FILE: '文件上传',
   URL: '远程拉取',
   API: '接口导入',
-}
-const STATUS_COLOR: Record<string, string> = {
-  DONE: 'green',
-  PROCESSING: 'processing',
-  PENDING: 'orange',
-  FAILED: 'red',
-}
-const STATUS_TEXT: Record<string, string> = {
-  DONE: '完成',
-  PROCESSING: '处理中',
-  PENDING: '待处理',
-  FAILED: '失败',
 }
 
 let resizeObserver: ResizeObserver | undefined
@@ -382,11 +375,6 @@ function onPreviewOpenChange(open: boolean) {
   if (!open) previewDoc.value = null
 }
 
-function fmtTime(t: string | undefined): string {
-  if (!t) return '—'
-  return t.replace('T', ' ').slice(0, 19)
-}
-
 interface ErrResp {
   response?: { data?: { message?: string } }
 }
@@ -397,6 +385,7 @@ interface ErrResp {
     <!-- 页头：标题 + 主操作 -->
     <div class="page-header">
       <div class="page-header-text">
+        <span class="eyebrow">Knowledge Base</span>
         <h1 class="page-title">文档管理</h1>
         <p class="page-desc">文件集与独立文件的入库状态、归集与删除</p>
       </div>
@@ -419,7 +408,7 @@ interface ErrResp {
             v-model:value="keyword"
             placeholder="文件名关键词"
             allow-clear
-            style="width: 220px"
+            class="w-md"
             @press-enter="doSearch"
           >
             <template #prefix><SearchOutlined /></template>
@@ -427,7 +416,7 @@ interface ErrResp {
         </div>
         <div class="filter-item">
           <span class="filter-label">入库状态</span>
-          <a-select v-model:value="status" placeholder="全部" allow-clear style="width: 140px">
+          <a-select v-model:value="status" placeholder="全部" allow-clear class="w-sm">
             <a-select-option v-for="(label, v) in STATUS_TEXT" :key="v" :value="v">{{ label }}</a-select-option>
           </a-select>
         </div>
@@ -538,7 +527,13 @@ interface ErrResp {
               @changed="reloadAll"
             />
           </template>
-          <template #emptyText><a-empty description="暂无文件集或独立文件" /></template>
+          <template #emptyText>
+            <a-empty description="暂无文件集或独立文件">
+              <a-button type="primary" @click="openUpload">
+                <template #icon><UploadOutlined /></template>上传文档
+              </a-button>
+            </a-empty>
+          </template>
         </a-table>
       </div>
 

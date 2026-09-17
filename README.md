@@ -1,4 +1,4 @@
-# springai-rag
+# customer-platform
 
 基于 **Spring AI 1.1** 的 RAG **学习练手项目**：文档入库 → 多通道检索 → Rerank 精排 → 流式问答，并自带全链路可观测性与 RAG 评测。
 
@@ -48,11 +48,11 @@ cp .env.example .env
 
 # ② 准备数据库：创建 springai_rag 库并启用 pgvector 扩展；
 #    业务表由应用启动时自动创建（spring.sql.init，幂等），
-#    也可手动执行 rag-core/src/main/resources/sql/init.sql
+#    也可手动执行 platform-bootstrap/src/main/resources/sql/init.sql
 
-# ③ 启动后端
-cd rag-core
-mvn spring-boot:run        # IDEA 启动时 Shorten command line 选 JAR manifest
+# ③ 启动后端（唯一可执行模块 platform-bootstrap）
+mvn spring-boot:run -pl platform-bootstrap -am
+#    IDEA 启动 PlatformApplication 时 Shorten command line 选 JAR manifest
 
 # ④ 启动前端（另开一个终端）
 cd frontend
@@ -63,14 +63,10 @@ npm run dev                # http://localhost:5173
 ### 2. Docker 一键部署
 
 ```bash
-# ① 构建产物（前端 dist 打进 jar，依赖外置到 lib/）
+# ① 构建产物（前端 dist 打进 jar，依赖外置到 lib/，并同步到项目根）
 bash build-local.sh
 
-# ② 把产物放到项目根（app 镜像的 COPY 路径，jar/lib 均被 gitignore）
-cp rag-core/target/rag-core-0.0.1-SNAPSHOT.jar .
-cp -r rag-core/target/lib .
-
-# ③ 本地启动整套（PostgreSQL / Redis / RustFS / OpenObserve / OTel Collector / App）
+# ② 本地启动整套（PostgreSQL / Redis / RustFS / OpenObserve / OTel Collector / App）
 docker compose up -d --build
 
 # 服务器部署
@@ -90,9 +86,9 @@ docker compose -f docker-compose.server.yml up -d --build
 ## 模块结构
 
 ```
-springai-rag（父聚合 POM）
-├── rag-common/   通用基础（exception / context / util / 通用 MQ 抽象）
-└── rag-core/     核心业务（依赖 rag-common）
+customer-platform（父聚合 POM）
+├── platform-common/   通用基础（exception / context / util / 通用 MQ 抽象）
+└── app/     核心业务（依赖 platform-common）
     ├── web/          Controller 与全局异常（chat / ingestion / storage / ping）
     ├── config/      Spring AI 装配、属性配置、Prompt、VLM、S3、Telemetry 维度
     ├── ingestion/   入库引擎（parser / chunk / engine / node / mq / storage / collection）
@@ -124,7 +120,7 @@ Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / C
 
 ### 依赖
 
-在 `rag-core/pom.xml` 中引入两个模块：
+在 `app/pom.xml` 中引入两个模块：
 
 ```xml
 <dependency>
@@ -148,7 +144,7 @@ Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / C
 |---|---|---|
 | HTTP 入口（对话根） | `@TelemetryConversation` + `@TelemetryStep` | `ChatController` |
 | 同步 / 流式步骤 | `@TelemetryStep`（流式可用 `captureOutput=true`） | `QueryRewriter`、`RagAnswerStreamService`、检索 / 重排 / Agent / 入库 / Eval |
-| AOP 盲区（静态方法 / 同类内部调用） | `TelemetryTemplate.step(...)` 手动包一层 | `StreamChatPipeline` 调 `QueryNormalizer` |
+| AOP 盲区（静态方法 / 同类内部调用） | `TelemetryTemplate.step(...)` 手动包一层 | `ChatOrchestrator` 调 `QueryNormalizer` |
 | 结构化日志事件（不开 span） | `TelemetryLogger.event` / `TelemetryStructuredLog.emit` | `BaiLianRerankClient` 的 `rerank.scores` |
 | 独立后台任务 trace | `@TelemetryStep(kind=ROOT)` / `openTrace` | `EvalRunner` |
 | trace 维度自动提取 | `TelemetryTemplate.dimensionOnOutput` | `TelemetryDimensions`（intent、agent 范式） |
@@ -167,7 +163,7 @@ Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / C
 **已落地：**
 
 - 入库：Fetcher / Parser（Tika · Markdown · CSV · MinerU）/ Chunker（Block-Aware / StructureAware）/ Enricher / Indexer（pgvector）/ 节点日志持久化 / MQ / S3 存储 / 文档集合
-- 查询：StreamChatPipeline（归一化 → 改写 → 意图 → 多通道检索 → 去重 → RRF → Rerank → 流式回答）、naive / ReAct Agent、SSE
+- 查询：ChatOrchestrator（归一化 → 改写 → 意图 → 多通道检索 → 去重 → RRF → Rerank → 流式回答）、naive / ReAct Agent、SSE
 - 可观测：OTel 埋点 + OpenObserve / Langfuse 双后端，前端控制台 / 轨迹 / 链路视图
 - 评测：RAG Eval（Recall@k / Precision@k / nDCG / MRR，LiveRAG 评测集）
 

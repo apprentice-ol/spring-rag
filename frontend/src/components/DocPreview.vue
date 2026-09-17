@@ -3,6 +3,7 @@ import { ref, watch, computed, onMounted } from 'vue'
 import {
   LoadingOutlined, FilePdfOutlined, FileImageOutlined,
   FileMarkdownOutlined, DownloadOutlined, ExclamationCircleOutlined, FileOutlined,
+  CloseOutlined,
 } from '@ant-design/icons-vue'
 import { http } from '../api/client'
 import type { DocumentInfo } from '../api/upload'
@@ -156,7 +157,9 @@ function extLabel() {
         <a-button v-if="sourceUrl" type="text" size="small" class="preview-dl" :href="sourceUrl" :download="docName">
           <template #icon><DownloadOutlined /></template>
         </a-button>
-        <a-button v-if="embedded" type="text" size="small" class="preview-close" @click="emit('close')">✕</a-button>
+        <a-button v-if="embedded" type="text" size="small" class="preview-close" title="关闭" @click="emit('close')">
+          <CloseOutlined />
+        </a-button>
       </div>
     </div>
 
@@ -245,7 +248,7 @@ function extLabel() {
 .preview-container.markdown-body { background: transparent; }
 /* 全屏预览页：内容宽度跟随可拖拽容器（自由拉宽缩短） */
 .preview-fullpage .preview-container { max-width: none; }
-.preview-container :deep(pre) { border-radius: var(--radius-sm); }
+.preview-container :deep(pre) { border-radius: var(--radius-md); }
 .preview-container :deep(table) { display: block; overflow-x: auto; }
 .preview-container :deep(img) { max-width: 100%; }
 .preview-container :deep(hr) { margin: 24px 0; border: none; border-top: 1px dashed var(--color-border-light); }

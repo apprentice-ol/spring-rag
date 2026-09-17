@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { ArrowLeftOutlined, DeleteOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons-vue'
+import { ArrowLeftOutlined, DeleteOutlined, QuestionCircleOutlined, ReloadOutlined, FileTextOutlined } from '@ant-design/icons-vue'
 import { getRun, getMetrics, deleteRun, retryRun, reevaluateItem, type EvalRun, type EvalMetric } from '../api/eval'
 import {
   METRIC_KNOWLEDGE,
@@ -15,7 +15,7 @@ import {
   scoreTone,
   parseAggregate,
   parseParamSnapshot,
-  PARADIGMS,
+  activeParadigms,
   paradigmLabel,
   CATEGORY_DESC,
   categoryLabel,
@@ -39,6 +39,8 @@ const guideOpen = ref(false) // 指标解读：右侧抽屉
 const metricPage = ref(1)
 const metricPageSize = ref(20)
 const itemTotal = ref(0)
+/** 明细表是否已加载过数据：true 后表格卡常驻——筛选到 0 条时显示空态而非整块消失（否则筛选工具栏跟着没了，无法撤销筛选） */
+const metricsLoaded = ref(false)
 
 // 透视表不用表格内置分页：数据源是服务端拉回的单页数据，内置分页器未绑 total 时
 // antdv 会用 data.length（=当前页条数）当总数，把页码锁死在第 1 页且总数显示错误。
@@ -52,9 +54,15 @@ async function load(resetPage = false) {
   try {
     if (resetPage) metricPage.value = 1
     run.value = await getRun(props.runId)
-    const page = await getMetrics(props.runId, metricPage.value, metricPageSize.value)
+    // 低分筛选下沉服务端（库内 WHERE，total 同步收敛）；threshold 清空时视为未启用
+    const th = typeof badcaseThreshold.value === 'number' ? badcaseThreshold.value : NaN
+    const badcase = badcaseOnly.value && badcaseMetric.value && Number.isFinite(th)
+      ? { metric: badcaseMetric.value, maxScore: th }
+      : undefined
+    const page = await getMetrics(props.runId, metricPage.value, metricPageSize.value, badcase)
     metrics.value = page.records
     itemTotal.value = page.total
+    metricsLoaded.value = true
   } catch {
     /* ignore */
   } finally {
@@ -67,7 +75,10 @@ async function onPageChange(p: number, size: number) {
   await load()
 }
 onMounted(() => load(true))
-onUnmounted(() => resizeObserver?.disconnect())
+onUnmounted(() => {
+  resizeObserver?.disconnect()
+  clearTimeout(badcaseReloadTimer)
+})
 watch(() => props.runId, () => load(true))
 
 const metricNames = computed(() => {
@@ -251,19 +262,33 @@ watch(metricNames, (ns) => {
 })
 
 const filteredRows = computed(() => {
+  // 低分筛选已下沉服务端（load 里随请求下发），这里只做页内轻量过滤
   let rows = pivotRows.value
   const kw = searchKeyword.value.trim().toLowerCase()
   if (kw) rows = rows.filter((r) => String(r.question || '').toLowerCase().includes(kw))
   if (categoryFilter.value) rows = rows.filter((r) => r.category === categoryFilter.value)
   if (reevalOnly.value) rows = rows.filter((r) => r.reevals && r.reevals.length > 0)
-  if (badcaseOnly.value && badcaseMetric.value) {
-    const th = badcaseThreshold.value
-    rows = rows.filter((r) => {
-      const v = Number(r[badcaseMetric.value])
-      return Number.isFinite(v) && v < th
-    })
-  }
   return rows
+})
+
+/** 清空全部明细筛选（空态"清除筛选"按钮用；watch 会自动回第 1 页重拉） */
+function clearAllFilters() {
+  badcaseOnly.value = false
+  searchKeyword.value = ''
+  categoryFilter.value = undefined
+  reevalOnly.value = false
+}
+
+/** 是否有任何明细筛选生效（空态文案区分用） */
+const hasActiveFilters = computed(() =>
+  badcaseOnly.value || !!searchKeyword.value.trim() || !!categoryFilter.value || reevalOnly.value,
+)
+
+// 低分筛选条件变化 → 回到第 1 页重新拉取（阈值是连续输入，防抖 300ms）
+let badcaseReloadTimer: ReturnType<typeof setTimeout> | undefined
+watch([badcaseOnly, badcaseMetric, badcaseThreshold], () => {
+  clearTimeout(badcaseReloadTimer)
+  badcaseReloadTimer = setTimeout(() => load(true), 300)
 })
 
 const guides = computed(() => {
@@ -474,7 +499,7 @@ function durMin(): string {
       <div v-else-if="run && run.status === 'DONE'" class="empty">无聚合指标数据</div>
 
       <!-- 逐题明细表格卡：工具栏筛选 + 表格内部滚动（表头与上方参数卡/聚合卡固定） -->
-      <div v-if="pivotRows.length" class="table-card">
+      <div v-if="metricsLoaded" class="table-card">
         <div class="table-toolbar">
           <div class="toolbar-left">
             <a-input-search v-model:value="searchKeyword" placeholder="搜索问题关键词" allow-clear style="width: 220px" />
@@ -497,19 +522,28 @@ function durMin(): string {
               <a-input-number v-model:value="badcaseThreshold" :min="0" :max="1" :step="0.1" style="width: 90px" />
             </template>
           </div>
-          <span class="toolbar-hint">当前页 {{ filteredRows.length }} / {{ pivotRows.length }} · 共 {{ itemTotal }} 题</span>
+          <span class="toolbar-hint">
+            当前页 {{ filteredRows.length }} / {{ pivotRows.length }} · 共 {{ itemTotal }} 题{{ badcaseOnly && badcaseMetric ? '（低分筛选后）' : '' }}
+          </span>
         </div>
 
         <div ref="tableWrap" class="table-wrap">
           <a-table
             :columns="pivotColumns"
             :data-source="filteredRows"
+            :loading="loading"
             :pagination="false"
             size="middle"
             row-key="itemId"
             :scroll="{ x: 1320, y: tableBodyHeight }"
             class="metric-table"
           >
+            <template #emptyText>
+              <a-empty v-if="hasActiveFilters" description="当前筛选条件下无匹配题目">
+                <a-button type="primary" @click="clearAllFilters">清除筛选</a-button>
+              </a-empty>
+              <a-empty v-else description="暂无明细数据" />
+            </template>
             <template #headerCell="{ column }">
               <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="pivotColumns">{{ column.title }}</span>
             </template>
@@ -519,15 +553,17 @@ function durMin(): string {
               </template>
               <template v-else-if="column.key === 'paradigm'">
                 <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
-                <span v-else class="muted">-</span>
+                <span v-else class="muted">—</span>
               </template>
               <template v-else-if="column.key === 'category'">
                 <a-tooltip v-if="record.category" :title="categoryDesc(record.category)">
                   <a-tag>{{ categoryLabel(record.category) }}</a-tag>
                 </a-tooltip>
-                <span v-else class="muted">-</span>
+                <span v-else class="muted">—</span>
               </template>
-              <template v-else-if="column.key === 'hit'">{{ record.hit ?? '-' }} / {{ record.retrieved }}</template>
+              <template v-else-if="column.key === 'hit'">
+                <span class="num">{{ record.hit ?? '—' }} / {{ record.retrieved }}</span>
+              </template>
               <template v-else-if="column.key === 'remark'">
                 <a-tooltip v-if="record.latestRemark" :title="record.latestRemark">
                   <span class="remark-chip">{{ record.latestRemark }}</span>
@@ -597,7 +633,7 @@ function durMin(): string {
                       <span class="rv-error">检索失败：{{ r.error }}</span>
                     </template>
                     <template v-else>
-                      <span class="rv-hit">命中 {{ r.hit ?? '-' }} / {{ r.retrieved }}</span>
+                      <span class="rv-hit">命中 {{ r.hit ?? '—' }} / {{ r.retrieved }}</span>
                       <span v-for="k in Object.keys(r.scores)" :key="k" class="rv-score">
                         {{ metricLabel(k) }} {{ fmtScore(r.scores[k]) }}
                       </span>
@@ -606,7 +642,7 @@ function durMin(): string {
                       <span v-if="r.expectedNames.length" class="rv-exp">期望：{{ r.expectedNames.join('，') }}</span>
                       <span v-if="r.retrievedNames.length" class="rv-docs">实际召回：{{ r.retrievedNames.join('，') }}</span>
                     </template>
-                    <div v-if="r.remark" class="rv-remark">📝 {{ r.remark }}</div>
+                    <div v-if="r.remark" class="rv-remark"><FileTextOutlined /> {{ r.remark }}</div>
                   </div>
                 </div>
               </div>
@@ -645,7 +681,9 @@ function durMin(): string {
         <a-form-item label="agent 范式">
           <a-select v-model:value="reevalParadigm" placeholder="沿用原 run 范式">
             <a-select-option :value="''">沿用原 run（{{ paradigmLabel(run?.paradigm) }}）</a-select-option>
-            <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">{{ p.label }}</a-select-option>
+            <a-select-option v-for="p in activeParadigms()" :key="p.value" :value="p.value">
+              {{ p.label }} · {{ p.desc }}
+            </a-select-option>
           </a-select>
         </a-form-item>
         <a-form-item>
@@ -686,7 +724,7 @@ function durMin(): string {
 .metrics-pagination {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0 4px;
+  padding: 12px 16px 6px;
 }
 /* ── 整页骨架：不滚动，表格卡内部滚动（表头 + 参数卡 + 聚合卡固定） ── */
 .run-detail {
@@ -720,10 +758,7 @@ function durMin(): string {
   min-height: 0;
   overflow: hidden;
 }
-/* 分页贴表格底部（配合 measure() 的高度扣算） */
-.run-detail :deep(.ant-pagination) {
-  margin: 10px 16px 12px 8px;
-}
+/* 分页外边距全站统一（style.css），高度扣算仍读实际 DOM 高度 */
 
 /* ── 页头 ── */
 .detail-header {
@@ -804,7 +839,7 @@ function durMin(): string {
   background: var(--color-primary-light);
 }
 .agg-stage.stage-sort {
-  color: #b07810;
+  color: var(--color-warning-ink);
   background: var(--color-signal-bg);
 }
 .agg-stage.stage-answer {
@@ -825,7 +860,7 @@ function durMin(): string {
   color: var(--color-success);
 }
 .agg-card.tone-mid .agg-mean {
-  color: #b07810;
+  color: var(--color-warning-ink);
 }
 .agg-card.tone-bad .agg-mean {
   color: var(--color-danger);
@@ -911,6 +946,9 @@ function durMin(): string {
 
 .op {
   color: var(--color-ink-tertiary);
+  padding: 0 2px;
+  font-family: var(--font-display);
+  font-size: 12px;
 }
 
 /* ── 逐题明细表 ── */
@@ -944,7 +982,7 @@ function durMin(): string {
   color: var(--color-primary);
   background: var(--color-primary-light);
   padding: 1px 8px;
-  border-radius: var(--radius-lg);
+  border-radius: 999px;
 }
 
 /* ── 展开行：期望 vs 实际召回 chips 对照 ── */
@@ -1140,7 +1178,7 @@ function durMin(): string {
 .g-dir {
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: var(--radius-lg);
+  border-radius: 999px;
   background: var(--color-surface-secondary);
   color: var(--color-ink-secondary);
 }

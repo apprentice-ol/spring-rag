@@ -1,0 +1,13 @@
+{
+  "$comment": "示例：发票冲红接口请求报文规范（简化 JSON Schema：type/properties/required 三层）。新接口照此文件新增即可被 validate_request 识别。",
+  "type": "object",
+  "required": ["invoiceCode", "invoiceNumber", "reason", "operator"],
+  "properties": {
+    "invoiceCode": { "type": "string", "description": "发票代码" },
+    "invoiceNumber": { "type": "string", "description": "发票号码" },
+    "reason": { "type": "string", "description": "冲红原因：INVOICE_ERROR / RETURN_GOODS / PARTIAL_RETURN" },
+    "operator": { "type": "string", "description": "操作人账号" },
+    "amount": { "type": "number", "description": "冲红金额（部分冲红时必传）" },
+    "applyTime": { "type": "string", "description": "申请时间 ISO-8601" }
+  }
+}

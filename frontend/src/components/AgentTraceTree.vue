@@ -1,23 +1,25 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { CaretRightOutlined } from '@ant-design/icons-vue'
 import type { AgentTrace, RetrieveDetail, GradeDetail, RerankDetail } from '../api/chat'
+import { fmtLatency } from '../utils/format'
 
 defineProps<{ trace: AgentTrace | null }>()
 
-// action → 颜色（antdv Tag/Timeline 色板）
+// action → 颜色（收敛为 6 色系：蓝=检索执行 / 青=改写搜索 / 深蓝=规划分解 / 橙金=评估反思 / 绿=路由收尾 / 红=错误）
 const actionColor: Record<string, string> = {
   retrieve: 'blue',
-  grade: 'orange',
+  execute: 'blue',
+  merge: 'blue',
   rewrite: 'cyan',
-  decompose: 'purple',
-  rerank: 'geekblue',
+  web_search: 'cyan',
+  rerank: 'cyan',
+  decompose: 'geekblue',
+  plan: 'geekblue',
+  grade: 'orange',
   reflect: 'gold',
   route: 'green',
-  plan: 'purple',
-  execute: 'blue',
   finish: 'green',
-  merge: 'lime',
-  web_search: 'magenta',
   think: 'default',
   error: 'red',
 }
@@ -68,9 +70,11 @@ function droppedRefs(detail: RerankDetail): number[] {
   <div v-if="trace" class="agent-trace">
     <div class="trace-meta">
       <a-tag color="purple">{{ trace.paradigm }}</a-tag>
+      <span v-if="trace.workflowId" class="meta-item mono">{{ trace.workflowId }}</span>
       <span class="meta-item">{{ trace.steps.length }} 步</span>
       <span class="meta-item">LLM ×{{ trace.llmCallCount }}</span>
-      <span v-if="trace.totalLatencyMs" class="meta-item">{{ trace.totalLatencyMs }}ms</span>
+      <span v-if="trace.totalLatencyMs" class="meta-item num">{{ fmtLatency(trace.totalLatencyMs) }}</span>
+      <span v-if="trace.promptHash" class="meta-item mono fingerprint" :title="'prompt 指纹（改任一层 prompt 自动变化，缓存随之失效）'">§{{ trace.promptHash.slice(0, 12) }}</span>
     </div>
     <a-timeline>
       <a-timeline-item
@@ -80,9 +84,10 @@ function droppedRefs(detail: RerankDetail): number[] {
       >
         <div class="step-head">
           <a-tag :color="actionColor[s.action] || 'default'" class="step-tag">{{ s.action }}</a-tag>
-          <span class="step-latency">{{ s.latencyMs }}ms</span>
+          <span class="step-latency num">{{ fmtLatency(s.latencyMs) }}</span>
           <span v-if="s.detail" class="expand-btn" @click="toggle(s.stepIndex)">
-            {{ isExpanded(s.stepIndex) ? '▾ 收起' : '▸ 展开' }}
+            <CaretRightOutlined class="caret" :class="{ open: isExpanded(s.stepIndex) }" />
+            {{ isExpanded(s.stepIndex) ? '收起' : '展开' }}
           </span>
         </div>
         <div v-if="s.thought" class="step-thought">{{ s.thought }}</div>
@@ -124,7 +129,7 @@ function droppedRefs(detail: RerankDetail): number[] {
                 <tr><th>ref</th><th>分数</th><th>相关?</th><th class="wide-col">理由</th></tr>
               </thead>
               <tbody>
-                <tr v-for="g in s.detail.grades" :key="g.ref" :style="g.relevant ? '' : 'opacity:0.45'">
+                <tr v-for="g in s.detail.grades" :key="g.ref" :class="{ dim: !g.relevant }">
                   <td>{{ g.ref }}</td>
                   <td>{{ g.score.toFixed(2) }}</td>
                   <td>{{ g.relevant ? '✓' : '✗' }}</td>
@@ -167,12 +172,20 @@ function droppedRefs(detail: RerankDetail): number[] {
   margin-bottom: 12px; font-size: 12px; color: var(--color-ink-secondary);
 }
 .step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.meta-item.mono { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--color-ink-tertiary); }
+.meta-item.fingerprint { cursor: default; }
 .step-tag { margin: 0; }
 .step-latency { font-size: 11px; color: var(--color-ink-tertiary); }
 .expand-btn {
   margin-left: auto; font-size: 11px; cursor: pointer; user-select: none;
   color: var(--color-primary);
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: var(--radius-sm);
+  transition: background 0.15s;
 }
+.expand-btn:hover { background: var(--color-surface-secondary); }
+.expand-btn .caret { font-size: 10px; transition: transform 0.15s; }
+.expand-btn .caret.open { transform: rotate(90deg); }
 .step-thought { font-size: 12px; color: var(--color-ink); margin: 2px 0; line-height: 1.5; }
 .step-io { font-size: 11px; color: var(--color-ink-secondary); margin-top: 1px; word-break: break-all; }
 .io-label { color: var(--color-ink-tertiary); }
@@ -183,13 +196,16 @@ function droppedRefs(detail: RerankDetail): number[] {
 }
 .detail-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: auto; }
 .detail-table th {
-  text-align: left; font-weight: normal; padding: 2px 6px;
+  text-align: left; font-weight: 500; padding: 3px 6px;
   color: var(--color-ink-tertiary); white-space: nowrap;
 }
 .detail-table td {
-  padding: 2px 6px; vertical-align: top;
+  padding: 3px 6px; vertical-align: top;
   border-top: 1px solid var(--color-border-light);
+  transition: background 0.12s;
 }
+.detail-table tbody tr:hover td { background: var(--color-surface); }
+.detail-table tr.dim td { opacity: 0.45; }
 .text-cell, .wide-col { max-width: 240px; color: var(--color-ink-secondary); word-break: break-all; }
 
 .grade-meta {
@@ -207,7 +223,7 @@ function droppedRefs(detail: RerankDetail): number[] {
   padding: 1px 7px; border-radius: 10px; font-size: 11px;
   background: var(--color-surface-secondary);
 }
-.ref-chip small { font-size: 9px; color: var(--color-ink-tertiary); }
+.ref-chip small { font-size: 10px; color: var(--color-ink-tertiary); }
 .ref-chip.keep { color: var(--color-success); }
 .ref-chip.drop { opacity: 0.4; text-decoration: line-through; }
 </style>

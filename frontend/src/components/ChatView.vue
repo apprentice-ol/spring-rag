@@ -5,11 +5,11 @@ import {
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
   ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined, FileSearchOutlined,
 } from '@ant-design/icons-vue'
-import { streamChat, type AgentTrace, type Citation } from '../api/chat'
+import { streamChat, cancelChat, type AgentTrace, type Citation } from '../api/chat'
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
-import { PARADIGMS } from './evalShared'
+import { chatParadigmOptions, normalizeParadigm } from './evalShared'
 import { messages, activeId, currentTitle, hasEarlierMessages, loadEarlierMessages, type Msg } from '../composables/useChatState'
 import { useIsMobile } from '../composables/useSplitter'
 import ConversationList from './ConversationList.vue'
@@ -94,11 +94,25 @@ const isMobile = useIsMobile()
 
 const input = ref('')
 const sending = ref(false)
-/** 当前 agent 范式（默认 naive，localStorage 持久化） */
-const agent = ref(localStorage.getItem('rag_chat_agent') || 'naive')
-watch(agent, (v) => localStorage.setItem('rag_chat_agent', v))
+/**
+ * 当前 agent 范式（'' = 自动档：不带 agent 参数，后端意图识别路由）。
+ * localStorage 旧值迁移：knowledge 是历史默认值（无法证明用户主动选择过）→ 归一为自动；
+ * naive/react 旧值经 normalizeParadigm 映射新范式后保留为显式选择。
+ */
+const agent = ref(migrateAgentChoice(localStorage.getItem('rag_chat_agent')))
+watch(agent, (v) => {
+  if (v) localStorage.setItem('rag_chat_agent', v)
+  else localStorage.removeItem('rag_chat_agent')
+})
+
+function migrateAgentChoice(v: string | null): string {
+  if (!v || v === 'knowledge') return '' // 自动档（历史默认值，非显式选择）
+  return normalizeParadigm(v)
+}
 const logRef = ref<HTMLElement>()
-const inputRef = ref<HTMLElement>()
+const inputRef = ref<{ focus: () => void } | null>(null)
+/** composer 聚焦态（卡片描边 + 聚焦环） */
+const composerFocused = ref(false)
 /** 移动端：左侧会话列表抽屉开关 */
 const mobileConvOpen = ref(false)
 
@@ -111,7 +125,12 @@ watch(activeId, async () => {
   if (!sending.value) inputRef.value?.focus()
 })
 
-// ── 发送消息 ──
+// ── 发送/停止 ──
+/** 本轮流式的 abort 控制器（停止生成 = abort 本地流 + 服务端取消双保险） */
+let abortCtl: AbortController | null = null
+/** 用户主动停止标记：onDone 据此在气泡尾部标「已停止生成」 */
+const stopping = ref(false)
+
 async function send() {
   const q = input.value.trim()
   if (!q || sending.value) return
@@ -121,6 +140,8 @@ async function send() {
   const ans:Msg = messages.value[messages.value.length - 1] as Msg
   input.value = ''
   sending.value = true
+  stopping.value = false
+  abortCtl = new AbortController()
   forceScrollToBottom()
 
   let pending = ''
@@ -137,14 +158,36 @@ async function send() {
       scheduleScroll()
     },
     onTrace:(t)=>{ ans.trace = t },
+    // 引用溯源映射（流式开始前一次）：ref → 文档信息。缺了这个 handler，citations 事件被
+    // 静默丢弃 → 新回答无 [N] 角标、无「引用」按钮（历史消息走 DB 解析不受影响）——
+    // 2026-09-11 修复：3a72fc7 重构时丢失
     onCitations:(cs)=>{ ans.citations = cs },
+    onClarify:(c)=>{ ans.clarify = c },
     onMeta:(meta)=>{
       if (meta.messageId != null) ans.id = meta.messageId
       if (meta.traceId) ans.traceId = meta.traceId
     },
     onError:()=>{ flushPending(); ans.streaming=false; ans.ts=Date.now(); ans.content+='\n\n> **生成失败**'; sending.value=false },
-    onDone:()=>{ flushPending(); ans.streaming=false; ans.ts=Date.now(); sending.value=false; scrollToBottomIfStuck() },
-  }, agent.value)
+    onDone:()=>{
+      flushPending(); ans.streaming=false; ans.ts=Date.now()
+      if (stopping.value) {
+        // 停止生成（本地 abort 或服务端取消）：保留已生成部分并标记
+        ans.content = ans.content.trim()
+          ? ans.content + '\n\n> *已停止生成*'
+          : '> *已停止生成*'
+        stopping.value = false
+      }
+      sending.value = false; scrollToBottomIfStuck()
+    },
+  }, agent.value, abortCtl.signal)
+}
+
+/** 停止生成：立即 abort 本地流（反馈即时），再通知服务端（dispose 计费 + 部分回答落库） */
+async function stop() {
+  if (!sending.value) return
+  stopping.value = true
+  abortCtl?.abort()
+  try { await cancelChat(activeId.value) } catch { /* 会话可能已自然结束 */ }
 }
 
 // ── 消息轨迹回看（assistant 气泡「轨迹」入口：本轮内存态 / 历史按 messageId 拉取） ──
@@ -180,6 +223,13 @@ function openObsLink(m: Msg) {
   if (!m.traceId) return
   const url = traceDetailUrl(m.traceId, m.ts)
   if (url) window.open(url, '_blank')
+}
+
+/** 消息时间（操作条右侧）：HH:mm */
+function fmtClock(ts: number): string {
+  const d = new Date(ts)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 // ── 滚动跟随 ──
@@ -224,6 +274,28 @@ async function onLoadEarlier() {
     loadingEarlier.value = false
   }
 }
+
+// ── 空对话引导 ──
+/** 引导建议（贴合系统两大能力：知识库问答带引用溯源 / 运维诊断自动追问后排查） */
+const SUGGESTIONS = [
+  '发票冲红的完整办理流程是什么？',
+  '专用发票和普通发票的抵扣规则有什么区别？',
+  '生产环境开票接口偶发超时，帮我排查一下',
+]
+
+/**
+ * 引导建议回填输入框（不直接发送）：用户多半要补充信息再发——
+ * 诊断类问题需补环境/报错细节，知识类问题常要限定范围，直接发出去只会得到追问。
+ */
+function fillSuggestion(s: string) {
+  input.value = s
+  nextTick(() => {
+    inputRef.value?.focus()
+    // 光标移到末尾，接着补充即可（$el 即 textarea 本体；非 textarea 元素无此方法，防御跳过）
+    const el = (inputRef.value as unknown as { $el?: HTMLTextAreaElement })?.$el
+    if (el && typeof el.setSelectionRange === 'function') el.setSelectionRange(s.length, s.length)
+  })
+}
 </script>
 
 <template>
@@ -262,15 +334,23 @@ async function onLoadEarlier() {
         <a-button type="link" size="small" :loading="loadingEarlier" @click="onLoadEarlier">加载更早消息</a-button>
       </div>
       <div v-if="!messages.length" class="empty">
-        <div class="empty-illustration"><RobotOutlined /></div>
+        <div class="empty-mark" aria-hidden="true">
+          <!-- 品牌签名：对角引用括号 + 圆点（回答带出处） -->
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4.5 9.5V6.3c0-1 .8-1.8 1.8-1.8h3.2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+            <path d="M19.5 14.5v3.2c0 1-.8 1.8-1.8 1.8h-3.2" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+            <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+          </svg>
+        </div>
         <h4 class="empty-title">开始对话</h4>
-        <p class="empty-desc">在知识库入库文档后，即可基于文档提问</p>
+        <p class="empty-desc">知识库问答（回答附原文引用） · 运维诊断（自动追问补齐信息后排查）</p>
         <div class="empty-suggestions">
           <a-tag
-            v-for="s in ['总结这篇文档','文档中提到了哪些关键信息？','帮我提取核心要点']"
-            :key="s" class="suggestion-tag" @click="input=s; send()"
+            v-for="s in SUGGESTIONS"
+            :key="s" class="suggestion-tag" @click="fillSuggestion(s)"
           >{{ s }}</a-tag>
         </div>
+        <p class="empty-hint">点击问题填入输入框，可补充细节后发送</p>
       </div>
 
       <div v-for="(m,i) in messages" :key="i" class="msg" :class="m.role">
@@ -279,8 +359,15 @@ async function onLoadEarlier() {
           <div v-if="m.streaming&&!m.content" class="typing-indicator"><span></span><span></span><span></span></div>
           <div v-else-if="m.role==='user'" class="msg-text user-text">{{ m.content }}</div>
           <div v-else class="markdown-body" v-html="renderWithCitations(m)" @click="onBubbleClick($event, m)"></div>
-          <span v-if="m.streaming&&m.content" class="stream-cursor">▍</span>
-          <!-- 操作条：轨迹回看 + 引用溯源 + traceId（完整展示可复制）+ OpenObserve 全链路（流式结束后） -->
+          <!-- 运维诊断追问卡片：缺失槽位一次问齐（clarify 事件；用户在输入框补充回答即可续跑） -->
+          <div v-if="m.clarify" class="clarify-card">
+            <div v-for="(q,qi) in m.clarify.questions" :key="qi" class="clarify-item">
+              <span class="clarify-q">{{ qi+1 }}. {{ q.question }}</span>
+              <a-tag v-if="q.hint" color="blue" class="clarify-hint">{{ q.hint }}</a-tag>
+            </div>
+          </div>
+          <span v-if="m.streaming&&m.content" class="stream-cursor"></span>
+          <!-- 操作条：轨迹回看 + 引用溯源 + traceId（chip 可复制）+ OpenObserve 全链路（流式结束后） -->
           <div v-if="m.role==='assistant' && !m.streaming && (m.id || m.trace)" class="msg-actions">
             <button class="action-btn" @click="openTrace(m)">
               <ApartmentOutlined />轨迹
@@ -289,7 +376,7 @@ async function onLoadEarlier() {
               <FileSearchOutlined />引用 {{ usedCitations(m).length }}
             </button>
             <template v-if="m.traceId">
-              <span class="trace-id-full" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
+              <span class="trace-chip" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
               <button class="action-btn" title="复制 traceId" @click="copyWithToast(m.traceId)">
                 <CopyOutlined />
               </button>
@@ -297,6 +384,7 @@ async function onLoadEarlier() {
                 <DeploymentUnitOutlined />链路
               </button>
             </template>
+            <span v-if="m.ts" class="msg-time num">{{ fmtClock(m.ts) }}</span>
           </div>
         </div>
         <div v-if="m.role==='user'" class="avatar avatar-user"><UserOutlined /></div>
@@ -311,22 +399,39 @@ async function onLoadEarlier() {
       </button>
     </transition>
 
-    <!-- 输入区 -->
+    <!-- 输入区：卡片式 composer（聚焦描边 + 多行 + 底部工具行） -->
     <div class="composer">
-      <div class="composer-bar">
-        <span class="bar-label">Agent 范式</span>
-        <a-select v-model:value="agent" size="small" class="bar-select">
-          <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">
-            {{ p.label }} · {{ p.desc }}
-          </a-select-option>
-        </a-select>
-      </div>
-      <div class="composer-inner">
-        <a-input ref="inputRef" v-model:value="input" placeholder="输入问题…" :disabled="sending"
-          size="large" variant="filled" class="composer-input" @press-enter="send" />
-        <a-button type="primary" :loading="sending" class="composer-btn" @click="send">
-          <template #icon><SendOutlined /></template>
-        </a-button>
+      <div class="composer-card" :class="{ focused: composerFocused }">
+        <a-textarea
+          ref="inputRef"
+          v-model:value="input"
+          placeholder="输入问题，基于知识库提问…"
+          :disabled="sending"
+          :auto-size="{ minRows: 1, maxRows: 6 }"
+          variant="borderless"
+          class="composer-input"
+          @keydown.enter.exact.prevent="send"
+          @focus="composerFocused = true"
+          @blur="composerFocused = false"
+        />
+        <div class="composer-foot">
+          <div class="composer-paradigm">
+            <span class="bar-label">范式</span>
+            <a-select v-model:value="agent" size="small" class="bar-select" :disabled="sending" :popup-match-select-width="false">
+              <a-select-option v-for="p in chatParadigmOptions()" :key="p.value || 'auto'" :value="p.value">
+                {{ p.label }} · {{ p.desc }}
+              </a-select-option>
+            </a-select>
+          </div>
+          <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+          <!-- 同一按钮：空闲=主色发送，生成中=红色描边停止（实心方块符号；停止态不可带 loading——antd loading 按钮不可点击） -->
+          <a-button v-if="sending" danger class="composer-btn composer-stop" title="停止生成" @click="stop">
+            <span class="stop-square"></span>
+          </a-button>
+          <a-button v-else type="primary" :disabled="!input.trim()" class="composer-btn" @click="send">
+            <template #icon><SendOutlined /></template>
+          </a-button>
+        </div>
       </div>
     </div>
 
@@ -421,7 +526,7 @@ async function onLoadEarlier() {
 .conv-toggle-btn:hover { color:var(--color-primary); }
 .conv-toggle-label { font-size:13px; margin-left:2px; }
 
-.scroll-to-bottom { position:absolute; right:24px; bottom:84px; width:36px; height:36px; border-radius:50%; background:var(--color-surface); border:1px solid var(--color-border); box-shadow:0 2px 10px rgba(0,0,0,.12); display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--color-primary); z-index:50; transition:background .15s; }
+.scroll-to-bottom { position:absolute; right:24px; bottom:96px; width:36px; height:36px; border-radius:50%; background:var(--color-surface); border:1px solid var(--color-border); box-shadow:0 2px 10px rgba(0,0,0,.12); display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--color-primary); z-index:50; transition:background .15s; }
 .scroll-to-bottom:hover { background:var(--color-surface-secondary); }
 .fade-enter-active, .fade-leave-active { transition:opacity .2s; }
 .fade-enter-from, .fade-leave-to { opacity:0; }
@@ -429,12 +534,28 @@ async function onLoadEarlier() {
 .log-bottom { height:4px; flex-shrink:0; }
 
 .load-earlier { display:flex; justify-content:center; flex-shrink:0; }
-.empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 20px; }
-.empty-illustration { width:56px; height:56px; display:flex; align-items:center; justify-content:center; background:var(--color-primary-light); border:1px solid var(--color-border-light); border-radius:var(--radius-lg); font-size:24px; color:var(--color-primary); margin-bottom:12px; }
+/* 空状态：点阵台面（边缘渐隐）+ 品牌签名插图 */
+.empty {
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; padding:40px 20px; border-radius:var(--radius-xl);
+  background-image: radial-gradient(circle, rgba(22, 26, 30, 0.06) 1px, transparent 1px);
+  background-size: 20px 20px;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 45%, transparent 80%);
+  mask-image: radial-gradient(ellipse at center, #000 45%, transparent 80%);
+}
+.empty-mark {
+  width:72px; height:72px; display:flex; align-items:center; justify-content:center;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
+  color:#fff; border-radius:20px; margin-bottom:16px;
+  box-shadow: 0 10px 28px rgba(0, 100, 250, 0.28);
+}
+.empty-mark svg { width:36px; height:36px; }
 .empty-title { margin:0 0 6px; font-size:16px; font-weight:600; }
 .empty-desc { margin:0 0 16px; font-size:13px; color:var(--color-ink-secondary); }
 .empty-suggestions { display:flex; flex-wrap:wrap; gap:6px; justify-content:center; }
-.suggestion-tag { cursor:pointer; }
+.suggestion-tag { cursor:pointer; user-select:none; transition: color .15s, background .15s, border-color .15s; }
+.suggestion-tag:hover { color:var(--color-primary); background:var(--color-primary-light); border-color:var(--color-primary); }
+.empty-hint { margin:10px 0 0; font-size:11.5px; color:var(--color-ink-tertiary); }
 
 .msg { display:flex; gap:10px; align-items:flex-start; max-width:85%; }
 .msg.user { align-self:flex-end; flex-direction:row-reverse; }
@@ -472,41 +593,74 @@ async function onLoadEarlier() {
 .cite-preview { margin-top:4px; font-size:12px; color:var(--color-ink-secondary); line-height:1.6; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
 .cite-source-link { flex-shrink:0; font-size:11px; margin-top:4px; display:inline-block; }
 .msg-actions { display:flex; align-items:center; gap:2px; flex-wrap:wrap; margin-top:8px; padding-top:6px; border-top:1px dashed var(--color-border-light); }
+/* 运维诊断追问卡片（clarify 事件）：缺失槽位清单 + 取值提示 */
+.clarify-card { margin-top:10px; padding:10px 12px; background:var(--color-primary-light); border:1px solid var(--color-border-light); border-radius:var(--radius-md); }
+.clarify-item { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:3px 0; font-size:13px; color:var(--color-ink); }
+.clarify-q { font-weight:500; }
+.clarify-hint { font-size:11px; }
 .action-btn { display:inline-flex; align-items:center; gap:4px; border:none; background:none; padding:2px 8px; font-size:12px; color:var(--color-ink-tertiary); cursor:pointer; border-radius:var(--radius-sm); transition:color .15s, background .15s; }
 .action-btn:hover { color:var(--color-primary); background:var(--color-primary-light); }
-/* traceId 完整展示：等宽小字，可选中整段，允许换行 */
-.trace-id-full {
+/* traceId chip：等宽缩略展示（悬停 title 看全量，旁边复制按钮取全文） */
+.trace-chip {
   font-family: var(--font-display);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 10.5px;
+  line-height: 18px;
   color: var(--color-ink-tertiary);
-  word-break: break-all;
+  background: var(--color-surface-secondary);
+  border-radius: 999px;
+  padding: 0 8px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   user-select: all;
   -webkit-user-select: all;
-  max-width: 100%;
 }
+.msg-time { margin-left:auto; font-size:11px; color:var(--color-ink-tertiary); flex-shrink:0; }
 
 .markdown-body { font-family:var(--font-body); font-size:14px; line-height:1.7; color:var(--color-ink); background:transparent; }
 .markdown-body :deep(pre){ background:var(--color-surface-secondary)!important; border-radius:var(--radius-md); padding:10px 14px!important; overflow-x:auto; font-size:13px; border:1px solid var(--color-border-light); }
 .markdown-body :deep(code:not(pre code)){ font-family:var(--font-display); font-size:13px; background:var(--color-surface-secondary); padding:1px 4px; border-radius:3px; }
 .markdown-body :deep(pre code){ background:transparent!important; padding:0!important; }
 .markdown-body :deep(p){ margin:0 0 6px; }
-.markdown-body :deep(table){ border-collapse:collapse; margin:6px 0; width:100%; font-size:13px; }
-.markdown-body :deep(th),.markdown-body :deep(td){ border:1px solid var(--color-border); padding:5px 8px; text-align:left; }
-.markdown-body :deep(th){ background:var(--color-surface-secondary); font-weight:600; }
+.markdown-body :deep(table){
+  border-collapse:separate; border-spacing:0; margin:8px 0; width:100%; font-size:13px;
+  border:1px solid var(--color-border-light); border-radius:var(--radius-md); overflow:hidden;
+}
+.markdown-body :deep(th),.markdown-body :deep(td){ border-bottom:1px solid var(--color-border-light); padding:6px 10px; text-align:left; }
+.markdown-body :deep(tr:last-child td),
+.markdown-body :deep(thead tr:last-child th){ border-bottom:none; }
+.markdown-body :deep(th){ background:var(--color-surface-secondary); font-weight:600; border-bottom:1px solid var(--color-border); }
+.markdown-body :deep(tbody tr:hover td){ background:var(--color-hover-bg); }
 .markdown-body :deep(a){ color:var(--color-primary); }
 
-.composer { padding:12px 20px; border-top:1px solid var(--color-border); background:var(--color-surface); flex-shrink:0; }
-.composer-bar { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-.bar-label { font-family:var(--font-display); font-size:11px; letter-spacing:0.05em; text-transform:uppercase; color:var(--color-ink-tertiary); }
-.bar-select { width:210px; }
-.composer-inner { display:flex; gap:8px; align-items:center; }
-.composer-input { flex:1; }
-.composer-btn { width:38px; height:38px; flex-shrink:0; }
+/* 输入区：卡片式 composer */
+.composer { padding:12px 20px 14px; border-top:1px solid var(--color-border); background:var(--color-surface); flex-shrink:0; }
+.composer-card {
+  border:1px solid var(--color-border);
+  border-radius:var(--radius-xl);
+  background:var(--color-surface);
+  padding:10px 12px 8px 16px;
+  transition:border-color .15s, box-shadow .15s;
+}
+.composer-card.focused { border-color:var(--color-primary); box-shadow:0 0 0 3px var(--color-focus-ring); }
+.composer-input :deep(textarea) { font-size:14px; line-height:1.6; padding:4px 0; }
+.composer-foot { display:flex; align-items:center; gap:10px; margin-top:8px; }
+.composer-paradigm { display:flex; align-items:center; gap:8px; min-width:0; }
+.bar-label { font-family:var(--font-display); font-size:10px; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; color:var(--color-ink-tertiary); flex-shrink:0; }
+.bar-select { width:200px; }
+.composer-hint { margin-left:auto; font-size:11px; color:var(--color-ink-tertiary); white-space:nowrap; }
+.composer-btn { width:34px; height:34px; border-radius:50%; flex-shrink:0; }
+/* 停止态：红色描边圆钮 + 实心方块停止符号（danger 变体，方块 currentColor 跟随红色，hover 红底） */
+.composer-stop { display:inline-flex; align-items:center; justify-content:center; padding:0; }
+.stop-square { width:10px; height:10px; border-radius:2px; background:currentColor; display:inline-block; }
 
 @media (max-width: 768px) {
   .log { padding:14px 12px; gap:12px; }
   .msg { max-width:92%; }
   .composer { padding:8px 10px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .composer-card { padding:8px 10px 6px 12px; }
+  .composer-hint { display:none; }
+  .bar-select { width:150px; }
 }
 </style>

@@ -2,7 +2,7 @@
 
 面向「我在本地开发，要部署到服务器」的完整流程。端口表、compose 差异、日常运维见 [docker/README.md](../docker/README.md)。
 
-- 服务器以 `root@<SERVER_IP>`、项目目录 `/opt/spring-rag` 为例（按实际替换；IP/账号一律放 `.env`，不进文档与 git）
+- 服务器以 `root@<SERVER_IP>`、项目目录 `/srv/www/spring-rag` 为例（按实际替换；IP/账号一律放 `.env`，不进文档与 git）
 - 服务器要求：Docker + Docker Compose、2核4G 起步、放行端口 9081（app）/ 5080（OO）/ 9000（RustFS）
 
 ---
@@ -17,8 +17,8 @@ bash build-local.sh
 三步自动完成：前端 `npm run build` → dist 拷进 jar 的 `static/` → `mvn package`。产物：
 
 ```
-rag-core/target/rag-core-0.0.1-SNAPSHOT.jar   瘦 jar ~1.6MB（业务代码 + 前端页面）
-rag-core/target/lib/                          373 个依赖 jar ~251MB（pom 不变就不变）
+platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar   瘦 jar ~1.6MB（业务代码 + 前端页面）
+platform-bootstrap/target/lib/                          373 个依赖 jar ~251MB（pom 不变就不变）
 ```
 
 > 前置：JDK 21（`D:/03_developtools/02_jdk/ms-21.0.11`）+ Node.js。产物路径在 build-local.sh 内写死，换机器改脚本头部。
@@ -55,8 +55,8 @@ cp .env.example .env && vim .env
 ```bash
 # 本地 Git Bash
 cd /d/04_projects/20_springai-rag
-scp rag-core/target/rag-core-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/opt/spring-rag/
-scp -r rag-core/target/lib                            root@<SERVER_IP>:/opt/spring-rag/
+scp platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/srv/www/spring-rag/
+scp -r platform-bootstrap/target/lib                            root@<SERVER_IP>:/srv/www/spring-rag/
 ```
 
 > 服务器上 compose / docker/ 目录 / init.sql 都来自 git clone，无需 scp；**只有 jar 和 lib/ 是构建产物**（不入 git）。
@@ -65,7 +65,7 @@ scp -r rag-core/target/lib                            root@<SERVER_IP>:/opt/spri
 
 ```bash
 # 服务器上
-cd /opt/spring-rag
+cd /srv/www/spring-rag
 docker compose -f docker-compose.server.yml up -d --build
 docker compose -f docker-compose.server.yml logs -f app   # 看到 Started + 无 ERROR 即成功
 ```
@@ -74,7 +74,7 @@ docker compose -f docker-compose.server.yml logs -f app   # 看到 Started + 无
 
 ### 5. Nginx 反代 RustFS（图片显示依赖）
 
-app 生成的图片公网地址形如 `http://<IP>/storage/springai-rag-assets/{key}`，需在服务器 Nginx 加一段反代到 RustFS：
+app 生成的图片公网地址形如 `http://<IP>/storage/customer-platform-assets/{key}`，需在服务器 Nginx 加一段反代到 RustFS：
 
 ```nginx
 location /storage/ {
@@ -129,15 +129,15 @@ docker compose -f docker-compose.server.yml logs app 2>&1 | grep -c "localhost:3
 bash build-local.sh
 
 # ② 传新 jar（依赖没变就不传 lib/，pom 动过才传）
-scp rag-core/target/rag-core-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/opt/spring-rag/
+scp platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/srv/www/spring-rag/
 
 # ③ 服务器重建 app 容器
-ssh root@<SERVER_IP> "cd /opt/spring-rag && docker compose -f docker-compose.server.yml up -d --build app"
+ssh root@<SERVER_IP> "cd /srv/www/spring-rag && docker compose -f docker-compose.server.yml up -d --build app"
 
 # ④ 验证（同上 7-①③）
 ```
 
-**compose / docker 目录 / SQL 有变更时**（如这次的 Dockerfile 移入 docker/app/）：服务器 `git pull` 后再 up。
+**compose / Dockerfile / SQL 有变更时**：服务器 `git pull`（或 scp 对应文件）后再 up。
 
 ## 四、常见问题
 
@@ -182,7 +182,7 @@ RSS 冲到 ~1.5G 被内核 OOM killer 杀掉；被杀 → WAL 无法消化 → �
 
 ```bash
 # 本地传改好的 compose
-scp docker-compose.server.yml root@<SERVER_IP>:/opt/spring-rag/
+scp docker-compose.server.yml root@<SERVER_IP>:/srv/www/spring-rag/
 
 # 服务器：腾内存 → 重建 OO（配置变了会自动 recreate）→ 等 WAL 消化完 → 恢复
 docker stop rag-app

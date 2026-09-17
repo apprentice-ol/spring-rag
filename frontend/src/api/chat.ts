@@ -63,6 +63,14 @@ export async function deleteConversation(conversationId: string): Promise<void> 
   await (await import('./client')).http.delete(`/chat/conversations/${conversationId}`)
 }
 
+/** 停止生成（服务端 dispose LLM 流 + 部分回答落库）；会话无活动流返回 false（已结束，幂等无害） */
+export async function cancelChat(conversationId: string): Promise<boolean> {
+  const { data } = await (await import('./client')).http.post<{ cancelled: boolean }>(
+    '/chat/cancel', null, { params: { conversationId } },
+  )
+  return data.cancelled
+}
+
 // ===== Agent 执行轨迹（后端 AgentTrace/AgentStep 的前端镜像） =====
 
 // ReAct 三步结构化产物（对齐后端 AgentStepDetails record）
@@ -114,6 +122,9 @@ export interface AgentStep {
 
 export interface AgentTrace {
   paradigm: string
+  /** 执行指纹三元组之二/之三（旧轨迹无此字段） */
+  workflowId?: string | null
+  promptHash?: string | null
   steps: AgentStep[]
   llmCallCount: number
   startTimeMs: number
@@ -127,11 +138,26 @@ export interface StreamMeta {
   paradigm: string | null
 }
 
+/** SSE clarify 事件（运维诊断追问中断）：缺失槽位问题列表，一次问齐（后端 ClarifyRequest 镜像） */
+export interface ClarifySlotQuestion {
+  slot: string
+  question: string
+  hint: string | null
+  required: boolean
+}
+export interface ClarifyEvent {
+  sessionId: string | null
+  summary: string
+  questions: ClarifySlotQuestion[]
+}
+
 export interface StreamHandlers {
   onContent: (chunk: string) => void
   onTrace?: (trace: AgentTrace) => void
   onCitations?: (citations: Citation[]) => void
   onMeta?: (meta: StreamMeta) => void
+  /** 追问事件：有处理器渲染追问卡片，无处理器静默丢弃（绝不混入正文） */
+  onClarify?: (clarify: ClarifyEvent) => void
   onError: (err: unknown) => void
   onDone: () => void
 }
@@ -139,18 +165,26 @@ export interface StreamHandlers {
 /**
  * 流式问答（SSE GET）。按 SSE 规范解析：event 行决定类型（message→回答块 / trace→agent 轨迹 / meta→消息元信息），
  * 一个事件可由多个 data: 行组成，空行结束。agent 参数指定范式（naive/react）。
+ * signal 传 AbortController 的信号：abort 视为正常结束（onDone）而非 onError——「停止生成」用它。
  */
 export async function streamChat(
   question: string,
   conversationId: string,
   handlers: StreamHandlers,
   agent?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const params = new URLSearchParams({ question, conversationId })
-  if (agent) params.set('agent', agent)
+  if (agent) {
+    // agent = RAG 链内范式（兼容旧语义）；agentChoice = 用户显式选择标记（后端意图路由只认它，
+    // 防止旧客户端默认携带的 agent=knowledge 被误判为显式选择而旁路意图识别）
+    params.set('agent', agent)
+    params.set('agentChoice', agent)
+  }
   const resp = await fetch(`/api/rag/chat/stream?${params}`, {
     method: 'POST',
     headers: { Accept: 'text/event-stream' },
+    signal,
   })
   if (!resp.ok || !resp.body) {
     throw new Error(`stream failed: ${resp.status}`)
@@ -198,6 +232,20 @@ export async function streamChat(
               /* 忽略损坏的 meta */
             }
           }
+        } else if (currentEvent === 'clarify') {
+          // clarify 事件（运维诊断追问，缺失槽位一次问齐）：必须在 else 兜底之前分支，
+          // 否则 clarify JSON 会被 onContent 当正文渲染进气泡
+          if (handlers.onClarify) {
+            try {
+              handlers.onClarify(JSON.parse(raw) as ClarifyEvent)
+            } catch {
+              /* 忽略损坏的 clarify */
+            }
+          }
+        } else if (currentEvent === 'error') {
+          // error 事件（后端流式处理失败）：走 onError（气泡显示"生成失败"），
+          // 必须在 else 兜底之前分支，否则错误文本会被 onContent 当正文渲染进气泡
+          handlers.onError(new Error(raw))
         } else {
           handlers.onContent(raw)
         }
@@ -232,6 +280,11 @@ export async function streamChat(
     flush()
     handlers.onDone()
   } catch (e) {
-    handlers.onError(e)
+    // 本地 abort（停止生成）按正常结束处理，不进"生成失败"分支
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      handlers.onDone()
+    } else {
+      handlers.onError(e)
+    }
   }
 }

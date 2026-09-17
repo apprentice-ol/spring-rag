@@ -1,8 +1,8 @@
-# springai-rag 文档入库完整流程
+# customer-platform 文档入库完整流程
 
-> 本文档梳理 springai-rag 从文件上传到向量落库的完整入库链路（`fetcher → parser → enhancer → chunker → enricher → indexer`），聚焦各环节实现机制与已知问题点。
+> 本文档梳理 customer-platform 从文件上传到向量落库的完整入库链路（`fetcher → parser → enhancer → chunker → enricher → indexer`），聚焦各环节实现机制与已知问题点。
 >
-> 来源：2026-07-29 入库效果排查会话，经代码通读后整理落盘，避免仅存于对话历史而丢失。代码以 `rag-core/.../ingestion/` 为准。
+> 来源：2026-07-29 入库效果排查会话，经代码通读后整理落盘，避免仅存于对话历史而丢失。代码以 `app/.../ingestion/` 为准。
 
 ---
 
@@ -218,7 +218,7 @@ embedding = content 的向量（1024维，仅原始正文语义）
 | # | 问题 | 影响 | 严重度 |
 |---|---|---|---|
 | **1** | **CONTEXT_ENHANCE 无效**（enhancedText 不被 block-aware 消费） | Enhancer 白调 LLM，格式修复零效果；PDF 的格式问题（乱码/错位）一路传到向量 | ⚠️⚠️⚠️ |
-| **2** | **向量只有原始正文** | 召回只靠正文语义，标题/摘要/关键词帮不上；ragent 靠 LightRAG 补，springai-rag 没有 | ⚠️⚠️ |
+| **2** | **向量只有原始正文** | 召回只靠正文语义，标题/摘要/关键词帮不上；ragent 靠 LightRAG 补，customer-platform 没有 | ⚠️⚠️ |
 | **3** | **MinerU 表格成 HtmlBlock→ParagraphBlock** | 表格被当 HTML 文本段落，不进 TableChunker 的 key-value 优化；表格检索差 | ⚠️⚠️ |
 | **4** | **MinerU 解析质量**（标题 `??` 乱码等） | 垃圾进垃圾出，污染 blocks→chunk→向量 | ⚠️⚠️ |
 | **5** | **表格 embeddingText 未用于向量化** | 表格用 markdown 向量（位置对齐，模型读不懂列名↔值） | ⚠️ |

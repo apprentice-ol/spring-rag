@@ -1,4 +1,4 @@
-# springai-rag 一键部署（面向 2核4G 服务器）。
+# customer-platform 一键部署（面向 2核4G 服务器）。
 # 默认 MQ：Redis（rag.mq.type=redis），不部署 RocketMQ。
 # 启动：  docker compose up -d --build
 # 访问：  http://<host>:9081/api/rag/
@@ -20,7 +20,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     # 宿主端口映射已移除：容器间通信用服务名 postgres:5432；服务器已有 PG 占 5432 时避免冲突。
     # 需要宿主机访问（如 Navicat 运维）时取消下行注释并视冲突改端口：
-    # ports: ["5433:5432"]
+    ports: ["5433:5432"]
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rag-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
     # 宿主端口映射已移除：容器间通信用服务名 redis:6379，应用无需宿主端口。
     # 服务器已有 Redis/其他服务占用 6379 时避免 bind: address already in use。
     # 需要宿主机直接访问（如运维 redis-cli）时取消下行注释并视冲突改端口：
@@ -87,7 +87,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: docker/app/Dockerfile
+      dockerfile: Dockerfile
     container_name: rag-app
     depends_on:
       postgres: { condition: service_healthy }
@@ -124,6 +124,13 @@ services:
       # ---- OpenObserve 日志推送 + 日志诊断 ----
       # 容器内必须指向 compose 的 openobserve 服务（默认 localhost 在容器里连不上自己）
       OPENOBSERVE_URL: http://openobserve:5080/api/default
+      # ---- OpenObserve 展示账号（前端「链路追踪」页）----
+      # 不设 OO_VIEWER_* 时回退 ZO_ROOT_USER_*（.env 里的 OO 管理员，与 openobserve 服务共用）；
+      # 空串由后端 firstNonBlank 级联容错，不会遮蔽下一级
+      OO_VIEWER_EMAIL: ${OO_VIEWER_EMAIL:-}
+      OO_VIEWER_PASSWORD: ${OO_VIEWER_PASSWORD:-}
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-}
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-}
       # ---- OpenObserve trace 上报（4G 偏紧可设 0.0 关闭）----
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "1.0"
       # OTLP 基础地址，不含信号路径；应用会自动拼 /v1/traces、/v1/logs、/v1/metrics

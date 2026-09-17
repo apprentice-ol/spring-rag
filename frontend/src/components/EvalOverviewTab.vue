@@ -100,7 +100,7 @@ function fmtDate(t: string | undefined | null): string {
       <div class="filter-row">
         <div class="filter-item">
           <span class="filter-label">数据集</span>
-          <a-select v-model:value="selectedDatasetId" placeholder="选择数据集" style="width: 260px">
+          <a-select v-model:value="selectedDatasetId" placeholder="选择数据集" class="w-lg">
             <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">
               {{ d.name }}（{{ d.itemCount ?? 0 }} 题）
             </a-select-option>
@@ -112,7 +112,11 @@ function fmtDate(t: string | undefined | null): string {
 
     <a-spin :spinning="loading">
       <a-empty v-if="!selectedDatasetId" description="请选择数据集" />
-      <a-empty v-else-if="!latest" description="该数据集暂无已完成的运行" />
+      <a-empty v-else-if="!latest">
+        <template #description>
+          <span>该数据集暂无已完成的运行，先到「数据集」或「运行记录」触发一次评测</span>
+        </template>
+      </a-empty>
       <template v-else>
         <!-- KPI 卡片:大等宽数字 + 阶段徽标 + 环比;点击切换下方趋势指标 -->
         <div class="kpi-grid">
@@ -201,10 +205,12 @@ function fmtDate(t: string | undefined | null): string {
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 .kpi-card:hover {
   border-color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px var(--color-shadow-md);
 }
 /* 选中态:当前趋势指标对应的 KPI 卡 */
 .kpi-card.active {
@@ -236,7 +242,7 @@ function fmtDate(t: string | undefined | null): string {
   background: var(--color-primary-light);
 }
 .kpi-stage.stage-sort {
-  color: #b07810;
+  color: var(--color-warning-ink);
   background: var(--color-signal-bg);
 }
 .kpi-value {
@@ -305,7 +311,7 @@ function fmtDate(t: string | undefined | null): string {
   font-size: 12px;
 }
 .trend-row:hover {
-  background: #f7f9fb;
+  background: var(--color-hover-bg);
 }
 .trend-row.latest {
   background: var(--color-primary-light);

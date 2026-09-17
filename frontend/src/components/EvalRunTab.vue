@@ -4,6 +4,7 @@ import { ReloadOutlined, EyeOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { listRuns, retryRun, type EvalRun } from '../api/eval'
 import { parseAggregate, fmtScore, statusText, paradigmLabel } from './evalShared'
+import { RUN_STATUS_COLOR as STATUS_COLOR, fmtTime } from '../utils/format'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
 const props = defineProps<{ datasets: { id: number; name: string }[] }>()
@@ -116,13 +117,6 @@ const columns = useResizableColumns([
   { title: '时间', dataIndex: 'finishedAt', key: 'finishedAt', width: 160 },
   { title: '操作', key: 'action', width: 100, fixed: 'right' as const },
 ])
-
-const STATUS_COLOR: Record<string, string> = {
-  DONE: 'green',
-  RUNNING: 'processing',
-  PENDING: 'orange',
-  FAILED: 'red',
-}
 </script>
 
 <template>
@@ -136,7 +130,7 @@ const STATUS_COLOR: Record<string, string> = {
             v-model:value="filterDataset"
             placeholder="全部"
             allow-clear
-            style="width: 200px"
+            class="w-md"
             @change="load"
           >
             <a-select-option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.name }}</a-select-option>
@@ -148,7 +142,7 @@ const STATUS_COLOR: Record<string, string> = {
             v-model:value="filterStatus"
             placeholder="全部"
             allow-clear
-            style="width: 140px"
+            class="w-sm"
             @change="load"
           >
             <a-select-option value="DONE">完成</a-select-option>
@@ -197,8 +191,15 @@ const STATUS_COLOR: Record<string, string> = {
             <a-tag v-if="record.paradigm" color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
             <span v-else class="muted">-</span>
           </template>
-          <template v-else-if="column.key === 'done'">{{ record.done }}/{{ record.total ?? '-' }}</template>
-          <template v-else-if="column.key === 'finishedAt'">{{ record.finishedAt || record.startedAt || '—' }}</template>
+          <template v-else-if="column.key === 'done'">
+            <span class="num">{{ record.done }}/{{ record.total ?? '—' }}</span>
+          </template>
+          <template v-else-if="column.key === 'keyMetrics'">
+            <span class="num key-metrics">{{ record.keyMetrics }}</span>
+          </template>
+          <template v-else-if="column.key === 'finishedAt'">
+            <span class="num">{{ fmtTime(record.finishedAt || record.startedAt) }}</span>
+          </template>
           <template v-else-if="column.key === 'action'">
             <a-button type="link" size="small" @click="openDetail(record.id)">
               <template #icon><EyeOutlined /></template>详情
@@ -218,19 +219,20 @@ const STATUS_COLOR: Record<string, string> = {
   display: flex;
   flex-direction: column;
 }
-/* 表格卡内分页贴底（antd 内置分页留白收紧） */
-.eval-run-tab :deep(.ant-pagination) {
-  margin: 8px 16px 12px 8px;
-}
+/* 分页外边距全站统一（style.css），此处不再覆盖 */
 .run-id {
   color: var(--color-primary);
   font-weight: 600;
   cursor: pointer;
+  font-family: var(--font-display);
 }
 .run-id:hover {
   text-decoration: underline;
 }
 .muted {
   color: var(--color-ink-tertiary);
+}
+.key-metrics {
+  font-size: 12.5px;
 }
 </style>

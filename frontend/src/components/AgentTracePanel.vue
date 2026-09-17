@@ -4,7 +4,8 @@ import { ReloadOutlined, SearchOutlined, EyeOutlined, CopyOutlined } from '@ant-
 import { listAgentTraces, agentTraceStats, parseSteps, toAgentTrace, type AgentTraceRecord, type AgentTraceStat } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
-import { PARADIGMS, paradigmLabel } from './evalShared'
+import { activeParadigms, paradigmLabel } from './evalShared'
+import { fmtLatency, fmtTime } from '../utils/format'
 import type { AgentTrace } from '../api/chat'
 import AgentTraceTree from './AgentTraceTree.vue'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
@@ -56,10 +57,6 @@ function rewriteTrail(r: AgentTraceRecord): string {
     .map((s) => s.inputSummary)
   return retrieves.length ? retrieves.join('  →  ') : '—'
 }
-function fmtLatency(ms: number | null): string {
-  if (ms == null) return '-'
-  return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's'
-}
 function openDetail(r: AgentTraceRecord) {
   selected.value = toAgentTrace(r)
 }
@@ -88,10 +85,10 @@ function doReset() {
 }
 
 const columns = useResizableColumns([
-  { title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 110 },
-  { title: '问题', dataIndex: 'question', key: 'question', ellipsis: true },
+  { title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 180 },
+  { title: '问题', dataIndex: 'question', key: 'question', width: 280, ellipsis: true },
   { title: '步数', key: 'stepCount', width: 70, align: 'center' as const },
-  { title: '改写轨迹（retrieve 的 query 序列）', key: 'trail', ellipsis: true },
+  { title: '改写轨迹（retrieve 的 query 序列）', key: 'trail', width: 240, ellipsis: true },
   { title: 'LLM', key: 'llm', width: 60, align: 'center' as const },
   { title: '耗时', key: 'latency', width: 80 },
   { title: 'traceId', dataIndex: 'traceId', key: 'traceId', width: 250, ellipsis: true },
@@ -105,6 +102,7 @@ const columns = useResizableColumns([
     <!-- 页头 -->
     <div class="page-header">
       <div class="page-header-text">
+        <span class="eyebrow">Agent Trace</span>
         <h1 class="page-title">Agent 轨迹分析</h1>
         <p class="page-desc">线上 chat 的 agent 思考流程（thought/action）落库于此——看多步决策规律（如 react 拼写纠错/关键词重组），反哺 naive</p>
       </div>
@@ -124,13 +122,15 @@ const columns = useResizableColumns([
       <div class="filter-row">
         <div class="filter-item">
           <span class="filter-label">范式</span>
-          <a-select v-model:value="filterParadigm" placeholder="全部范式" allow-clear style="width: 140px" @change="doSearch">
-            <a-select-option v-for="p in PARADIGMS" :key="p.value" :value="p.value">{{ p.label }}</a-select-option>
+          <a-select v-model:value="filterParadigm" placeholder="全部范式" allow-clear class="w-sm" @change="doSearch">
+            <a-select-option v-for="p in activeParadigms()" :key="p.value" :value="p.value">
+              {{ p.label }} · {{ p.desc }}
+            </a-select-option>
           </a-select>
         </div>
         <div class="filter-item">
           <span class="filter-label">关键词</span>
-          <a-input v-model:value="keyword" placeholder="问题关键词" allow-clear style="width: 220px" @press-enter="doSearch">
+          <a-input v-model:value="keyword" placeholder="问题关键词" allow-clear class="w-md" @press-enter="doSearch">
             <template #prefix><SearchOutlined /></template>
           </a-input>
         </div>
@@ -159,21 +159,23 @@ const columns = useResizableColumns([
         :pagination="false"
         size="middle"
         row-key="id"
-        :scroll="{ x: 1000 }"
+        :scroll="{ x: 1400 }"
       >
         <template #headerCell="{ column }">
           <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="columns">{{ column.title }}</span>
         </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'paradigm'">
-            <a-tag color="purple">{{ paradigmLabel(record.paradigm) }}</a-tag>
+            <a-tag color="purple" class="paradigm-tag" :title="paradigmLabel(record.paradigm)">
+              {{ paradigmLabel(record.paradigm) }}
+            </a-tag>
           </template>
-          <template v-else-if="column.key === 'stepCount'">{{ stepCount(record) }}</template>
+          <template v-else-if="column.key === 'stepCount'"><span class="num">{{ stepCount(record) }}</span></template>
           <template v-else-if="column.key === 'trail'">
             <a-tooltip :title="rewriteTrail(record)"><span class="trail">{{ rewriteTrail(record) }}</span></a-tooltip>
           </template>
-          <template v-else-if="column.key === 'llm'">{{ record.llmCallCount ?? '-' }}</template>
-          <template v-else-if="column.key === 'latency'">{{ fmtLatency(record.totalLatencyMs) }}</template>
+          <template v-else-if="column.key === 'llm'"><span class="num">{{ record.llmCallCount ?? '—' }}</span></template>
+          <template v-else-if="column.key === 'latency'"><span class="num">{{ fmtLatency(record.totalLatencyMs) }}</span></template>
           <template v-else-if="column.key === 'traceId'">
             <template v-if="record.traceId">
               <a-tooltip :title="'点击查看 OpenObserve 完整链路\n' + record.traceId">
@@ -185,7 +187,7 @@ const columns = useResizableColumns([
             </template>
             <span v-else class="trace-id-muted">—</span>
           </template>
-          <template v-else-if="column.key === 'time'">{{ record.createTime?.replace('T', ' ').slice(0, 19) }}</template>
+          <template v-else-if="column.key === 'time'"><span class="num">{{ fmtTime(record.createTime) }}</span></template>
           <template v-else-if="column.key === 'action'">
             <a-button type="link" size="small" @click="openDetail(record)"><EyeOutlined />查看</a-button>
           </template>
@@ -242,6 +244,14 @@ const columns = useResizableColumns([
 }
 .stat-avg { font-size: 11px; color: var(--color-ink-tertiary); }
 .trail { color: var(--color-ink-secondary); font-size: 12px; }
+/* 范式标签：列再窄也不挤压「问题」列（超长标签省略号 + title 兜底） */
+.paradigm-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 .trace-id {
   font-family: var(--font-display);
   font-size: 12px;
