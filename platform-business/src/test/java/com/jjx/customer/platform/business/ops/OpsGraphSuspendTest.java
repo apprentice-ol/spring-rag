@@ -1,5 +1,9 @@
 package com.jjx.customer.platform.business.ops;
 
+import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
+
+import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,10 +18,10 @@ import com.agentframework.runtime.session.Input;
 import com.agentframework.runtime.session.Session;
 import com.agentframework.runtime.session.StartOptions;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jjx.customer.platform.business.engine.OutcomeKind;
-import com.jjx.customer.platform.business.engine.RunOutcomeMapper;
-import com.jjx.customer.platform.business.ops.stages.SharedDeps;
-import com.jjx.customer.platform.business.ops.stages.StageModule;
+import com.jjx.customer.platform.business.engine.outcome.OutcomeKind;
+import com.jjx.customer.platform.business.engine.outcome.RunOutcomeMapper;
+import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
+import com.jjx.customer.platform.business.ops.workflow.stages.StageModule;
 import com.jjx.customer.platform.business.ops.tool.CurrentTimeTool;
 import com.jjx.customer.platform.business.ops.tool.ValidateRequestTool;
 import java.time.Clock;

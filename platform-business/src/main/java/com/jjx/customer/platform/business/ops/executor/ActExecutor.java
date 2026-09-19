@@ -1,4 +1,5 @@
 package com.jjx.customer.platform.business.ops.executor;
+import com.jjx.customer.platform.business.ops.node.AskMissingExecutor;
 
 import com.agentframework.crosscutting.interceptor.InterceptorAttributes;
 import com.agentframework.definition.node.NodeDefinition;
@@ -10,8 +11,8 @@ import com.agentframework.engine.policy.PolicyAttributes;
 import com.agentframework.engine.toolexecutor.*;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.agentframework.runtime.session.Message;
-import com.jjx.customer.platform.business.ops.OpsDiagnoseWorkflowFactory;
-import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
+import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;

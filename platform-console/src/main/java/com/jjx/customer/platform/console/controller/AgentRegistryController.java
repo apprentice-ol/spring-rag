@@ -3,7 +3,7 @@ package com.jjx.customer.platform.console.controller;
 import com.jjx.customer.platform.business.engine.AgentCatalog;
 import com.jjx.customer.platform.business.ops.OpsDiagnosisStages;
 
-import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.config.properties.AgentProperties;
 import com.jjx.customer.platform.knowledge.tools.RetrievalTool;
 import lombok.RequiredArgsConstructor;

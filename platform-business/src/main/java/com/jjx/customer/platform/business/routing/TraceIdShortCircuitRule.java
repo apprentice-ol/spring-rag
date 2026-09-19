@@ -2,7 +2,7 @@ package com.jjx.customer.platform.business.routing;
 import com.jjx.customer.platform.business.engine.AgentCatalog;
 
 
-import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.routing.RouteContext;
 import com.jjx.customer.platform.routing.RouteDecision;
 import com.jjx.customer.platform.routing.RouteRule;

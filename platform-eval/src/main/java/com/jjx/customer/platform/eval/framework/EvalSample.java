@@ -1,8 +1,8 @@
 package com.jjx.customer.platform.eval.framework;
-import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
+import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 
 import com.jjx.customer.platform.knowledge.retrieval.RetrievedChunk;
-import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
+import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 
 import java.util.List;
 

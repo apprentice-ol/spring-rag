@@ -12,7 +12,7 @@ import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import com.jjx.ai.llmobservability.observation.span.TelemetrySpan;
 import com.jjx.customer.platform.business.FrameworkKnowledgeRunner;
 import com.jjx.customer.platform.business.knowledge.RewritePolicy;
-import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
+import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 import com.jjx.customer.platform.common.exception.ClientException;
 import com.jjx.customer.platform.config.properties.AgentProperties;
 import com.jjx.customer.platform.config.properties.ChatProperties;

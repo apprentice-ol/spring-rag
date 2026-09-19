@@ -1,7 +1,7 @@
 package com.jjx.customer.platform.eval.framework.scorer;
-import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
+import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 
-import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
+import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 import com.jjx.customer.platform.eval.framework.EvalSample;
 import com.jjx.customer.platform.eval.framework.EvalScore;
 import com.jjx.customer.platform.eval.framework.EvalScorer;

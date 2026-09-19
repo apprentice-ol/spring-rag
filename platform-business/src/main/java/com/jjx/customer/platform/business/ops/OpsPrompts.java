@@ -1,4 +1,5 @@
 package com.jjx.customer.platform.business.ops;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 
 import java.util.List;
 
