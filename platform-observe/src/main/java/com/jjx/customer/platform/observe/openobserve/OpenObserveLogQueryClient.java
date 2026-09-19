@@ -1,6 +1,5 @@
-package com.jjx.customer.platform.business.ops.openobserve;
+package com.jjx.customer.platform.observe.openobserve;
 
-import com.jjx.customer.platform.business.ops.OpsProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -19,32 +18,35 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * OpenObserve 日志查询客户端（T1 数据面）：{@code POST /api/{org}/_search}，
+ * OpenObserve 日志查询客户端（数据面）：{@code POST /api/{org}/_search}，
  * Basic auth，SQL-only（DataFusion），时间戳为 epoch 微秒。
  *
- * <p>两条查询路径对齐参考实现：traceId 精查（{@code WHERE (trace_id='..' OR traceid='..')}
+ * <p>两条查询路径：traceId 精查（{@code WHERE (trace_id='..' OR traceid='..')}
  * 回溯 lookbackDays）与时间窗模糊查（SQL LIMIT 与 body size 同值，钳制 [1,200]）。
- * hits 是扁平记录对象（无 _source 包装），逐条整体转 Map。失败语义与参考一致：
+ * hits 是扁平记录对象（无 _source 包装），逐条整体转 Map。失败语义：
  * HTTP 非 2xx / 超时 / 异常一律返回空列表并 warn，绝不向调用方抛。</p>
+ *
+ * <p>不做 Spring bean：端点配置由调用方实现 {@link OpenObserveEndpoint} 自带
+ * （不同消费方配置源不同），构造后自行持有。</p>
  */
-public class OpenObserveClient {
+public class OpenObserveLogQueryClient {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenObserveClient.class);
+    private static final Logger log = LoggerFactory.getLogger(OpenObserveLogQueryClient.class);
 
-    /** 时间窗模糊查的 limit 硬上限（对齐参考实现）。 */
+    /** 时间窗模糊查的 limit 硬上限。 */
     public static final int MAX_WINDOW_LIMIT = 200;
 
-    private final OpsProperties.OpenObserve props;
+    private final OpenObserveEndpoint props;
 
     private final HttpClient http;
 
     private final ObjectMapper objectMapper;
 
     /**
-     * @param props        OpenObserve 配置
+     * @param props        OpenObserve 端点配置（调用方配置源）
      * @param objectMapper JSON 解析
      */
-    public OpenObserveClient(OpsProperties.OpenObserve props, ObjectMapper objectMapper) {
+    public OpenObserveLogQueryClient(OpenObserveEndpoint props, ObjectMapper objectMapper) {
         this.props = props;
         this.objectMapper = objectMapper;
         this.http = HttpClient.newBuilder()
@@ -92,7 +94,7 @@ public class OpenObserveClient {
         long endMs = System.currentTimeMillis();
         long endMicros = endMs * 1000L;
         long startMicros = endMicros - props.lookbackDays() * 86_400_000_000L;
-        // 精查时间窗是回溯窗口（lookbackDays），limit 写在 SQL 里，body 不带 from/size —— 对齐参考 jar 实现
+        // 精查时间窗是回溯窗口（lookbackDays），limit 写在 SQL 里，body 不带 from/size
         String body = "{\"query\":{\"sql\":" + jsonQuote(sql)
                 + ",\"start_time\":" + startMicros + ",\"end_time\":" + endMicros + "}}";
         return search(body);
@@ -178,7 +180,7 @@ public class OpenObserveClient {
         return "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** SQL 单引号转义（对齐参考 {@code sqlEscape}：单引号翻倍）。 */
+    /** SQL 单引号转义（单引号翻倍）。 */
     public static String sqlEscape(String value) {
         return value == null ? "" : value.replace("'", "''");
     }

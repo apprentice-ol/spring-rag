@@ -74,7 +74,7 @@ public record OpsProperties(
             String messageField,
             String levelField,
             String traceIdField,
-            String serviceField) {
+            String serviceField) implements com.jjx.customer.platform.observe.openobserve.OpenObserveEndpoint {
 
         /** @return 正文列名，缺省 body */
         public String messageFieldOrDefault() {

@@ -7,7 +7,7 @@ import com.agentframework.engine.toolexecutor.ToolContext;
 import com.agentframework.engine.toolexecutor.ToolInput;
 import com.agentframework.engine.toolexecutor.ToolResult;
 import com.jjx.customer.platform.business.ops.OpsProperties;
-import com.jjx.customer.platform.business.ops.openobserve.OpenObserveClient;
+import com.jjx.customer.platform.observe.openobserve.OpenObserveLogQueryClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,7 +38,7 @@ public class QueryLogsTool implements Tool {
 
     private static final long DEFAULT_WINDOW_MS = 30 * 60_000L;
 
-    private final OpenObserveClient client;
+    private final OpenObserveLogQueryClient client;
 
     private final OpsProperties.LogsCache cacheProps;
 
@@ -52,7 +52,7 @@ public class QueryLogsTool implements Tool {
      * @param cacheProps  缓存配置
      * @param fields      字段名配置（正文/级别/链路列）
      */
-    public QueryLogsTool(OpenObserveClient client, OpsProperties.LogsCache cacheProps,
+    public QueryLogsTool(OpenObserveLogQueryClient client, OpsProperties.LogsCache cacheProps,
             OpsProperties.OpenObserve fields) {
         this.client = client;
         this.cacheProps = cacheProps;
@@ -63,7 +63,7 @@ public class QueryLogsTool implements Tool {
      * @param client     OpenObserve 客户端
      * @param cacheProps 缓存配置
      */
-    public QueryLogsTool(OpenObserveClient client, OpsProperties.LogsCache cacheProps) {
+    public QueryLogsTool(OpenObserveLogQueryClient client, OpsProperties.LogsCache cacheProps) {
         this(client, cacheProps, null);
     }
 
@@ -137,11 +137,11 @@ public class QueryLogsTool implements Tool {
         List<String> conditions = new ArrayList<>();
         if (!keyword.isBlank()) {
             conditions.add(config().messageFieldOrDefault() + " LIKE '%"
-                    + OpenObserveClient.sqlEscape(keyword) + "%'");
+                    + OpenObserveLogQueryClient.sqlEscape(keyword) + "%'");
         }
         if (!level.isBlank()) {
             conditions.add(config().levelFieldOrDefault() + " = '"
-                    + OpenObserveClient.sqlEscape(level.toUpperCase()) + "'");
+                    + OpenObserveLogQueryClient.sqlEscape(level.toUpperCase()) + "'");
         }
         // 时间窗键：start/end 落分钟桶（end=now 不平整会永远 miss；分钟桶与 60s TTL 对齐）
         String key = LogCacheKeys.logsKey("", LogCacheKeys.floorMinute(startMs),

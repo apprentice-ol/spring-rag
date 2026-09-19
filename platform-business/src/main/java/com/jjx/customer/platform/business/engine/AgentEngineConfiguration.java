@@ -32,7 +32,7 @@ import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactor
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.OpsProperties;
 import com.jjx.customer.platform.business.workflow.common.ActExecutor;
-import com.jjx.customer.platform.business.ops.openobserve.OpenObserveClient;
+import com.jjx.customer.platform.observe.openobserve.OpenObserveLogQueryClient;
 import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
 import com.jjx.customer.platform.business.ops.workflow.stages.StageModule;
 import com.jjx.customer.platform.business.ops.tool.CurrentTimeTool;
@@ -132,7 +132,7 @@ public class AgentEngineConfiguration {
                 chatProperties.getContextTopK(), minRelevanceScore);
         ValidateRequestTool validateTool = new ValidateRequestTool(objectMapper);
         CurrentTimeTool currentTimeTool = new CurrentTimeTool();
-        OpenObserveClient ooClient = new OpenObserveClient(opsProperties.openobserveOrDefault(), objectMapper);
+        OpenObserveLogQueryClient ooClient = new OpenObserveLogQueryClient(opsProperties.openobserveOrDefault(), objectMapper);
         QueryLogsTool queryLogsTool = new QueryLogsTool(ooClient, opsProperties.logsCacheOrDefault(),
                 opsProperties.openobserveOrDefault());
         sharedRegistry.register(retrievalTool);
