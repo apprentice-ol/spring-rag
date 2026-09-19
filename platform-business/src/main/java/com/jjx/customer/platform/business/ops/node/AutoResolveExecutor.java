@@ -71,12 +71,16 @@ public class AutoResolveExecutor implements NodeExecutor {
      * @param mapper        JSON 解析
      * @param clock         时钟（时间换算与缺省窗口，测试可注入固定值）
      */
+    /** auto-resolve 骨架正文来源（绑定包覆盖优先，classpath 兜底；null 时跳过推断层） */
+    private final java.util.function.Function<String, String> promptBody;
+
     public AutoResolveExecutor(SingleTurnModel inferModel, DefaultToolExecutor toolExecutor,
-            ObjectMapper mapper, Clock clock) {
+            ObjectMapper mapper, Clock clock, java.util.function.Function<String, String> promptBody) {
         this.inferModel = inferModel;
         this.toolExecutor = toolExecutor;
         this.mapper = mapper;
         this.clock = clock;
+        this.promptBody = promptBody;
     }
 
     @Override
@@ -198,8 +202,12 @@ public class AutoResolveExecutor implements NodeExecutor {
             String nowText = now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"))
                     + "（" + now.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL,
                             java.util.Locale.CHINESE) + "，" + java.time.ZoneId.systemDefault().getId() + "）";
+            String template = promptBody.apply(OpsPrompts.AUTO_RESOLVE_ASSET);
+            if (template == null || template.isBlank()) {
+                return;
+            }
             String answer = inferModel.ask("你是运维诊断的上下文补全器。",
-                    OpsPrompts.composeAutoResolve(missingLines, confirmed, question, nowText));
+                    OpsPrompts.renderAutoResolve(template, missingLines, confirmed, question, nowText));
             JsonNode array = readJsonArray(answer);
             if (array == null) {
                 return;

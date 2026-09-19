@@ -118,7 +118,7 @@ class OpsGraphSuspendTest {
                 "get_time", "get_time()：当前时间");
         SharedDeps deps = new SharedDeps(registry, toolExecutor, new ObjectMapper(), askModel,
                 Clock.systemDefaultZone(), 24, schemaText, validateTool,
-                key -> null, promptRegister);
+                new com.jjx.customer.platform.config.prompt.PromptStore()::raw, promptRegister);
 
         Map<String, StageModule> modules = OpsDiagnoseWorkflowFactory.modules();
         com.agentframework.definition.workflow.WorkflowDefinition workflow = OpsDiagnoseWorkflowFactory.create();

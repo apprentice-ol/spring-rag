@@ -18,40 +18,36 @@ import org.slf4j.LoggerFactory;
 public class OpsSlotExtractor {
 
     /**
-     * 抽槽 system prompt。
-     *
-     * <p>与参考实现的 {@code workflow/ops_diagnose_v2/slot-extract} 的一处**有意偏离**：
+     * 抽槽 system prompt 外置于 {@link #SLOT_EXTRACT_ASSET}，与参考实现的同名资产有一处**有意偏离**：
      * 参考实现的第一条规则是「只抽取消息中明确给出的信息，宁缺勿猜」，实测过于保守——
      * 用户说"发票冲红接口报错"时，模型会因为"发票冲红"不是接口路径而放过 {@code interface}，
      * 于是回头追问用户刚说过的东西。改为「能确定的线索一律抽出来，宁多勿漏」，
-     * 把模糊线索也抽出来交给后续阶段（真要不准，第二阶段还能用 {@code ask_user} 纠正）。</p>
+     * 把模糊线索也抽出来交给后续阶段（真要不准，第二阶段还能用 {@code ask_user} 纠正）。
+     * 偏离已落进 md 文件正文（class 内不再保留副本）。
      */
-    static final String SLOT_EXTRACT_PROMPT = """
-            你是流程的信息收集器，目标是从用户消息里**尽可能多地**提取已知线索，减少后续追问。
-            输出一行 JSON（不要 markdown 围栏、不要解释）：以各槽位名为 key，确实无法确定的槽位填 null。
-
-            ## 规则
-            1. **能从消息推断出来的就填**：宁多勿漏。用户用口语描述（"发票冲红接口""昨天下午"）也算线索
-            2. 接口的**业务名称**与路径同等有效：用户说"发票冲红""下单接口"就照原话填 interface
-            3. 相对时间照原样填（"最近1小时""今天下午2点"），不要换算、不要丢弃
-            4. 多条信息并存时全部抽取
-            5. 已在「已确认槽位」中的值不要重复抽取（保持原值，历史轮次已确认的优先）
-            6. 只有用户**完全没提**、也无法从上下文推断的槽位才填 null
-            7. 槽位取值说明见「槽位目录」""";
 
     private static final Logger log = LoggerFactory.getLogger(OpsSlotExtractor.class);
+
+    /** 抽槽 system prompt 的资产 key（正文 = prompts/workflow/ops_diagnose_v2/slot-extract.md）。 */
+    public static final String SLOT_EXTRACT_ASSET = "workflow/ops_diagnose_v2/slot-extract";
 
     private final SingleTurnModel model;
 
     private final ObjectMapper objectMapper;
 
+    /** 抽槽正文来源（绑定包覆盖优先，classpath 兜底；null 时抽取直接跳过） */
+    private final java.util.function.Function<String, String> promptBody;
+
     /**
      * @param model        模型入口（null 表示不可用，抽取直接跳过）
      * @param objectMapper JSON 解析
+     * @param promptBody   prompt key → 正文
      */
-    public OpsSlotExtractor(SingleTurnModel model, ObjectMapper objectMapper) {
+    public OpsSlotExtractor(SingleTurnModel model, ObjectMapper objectMapper,
+            java.util.function.Function<String, String> promptBody) {
         this.model = model;
         this.objectMapper = objectMapper;
+        this.promptBody = promptBody;
     }
 
     /** @return 模型是否可用 */
@@ -73,7 +69,11 @@ public class OpsSlotExtractor {
         if (model == null || isBlank(text) || !anyBlank) {
             return out;
         }
-        String system = SLOT_EXTRACT_PROMPT
+        String base = promptBody == null ? null : promptBody.apply(SLOT_EXTRACT_ASSET);
+        if (base == null || base.isBlank()) {
+            return out;
+        }
+        String system = base
                 + "\n\n## 槽位目录\n" + OpsSlotCatalog.renderForExtraction()
                 + "\n\n## 已确认槽位（不要重复抽取，保持原值）\n" + toJson(confirmed);
         Map<String, Object> extracted;

@@ -88,6 +88,7 @@ public class EvalRunner {
     /** 评测维度注册表（doc 集适配器 + 所有 EvalScorer bean）与输出 sink（落库 + Langfuse 推送） */
     private final EvalScorerRegistry scorerRegistry;
     private final List<EvalResultSink> resultSinks;
+    private final com.jjx.customer.platform.config.prompt.PromptStore promptStore;
     /** 线上同款上下文组装器：answerEval 的生成输入与生产 streamRagResponse 完全一致（评测即真实） */
     private final RagContextAssembler ragContextAssembler;
     /** 单条重评 attempt 分配的分布式锁（并发同 item 重评防 attempt 冲突） */
@@ -288,15 +289,14 @@ public class EvalRunner {
 
     // ---------- 答案质量评测（生成在编排层，judge 见 AnswerJudgeScorer） ----------
 
-    private static final String ANSWER_GEN_PROMPT = """
-            Answer the question based ONLY on the provided documents.
-            If the documents do not contain the answer, say you don't know. Answer in English, concisely.""";
+    /** 评测答题 system prompt 资产 key（正文 = prompts/eval/answer-gen.md；统一简化提示，跨 run 可比）。 */
+    static final String ANSWER_GEN_ASSET = "eval/answer-gen";
 
     /** 生成答案（裸 client，与线上 ragChatClient 的系统提示不同——评测基准用统一简化提示，跨 run 可比；
      *  输入=线上同款 RagContext 文本，与生产"最后推送 LLM 的数据"一致）。 */
     private String generateAnswer(String question, String contextText) {
         return ingestionChatClient.prompt()
-                .system(ANSWER_GEN_PROMPT)
+                .system(promptStore.raw(ANSWER_GEN_ASSET))
                 .user(contextText + "\n\nQuestion: " + question)
                 .call()
                 .content();

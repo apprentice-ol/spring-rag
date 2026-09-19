@@ -265,21 +265,20 @@ public class QueryRewriter {
         return spellFix(query);
     }
 
-    /** 拼写纠正约束 prompt：只修错拼、绝不重述/扩写/翻译（输出贴近原文，负优化风险远小于语义改写）。 */
-    private static final String SPELL_FIX_PROMPT = """
-            Fix only the spelling and typos in the user's query.
-            Rules: keep the original language, word order and meaning; do NOT rephrase,
-            expand, answer, or translate; output ONLY the corrected query on a single line.
-            If nothing is misspelled, output the query unchanged.""";
+    /** 拼写纠正约束 prompt 资产 key（正文 = prompts/chat/spell-fix.md：只修错拼、不重述/扩写/翻译）。 */
+    public static final String SPELL_FIX_ASSET = "chat/spell-fix";
 
     /**
      * 英文 query 拼写纠正（保守）：失败/超时/输出异常时返回原文，不阻断检索。
      * 与被禁用的语义改写的区别：纠错输出与原文逐词对应，只替换错拼词。
      */
     private String spellFix(String query) {
+        if (promptStore == null) {
+            return query;
+        }
         try {
             String response = LlmCallGuard.call(() -> chatClient.prompt()
-                    .system(SPELL_FIX_PROMPT)
+                    .system(promptStore.raw(SPELL_FIX_ASSET))
                     .user(query)
                     .call()
                     .content(), REWRITE_TIMEOUT, "拼写纠正");

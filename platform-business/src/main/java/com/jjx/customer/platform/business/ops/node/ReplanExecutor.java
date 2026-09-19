@@ -8,7 +8,6 @@ import com.agentframework.engine.core.NodeContext;
 import com.agentframework.engine.core.NodeResult;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
-import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,6 +49,9 @@ public class ReplanExecutor implements NodeExecutor {
 
     private final ObjectMapper objectMapper;
 
+    /** replan 裁决正文来源（绑定包覆盖优先，classpath 兜底；null = 确定性降级路径） */
+    private final java.util.function.Function<String, String> promptBody;
+
     /**
      * @param stagePrefix   刚结束阶段的槽位前缀（inv/res）
      * @param stageLabel    刚结束阶段名（裁决 user 消息展示）
@@ -58,10 +60,11 @@ public class ReplanExecutor implements NodeExecutor {
      * @param continueTarget continue 时的下一阶段节点
      * @param model         裁决模型（null 不可用时按 continue）
      * @param objectMapper  JSON 解析
+     * @param promptBody    prompt key → 正文（读 workflow/ops_diagnose_v2/replan）
      */
     public ReplanExecutor(String stagePrefix, String stageLabel, String nextStageLabel,
             String adjustTarget, String continueTarget, SingleTurnModel model,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper, java.util.function.Function<String, String> promptBody) {
         this.stagePrefix = stagePrefix;
         this.stageLabel = stageLabel;
         this.nextStageLabel = nextStageLabel;
@@ -69,6 +72,7 @@ public class ReplanExecutor implements NodeExecutor {
         this.continueTarget = continueTarget;
         this.model = model;
         this.objectMapper = objectMapper;
+        this.promptBody = promptBody;
     }
 
     @Override
@@ -152,7 +156,7 @@ public class ReplanExecutor implements NodeExecutor {
         if (model == null) {
             return Verdict.continueOf("模型不可用，按骨架继续");
         }
-        String system = OpsPrompts.REPLAN
+        String system = promptBody.apply("workflow/ops_diagnose_v2/replan")
                 + "\n\n## 阶段序列\n" + stageLabel + " →（刚结束）\n" + nextStageLabel + " →（下一个）";
         String user = "上一阶段（" + stageLabel + "）产出：\n"
                 + (stageOutput.isBlank() ? "（无文本产出）" : stageOutput);

@@ -22,19 +22,17 @@ import java.util.List;
 @Component
 public class AnswerJudgeScorer implements EvalScorer {
 
-    private static final String JUDGE_PROMPT = """
-            You are a strict, impartial grader. Given the question, the retrieved documents (context),
-            the reference (golden) answer, and the system-generated answer, score two dimensions as integers 0-10:
-            1. correctness: factual agreement with the reference answer (key facts, numbers, entities).
-               Extra harmless details don't hurt; wrong facts do. Missing key facts lower the score.
-            2. faithfulness: whether the generated answer is strictly grounded in the retrieved documents
-               (every factual claim must be supported by the context; no fabricated facts beyond it).
-            Output ONLY one line of JSON: {"correctness": n, "faithfulness": n, "reason": "one short sentence"}""";
+    /** judge system prompt 资产 key（正文 = prompts/eval/answer-judge.md；classpath 管理，不在 binding 体系）。 */
+    public static final String JUDGE_ASSET = "eval/answer-judge";
 
     private final ChatClient ingestionChatClient;
 
-    public AnswerJudgeScorer(@Qualifier("ingestionChatClient") ChatClient ingestionChatClient) {
+    private final com.jjx.customer.platform.config.prompt.PromptStore promptStore;
+
+    public AnswerJudgeScorer(@Qualifier("ingestionChatClient") ChatClient ingestionChatClient,
+            com.jjx.customer.platform.config.prompt.PromptStore promptStore) {
         this.ingestionChatClient = ingestionChatClient;
+        this.promptStore = promptStore;
     }
 
     @Override
@@ -53,7 +51,7 @@ public class AnswerJudgeScorer implements EvalScorer {
         String contextText = sample.context() != null ? sample.context().text() : "";
         try {
             String response = ingestionChatClient.prompt()
-                    .system(JUDGE_PROMPT)
+                    .system(promptStore.raw(JUDGE_ASSET))
                     .user("Question: " + sample.question()
                             + "\n\nRetrieved documents:\n" + contextText
                             + "\n\nReference answer: " + expected

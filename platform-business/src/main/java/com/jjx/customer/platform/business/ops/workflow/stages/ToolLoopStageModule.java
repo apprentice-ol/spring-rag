@@ -134,10 +134,11 @@ public final class ToolLoopStageModule implements StageModule {
         List<String> toolLines = stage.tools().stream()
                 .map(line -> line.hint() != null ? line.hint() : deps.schemaText().get(line.toolId()))
                 .toList();
-        // think 模板正文：Prompt 资产（绑定包覆盖优先）优先，缺失回退内置常量（代码即基线的双保险）
+        // think 模板正文：Prompt 资产（绑定包覆盖优先，classpath 基线兜底）；正文缺失 = 资产文件被删，快速失败
         String body = deps.promptBody().apply(stage.promptAssetId());
         if (body == null || body.isBlank()) {
-            body = stage.systemPrompt();
+            throw new IllegalStateException("阶段 Prompt 资产缺失: " + stage.promptAssetId()
+                    + "（classpath prompts/ 或 DB 绑定包必须提供）");
         }
         deps.promptRegister().accept(stage.promptAssetId(),
                 OpsPrompts.compose(body, toolLines, "scratchpad"));
@@ -152,7 +153,8 @@ public final class ToolLoopStageModule implements StageModule {
         if (stage.hasReplan()) {
             engineBuilder.nodeExecutor(stage.replanExecutorName(),
                     new ReplanExecutor(stage.prefix(), stage.title(), next.title(),
-                            stage.thinkNode(), next.thinkNode(), deps.model(), deps.mapper()));
+                            stage.thinkNode(), next.thinkNode(), deps.model(), deps.mapper(),
+                            deps.promptBody()));
         }
     }
 }

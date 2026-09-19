@@ -51,13 +51,17 @@ public final class AgentCatalog {
         }
     }
 
-    /** 运维诊断（直答交付，无流式/引用能力位）。 */
+    /** 运维诊断（直答交付，无流式/引用能力位）。2026-09-19：agent/ops/* 旧命名空间统一到 workflow/ops_diagnose_v2/*。 */
     public static final Entry OPS = new Entry(
             "ops_diagnose", "运维诊断（框架主线）",
             "先追问补齐槽位，再按固定排查骨架分阶段调工具（查日志→查文档/生成报文→确定性校验）",
             "ops_diagnose", "ops_diagnose_v2", List.of(),
-            List.of("agent/ops/investigate", "agent/ops/resolve", "agent/ops/verify"),
-            List.of("workflow/ops_diagnose_v2/slot-extract", "workflow/ops_diagnose_v2/replan"),
+            List.of("workflow/ops_diagnose_v2/investigate",
+                    "workflow/ops_diagnose_v2/resolve",
+                    "workflow/ops_diagnose_v2/verify"),
+            List.of("workflow/ops_diagnose_v2/slot-extract",
+                    "workflow/ops_diagnose_v2/replan",
+                    "workflow/ops_diagnose_v2/auto-resolve"),
             null);
 
     /** 知识问答（单次多通道检索直出）。 */
@@ -67,7 +71,7 @@ public final class AgentCatalog {
             "knowledge", "knowledge_qa",
             List.of("STREAMING", "CITATIONS", "ANSWER_CACHE", "SEMANTIC_CACHE", "RETRIEVAL_METRICS"),
             List.of(),
-            List.of(),
+            List.of("chat/spell-fix"),
             "chat/pipeline/rag-answer-kb");
 
     /** 工具循环检索（react_loop 轴）。 */

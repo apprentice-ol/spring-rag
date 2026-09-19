@@ -4,8 +4,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 诊断三阶段的<b>单一事实源</b>：一个阶段的名字、Prompt 正文、工具协议清单、循环上限、
- * 出口护栏与流式标记全部在此单点声明。
+ * 诊断三阶段的<b>单一事实源</b>：一个阶段的名字、Prompt 资产 id、工具协议清单、循环上限、
+ * 出口护栏与流式标记全部在此单点声明（正文在 prompts/{@value #PROMPT_NAMESPACE}/{name}.md，
+ * 由 SharedDeps.promptBody 在装配期读取——绑定包覆盖优先，classpath 兜底）。
  *
  * <ul>
  *   <li>{@link OpsDiagnoseWorkflowFactory} 由此派生图的节点 / 边 / Region / 槽位模板；</li>
@@ -41,7 +42,6 @@ public final class OpsDiagnosisStages {
      * @param name         英文短名：派生 Region id（{regionId} 显式传入）与 Prompt 资产 id（PROMPT_NAMESPACE/{name}）
      * @param title        中文阶段名（Prompt / 日志 / replan 裁决文案使用）
      * @param regionId     Region id（r1_investigate 等，显式声明保持既有 id 稳定）
-     * @param systemPrompt system prompt 正文（{@link OpsPrompts} 常量）
      * @param tools        Prompt 协议块的工具行（顺序即渲染顺序），其 toolId 集合即执行器工具白名单
      * @param maxSteps     阶段内工具循环上限（Region 声明与 loopGuard 注册共用）
      * @param replanNode   replan 裁决节点 id（中间阶段），null 表示末阶段（decide 直出收尾）
@@ -49,21 +49,20 @@ public final class OpsDiagnosisStages {
      * @param streamThink  think 节点是否走内核流式通道逐段外发（O10）
      */
     public record Stage(String prefix, String name, String title, String regionId,
-                        String systemPrompt, List<ToolLine> tools, int maxSteps,
+                        List<ToolLine> tools, int maxSteps,
                         String replanNode, boolean outputGate, boolean streamThink) {
 
         /** 中间阶段：带 replan 三态出口（continue → 下一阶段 / adjust → 回本阶段 / escalate）。 */
         public static Stage middle(String prefix, String name, String title, String regionId,
-                String systemPrompt, List<ToolLine> tools, int maxSteps, String replanNode,
-                boolean outputGate) {
-            return new Stage(prefix, name, title, regionId, systemPrompt, tools, maxSteps,
+                List<ToolLine> tools, int maxSteps, String replanNode, boolean outputGate) {
+            return new Stage(prefix, name, title, regionId, tools, maxSteps,
                     replanNode, outputGate, false);
         }
 
         /** 末阶段：无 replan，decide 无工具调用即直答收尾。 */
         public static Stage last(String prefix, String name, String title, String regionId,
-                String systemPrompt, List<ToolLine> tools, int maxSteps) {
-            return new Stage(prefix, name, title, regionId, systemPrompt, tools, maxSteps,
+                List<ToolLine> tools, int maxSteps) {
+            return new Stage(prefix, name, title, regionId, tools, maxSteps,
                     null, false, true);
         }
 
@@ -92,10 +91,9 @@ public final class OpsDiagnosisStages {
         }
     }
 
-    /** 阶段 1：查日志定位（O4/O5），replan_1 三态裁决后进阶段 2。 */
+    /** 阶段 1：查日志定位（O4/O5），replan_1 三态裁决后进阶段 2。正文 = prompts/workflow/ops_diagnose_v2/investigate.md。 */
     public static final Stage INVESTIGATE = Stage.middle(
             "inv", "investigate", "查日志定位", "r1_investigate",
-            OpsPrompts.INVESTIGATE,
             List.of(ToolLine.described("get_time"),
                     ToolLine.described("query_logs"),
                     new ToolLine("retrieve_knowledge",
@@ -105,7 +103,6 @@ public final class OpsDiagnosisStages {
     /** 阶段 2：生成/纠正报文（出口护栏开启：产出 JSON 过 validate_request schema），replan_2 裁决后进阶段 3。 */
     public static final Stage RESOLVE = Stage.middle(
             "res", "resolve", "生成/纠正报文", "r2_resolve",
-            OpsPrompts.RESOLVE,
             List.of(new ToolLine("retrieve_knowledge",
                             "retrieve_knowledge(query, topK?)：检索知识库，返回带引用编号的资料分片"),
                     ToolLine.described("validate_request")),
@@ -114,7 +111,6 @@ public final class OpsDiagnosisStages {
     /** 阶段 3：确定性校验收尾（末阶段：无 replan；结论流式外发 O10）。 */
     public static final Stage VERIFY = Stage.last(
             "ver", "verify", "确定性校验", "r3_verify",
-            OpsPrompts.VERIFY,
             List.of(ToolLine.described("validate_request")),
             3);
 

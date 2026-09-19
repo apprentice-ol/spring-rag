@@ -102,13 +102,13 @@ public final class IntakeStageModule implements StageModule {
 
     @Override
     public void wireRuntime(EngineBuilder eb, SharedDeps deps) {
-        OpsSlotExtractor extractor = new OpsSlotExtractor(deps.model(), deps.mapper());
+        OpsSlotExtractor extractor = new OpsSlotExtractor(deps.model(), deps.mapper(), deps.promptBody());
         eb.nodeExecutor(OpsDiagnoseWorkflowFactory.SLOT_EXTRACT_EXECUTOR,
                         new SlotExtractExecutor(extractor, deps.clock()))
                 // 自主补全：推断模型复用抽槽同源（不可用时只走规则与反查）
                 .nodeExecutor(OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_EXECUTOR,
                         new AutoResolveExecutor(deps.model(), deps.toolExecutor(), deps.mapper(),
-                                deps.clock()))
+                                deps.clock(), deps.promptBody()))
                 .nodeExecutor(OpsDiagnoseWorkflowFactory.ASK_MISSING_EXECUTOR,
                         new AskMissingExecutor(extractor))
                 .loopGuard(OpsDiagnoseWorkflowFactory.INTAKE_ITERATION_GUARD,
