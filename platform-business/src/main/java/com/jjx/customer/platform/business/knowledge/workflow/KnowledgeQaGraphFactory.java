@@ -154,7 +154,7 @@ public final class KnowledgeQaGraphFactory {
     public static final String REWRITE_ROUND_SLOT = "rewrite_round";
 
     /**
-     * 改写策略槽位（{@code AUTO} / {@code OFF} / {@code FORCE}，见 {@link RewritePolicy}）。
+     * 改写策略槽位（{@code AUTO} / {@code OFF} / {@code FORCE}）。
      *
      * <p>调用方预置：线上不置（缺省 AUTO），评测按 {@code rewrite} 开关置 FORCE/OFF——
      * 这是"改写有没有用"这个对照实验唯一的注入点。</p>

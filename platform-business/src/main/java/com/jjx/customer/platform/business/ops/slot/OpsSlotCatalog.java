@@ -39,6 +39,18 @@ public final class OpsSlotCatalog {
     /** 槽位名：链路 id。 */
     public static final String TRACE_ID = "trace_id";
 
+    /**
+     * 目录内全部槽位名（顺序同 {@link #ALL}）。
+     *
+     * <p>给 {@code ActExecutor}（workflow/common 共用层）做 ask_user 合法性校验用——
+     * 共用层只认这个名字清单，不反向依赖 ops 目录类型。</p>
+     *
+     * @return 槽位名列表（不可变）
+     */
+    public static List<String> askableNames() {
+        return ALL.stream().map(Spec::name).toList();
+    }
+
     /** 完整目录（顺序 = 一次问齐的拼接顺序）。 */
     public static final List<Spec> ALL = List.of(
             new Spec(ENVIRONMENT, true, "环境是正式还是测试？", "prod / test / dev / uat",

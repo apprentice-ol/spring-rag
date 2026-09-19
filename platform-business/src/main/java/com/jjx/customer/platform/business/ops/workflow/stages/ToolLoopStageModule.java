@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.workflow.stages;
 
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
+
 import com.agentframework.definition.node.ConditionNodeDefinition;
 import com.agentframework.definition.node.ConditionNodeDefinition.Branch;
 import com.agentframework.definition.node.CustomNodeDefinition;
@@ -142,7 +144,7 @@ public final class ToolLoopStageModule implements StageModule {
         engineBuilder.nodeExecutor(stage.actExecutorName(),
                         new ActExecutor(stage.prefix(), stage.title(), stage.toolIds(),
                                 deps.sharedRegistry(), deps.toolExecutor(), deps.mapper(),
-                                deps.maxLlmCalls(),
+                                deps.maxLlmCalls(), OpsSlotCatalog.askableNames(),
                                 stage.outputGate()
                                         ? OpsSchemaResolver.byInterfaceSlot(deps.validateTool())
                                         : null))

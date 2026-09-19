@@ -32,6 +32,7 @@ import com.jjx.customer.platform.business.knowledge.node.KbNormalizeExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbRewriteExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbRouteExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbShortCircuitExecutor;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.business.knowledge.intent.IntentClassifier;
 import com.jjx.customer.platform.business.knowledge.normalize.QueryRewriter;
@@ -283,7 +284,7 @@ class KnowledgeGraphTest {
                 .nodeExecutor(KnowledgeReactGraphFactory.ACT_EXECUTOR,
                         new ActExecutor("react", "工具循环检索", Set.of("retrieve_knowledge"),
                                 registry, new DefaultToolExecutor(registry, null, null, null),
-                                new ObjectMapper(), 24))
+                                new ObjectMapper(), 24, OpsSlotCatalog.askableNames(), null))
                 .loopGuard(KnowledgeReactGraphFactory.LOOP_GUARD, 4), "knowledge")
                 .agent(AgentDefinition.builder("react_loop").workflow("knowledge_qa_react").build())
                 .build();

@@ -10,8 +10,6 @@ import com.agentframework.engine.policy.PolicyAttributes;
 import com.agentframework.engine.toolexecutor.*;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.agentframework.runtime.session.Message;
-import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
-import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -33,9 +31,9 @@ import java.util.Set;
  * {@code ask_user} → 写 {@code pending_ask} 后整次运行挂起（{@code NodeResult.suspended}
  * 与节点类型无关），恢复即重入本节点——先消费答复再继续，不得二次挂起（幂等）。</p>
  *
- * <p>本类在 workflow/common（两域共用层），仍 import {@code ops.slot.OpsSlotCatalog}——
- * ask_user 的期望槽位清单来自 ops 槽位目录。已知妥协：参数化目录来源需改全部构造点，
- * 待后续单独处理；react 轴检索-only 白名单下 ask_user 实际不会触发。</p>
+ * <p>本类在 workflow/common（两域共用层），不感知任何域的槽位目录：
+ * ask_user 可声明的合法槽位名由构造参数 {@code askableSlotNames} 注入
+ * （ops 侧取 {@code OpsSlotCatalog.askableNames()}，知识 react 轴检索-only 下 ask_user 不触发）。</p>
  */
 public class ActExecutor implements NodeExecutor {
 
@@ -67,48 +65,24 @@ public class ActExecutor implements NodeExecutor {
     /** 出口护栏：阶段产出中的 JSON 代码块按此 schema 校验（null = 该阶段无护栏）。 */
     private final java.util.function.Function<NodeContext, com.fasterxml.jackson.databind.JsonNode> outputSchema;
 
-    /**
-     * @param prefix       阶段槽位前缀（inv/res/ver）
-     * @param stageName    阶段名（trace 展示用）
-     * @param allowedTools 阶段工具白名单
-     * @param registry     工具注册表
-     * @param toolExecutor 工具执行管道（缓存/超时/重试/审计在管道上）
-     * @param objectMapper JSON 解析
-     */
-    public ActExecutor(String prefix, String stageName, Set<String> allowedTools,
-            ToolRegistry registry, com.agentframework.engine.toolexecutor.ToolExecutor toolExecutor,
-            ObjectMapper objectMapper) {
-        this(prefix, stageName, allowedTools, registry, toolExecutor, objectMapper, 0, null);
-    }
+    /** ask_user 可声明的合法槽位名（构造注入，来源 = 调用方自己的槽位目录）。 */
+    private final List<String> askableSlotNames;
 
     /**
-     * @param prefix       阶段槽位前缀（inv/res/ver）
-     * @param stageName    阶段名（trace 展示用）
-     * @param allowedTools 阶段工具白名单
-     * @param registry     工具注册表
-     * @param toolExecutor 工具执行管道（缓存/超时/重试/审计在管道上）
-     * @param objectMapper JSON 解析
-     * @param maxLlmCalls  流程级 LLM 调用上限（O9，≤0 表示不限）
+     * @param prefix            阶段槽位前缀（inv/res/ver）
+     * @param stageName         阶段名（trace 展示用）
+     * @param allowedTools      阶段工具白名单
+     * @param registry          工具注册表
+     * @param toolExecutor      工具执行管道（缓存/超时/重试/审计在管道上）
+     * @param objectMapper      JSON 解析
+     * @param maxLlmCalls       流程级 LLM 调用上限（O9，≤0 表示不限）
+     * @param askableSlotNames  ask_user 可声明的合法槽位名（调用方来自自己的槽位目录，
+     *                          共用层不感知目录类型）
+     * @param outputSchema      出口护栏（O8）：按上下文解析该阶段的产出 schema，null = 无护栏
      */
     public ActExecutor(String prefix, String stageName, Set<String> allowedTools,
             ToolRegistry registry, com.agentframework.engine.toolexecutor.ToolExecutor toolExecutor,
-            ObjectMapper objectMapper, int maxLlmCalls) {
-        this(prefix, stageName, allowedTools, registry, toolExecutor, objectMapper, maxLlmCalls, null);
-    }
-
-    /**
-     * @param prefix       阶段槽位前缀（inv/res/ver）
-     * @param stageName    阶段名（trace 展示用）
-     * @param allowedTools 阶段工具白名单
-     * @param registry     工具注册表
-     * @param toolExecutor 工具执行管道（缓存/超时/重试/审计在管道上）
-     * @param objectMapper JSON 解析
-     * @param maxLlmCalls  流程级 LLM 调用上限（O9，≤0 表示不限）
-     * @param outputSchema 出口护栏（O8）：按上下文解析该阶段的产出 schema，null = 无护栏
-     */
-    public ActExecutor(String prefix, String stageName, Set<String> allowedTools,
-            ToolRegistry registry, com.agentframework.engine.toolexecutor.ToolExecutor toolExecutor,
-            ObjectMapper objectMapper, int maxLlmCalls,
+            ObjectMapper objectMapper, int maxLlmCalls, List<String> askableSlotNames,
             java.util.function.Function<NodeContext, com.fasterxml.jackson.databind.JsonNode> outputSchema) {
         this.prefix = prefix;
         this.stageName = stageName;
@@ -117,6 +91,7 @@ public class ActExecutor implements NodeExecutor {
         this.toolExecutor = toolExecutor;
         this.objectMapper = objectMapper;
         this.maxLlmCalls = maxLlmCalls;
+        this.askableSlotNames = List.copyOf(askableSlotNames);
         this.outputSchema = outputSchema;
     }
 
@@ -436,16 +411,16 @@ public class ActExecutor implements NodeExecutor {
      * @param value 协议里的 slots 字段
      * @return 合法槽位名列表（可为空）
      */
-    private static List<String> askSlotsOf(Object value) {
+    private List<String> askSlotsOf(Object value) {
         if (!(value instanceof List<?> raw) || raw.isEmpty()) {
             return List.of();
         }
         List<String> accepted = new java.util.ArrayList<>();
-        for (OpsSlotCatalog.Spec spec : OpsSlotCatalog.ALL) {
+        for (String name : askableSlotNames) {
             for (Object item : raw) {
-                if (item != null && spec.name().equals(String.valueOf(item).trim())
-                        && !accepted.contains(spec.name())) {
-                    accepted.add(spec.name());
+                if (item != null && name.equals(String.valueOf(item).trim())
+                        && !accepted.contains(name)) {
+                    accepted.add(name);
                 }
             }
         }

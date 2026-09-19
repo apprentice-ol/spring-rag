@@ -28,6 +28,7 @@ import com.jjx.customer.platform.business.knowledge.node.KbShortCircuitExecutor;
 import com.jjx.customer.platform.business.knowledge.intent.IntentClassifier;
 import com.jjx.customer.platform.business.knowledge.normalize.QueryRewriter;
 import com.jjx.customer.platform.routing.RouteRegistry;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.OpsProperties;
@@ -207,7 +208,8 @@ public class AgentEngineConfiguration {
                 .nodeExecutor(KnowledgeReactGraphFactory.ACT_EXECUTOR,
                         new ActExecutor(KnowledgeReactGraphFactory.PREFIX, "工具循环检索",
                                 Set.of(RetrievalTool.TOOL_ID), sharedRegistry, toolExecutor,
-                                objectMapper, maxLlmCalls))
+                                objectMapper, maxLlmCalls,
+                                OpsSlotCatalog.askableNames(), null))
                 .loopGuard(KnowledgeReactGraphFactory.LOOP_GUARD, agentProperties.getReactMaxSteps())
                 .loopGuard(KnowledgeQaGraphFactory.ITERATION_GUARD, agentProperties.getMaxRewriteRounds())
                 .agent(AgentDefinition.builder(AgentCatalog.KNOWLEDGE.id())
