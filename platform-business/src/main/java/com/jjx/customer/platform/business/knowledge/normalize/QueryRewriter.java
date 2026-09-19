@@ -104,7 +104,7 @@ public class QueryRewriter {
             return spellFix(query);
         }
         try {
-            String systemPrompt = promptStore.raw("chat/query-rewrite");
+            String systemPrompt = promptStore.raw("rag/query-rewrite");
             StringBuilder userInput = new StringBuilder();
             if (StringUtils.hasText(historyContext)) {
                 userInput.append(historyContext).append('\n');
@@ -193,7 +193,7 @@ public class QueryRewriter {
             return null;
         }
         try {
-            String systemPrompt = promptStore.raw("chat/query-expand");
+            String systemPrompt = promptStore.raw("rag/query-expand");
             StringBuilder userInput = new StringBuilder();
             if (StringUtils.hasText(originalQuestion)) {
                 userInput.append("原始问题：").append(originalQuestion.trim()).append('\n');
@@ -266,7 +266,7 @@ public class QueryRewriter {
     }
 
     /** 拼写纠正约束 prompt 资产 key（正文 = prompts/chat/spell-fix.md：只修错拼、不重述/扩写/翻译）。 */
-    public static final String SPELL_FIX_ASSET = "chat/spell-fix";
+    public static final String SPELL_FIX_ASSET = "rag/spell-fix";
 
     /**
      * 英文 query 拼写纠正（保守）：失败/超时/输出异常时返回原文，不阻断检索。

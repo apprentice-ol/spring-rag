@@ -168,10 +168,14 @@ public class PromptAssetService {
      */
     private static final List<ChainDef> CHAIN_DEFS = List.of(
             new ChainDef("rag", "RAG 查询链", List.of(
-                    new SegmentDef("chat/intent/", "意图识别"),
-                    new SegmentDef("chat/query-rewrite", "查询改写"),
-                    new SegmentDef("chat/pipeline/chitchat-system", "闲聊兜底"),
-                    new SegmentDef("chat/pipeline/", "检索回答"))),
+                    new SegmentDef("rag/intent/", "意图识别"),
+                    new SegmentDef("rag/query-rewrite", "查询改写"),
+                    new SegmentDef("rag/query-expand", "查询拓展"),
+                    new SegmentDef("rag/spell-fix", "拼写纠正"),
+                    new SegmentDef("rag/pipeline/chitchat-system", "闲聊兜底"),
+                    new SegmentDef("rag/pipeline/", "检索回答"))),
+            new ChainDef("eval", "评测", List.of(
+                    new SegmentDef("eval/", "评测 prompt"))),
             new ChainDef("agent", "Agent 编排", List.of(
                     new SegmentDef("agent/ops/", "运维诊断"),
                     new SegmentDef("workflow/ops_diagnose_v2/", "运维诊断"),

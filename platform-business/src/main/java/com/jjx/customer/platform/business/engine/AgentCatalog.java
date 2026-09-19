@@ -20,7 +20,7 @@ import java.util.Optional;
 public final class AgentCatalog {
 
     /** 链路级常驻 prompt key（跨域输出契约，参与指纹但不属于任何 agent）。 */
-    public static final List<String> LINK_KEYS = List.of("chat/pipeline/rag-answer-system");
+    public static final List<String> LINK_KEYS = List.of("rag/pipeline/rag-answer-system");
 
     /**
      * 目录条目。
@@ -71,8 +71,8 @@ public final class AgentCatalog {
             "knowledge", "knowledge_qa",
             List.of("STREAMING", "CITATIONS", "ANSWER_CACHE", "SEMANTIC_CACHE", "RETRIEVAL_METRICS"),
             List.of(),
-            List.of("chat/spell-fix"),
-            "chat/pipeline/rag-answer-kb");
+            List.of("rag/spell-fix"),
+            "rag/pipeline/rag-answer-kb");
 
     /** 工具循环检索（react_loop 轴）。 */
     public static final Entry REACT = new Entry(
@@ -82,7 +82,7 @@ public final class AgentCatalog {
             List.of("STREAMING", "CITATIONS", "ANSWER_CACHE", "SEMANTIC_CACHE", "RETRIEVAL_METRICS"),
             List.of("agent/react-loop"),
             List.of(),
-            "chat/pipeline/rag-answer-kb");
+            "rag/pipeline/rag-answer-kb");
 
     private static final List<Entry> ALL = List.of(OPS, KNOWLEDGE, REACT);
 

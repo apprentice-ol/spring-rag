@@ -43,7 +43,7 @@ public class KnowledgeAnswerService {
     /** 问候/闲聊流式回答（不检索）。 */
     @TelemetryStep(value = "rag.chitchat", captureOutput = true)
     public Flux<String> chitchat(String question, String conversationId) {
-        String systemPrompt = promptStore.raw("chat/pipeline/chitchat-system");
+        String systemPrompt = promptStore.raw("rag/pipeline/chitchat-system");
         return ragChatClient.prompt()
                 .system(systemPrompt)
                 .user(question)
@@ -63,7 +63,7 @@ public class KnowledgeAnswerService {
      */
     @TelemetryStep(value = "rag.answer", captureOutput = true)
     public Flux<String> answer(String question, String contextText, String systemPrompt) {
-        String system = systemPrompt != null ? systemPrompt : promptStore.raw("chat/pipeline/rag-answer-kb");
+        String system = systemPrompt != null ? systemPrompt : promptStore.raw("rag/pipeline/rag-answer-kb");
         List<Advisor> advisors = new ArrayList<>();
         advisors.add(new SimpleLoggerAdvisor());
         return ragChatClient.prompt()

@@ -47,8 +47,8 @@ public class DefaultIntentClassifier implements IntentClassifier {
     public IntentResult classify(String question) {
         try {
             // system/user 均不传 param → 不走 StringTemplate，prompt 中的 JSON 花括号原样发送
-            String systemText = promptStore.raw("chat/intent/classify-system");
-            String userText = promptStore.raw("chat/intent/classify-user")
+            String systemText = promptStore.raw("rag/intent/classify-system");
+            String userText = promptStore.raw("rag/intent/classify-user")
                     + dynamicDomainSection()
                     + "\n\n用户问题：" + question;
             String response = LlmCallGuard.call(() -> ingestionChatClient.prompt()

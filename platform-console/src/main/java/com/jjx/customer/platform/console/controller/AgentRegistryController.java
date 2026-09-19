@@ -37,13 +37,14 @@ public class AgentRegistryController {
      */
     private static final Map<String, List<String>> LINK_KEYS_BY_AGENT = Map.of(
             "knowledge", List.of(
-                    "chat/intent/classify-system",
-                    "chat/intent/classify-user",
-                    "chat/query-rewrite",
-                    "chat/pipeline/rag-answer-system",
-                    "chat/pipeline/context-block",
-                    "chat/pipeline/empty-retrieval",
-                    "chat/pipeline/chitchat-system"));
+                    "rag/intent/classify-system",
+                    "rag/intent/classify-user",
+                    "rag/query-rewrite",
+                    "rag/query-expand",
+                    "rag/spell-fix",
+                    "rag/pipeline/rag-answer-system",
+                    "rag/pipeline/empty-retrieval",
+                    "rag/pipeline/chitchat-system"));
 
     /** 各 agent 的阶段视图（图主链的语义阶段名，与旧版口径对齐）。 */
     private static final Map<String, List<StageView>> STAGES_BY_AGENT = Map.of(

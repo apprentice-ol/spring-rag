@@ -43,7 +43,7 @@ public class ChatClientConfig {
         // 召回后的 KB 回答规则由 ChatOrchestrator 用 answer-chat-kb 显式覆盖 system。
         String systemPrompt = StringUtils.hasText(props.getSystemPrompt())
                 ? props.getSystemPrompt()
-                : promptStore.raw("chat/pipeline/rag-answer-system");
+                : promptStore.raw("rag/pipeline/rag-answer-system");
 
         // 【单轮阶段】不挂 ChatMemory 顾问：资料拼在 user message（匹配 kb 提示词的输入结构），
         // 若挂 PromptChatMemoryAdvisor 会把含资料的 user message 存进记忆、下轮又折叠回 system，

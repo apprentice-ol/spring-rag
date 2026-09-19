@@ -263,7 +263,7 @@ public class ChatOrchestrator<S> {
         log.info("[对话编排] 检索为空，直接返回降级提示: 会话ID={}", conversationId);
         String fallbackMsg = StringUtils.hasText(chatProperties.getEmptyRetrievalMsg())
                 ? chatProperties.getEmptyRetrievalMsg()
-                : promptStore.raw("chat/pipeline/empty-retrieval");
+                : promptStore.raw("rag/pipeline/empty-retrieval");
         return deliveryPortFactory.begin(sink, conversationId, question, otelTraceId, null, null)
                 .emitNotice(conversationId, fallbackMsg, otelTraceId);
     }

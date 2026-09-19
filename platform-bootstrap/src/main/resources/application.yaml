@@ -140,7 +140,7 @@ rag:
     similarity-threshold: 0.0   # 不过滤（0.35 会把具体操作步骤块误过滤——步骤和"流程"查询语义距离较远）（阈值过滤向后推到精排环节）
     degrade-limit: 8            # Redis 断路器降级期间，昂贵路径（LLM 流式/ops 诊断）并发上限（DegradeGuard）
     diagnose-min-confidence: 0.6 # 意图路由进诊断的置信度门槛：自动档低于此值不劫持，落回知识检索（显式选择不受限）
-    # system-prompt 已迁至 prompts/chat/pipeline/rag-answer-system.md（单一来源）；
+    # system-prompt 已迁至 prompts/rag/pipeline/rag-answer-system.md（单一来源）；
     # 如需运维覆盖，可在此设置 system-prompt: xxx
     agent:                       # 多范式可插拔 agent 框架（rag.chat.agent.* → AgentProperties）
       paradigm: knowledge        # 默认 agent 范式：knowledge / ops_diagnose / react_loop（旧 naive/react 自动映射）
