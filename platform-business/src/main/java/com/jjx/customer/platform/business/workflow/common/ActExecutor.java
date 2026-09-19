@@ -32,6 +32,10 @@ import java.util.Set;
  * {@code answer} → 写阶段产出、退出循环；{@code escalate} → 动态边直达升级终态；
  * {@code ask_user} → 写 {@code pending_ask} 后整次运行挂起（{@code NodeResult.suspended}
  * 与节点类型无关），恢复即重入本节点——先消费答复再继续，不得二次挂起（幂等）。</p>
+ *
+ * <p>本类在 workflow/common（两域共用层），仍 import {@code ops.slot.OpsSlotCatalog}——
+ * ask_user 的期望槽位清单来自 ops 槽位目录。已知妥协：参数化目录来源需改全部构造点，
+ * 待后续单独处理；react 轴检索-only 白名单下 ask_user 实际不会触发。</p>
  */
 public class ActExecutor implements NodeExecutor {
 

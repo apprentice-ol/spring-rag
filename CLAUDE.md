@@ -17,10 +17,9 @@
 ```
 customer-platform（父聚合 POM，groupId com.jjx.customer，包根 com.jjx.customer.platform）
 ├── 框架层（零业务依赖，可独立成仓）
-│   └── platform-agent-framework           单模块一体（包按概念分组，无 core / engine 之分）：
-│                                          agent（Agent 与执行入口）/ workflow（流程声明与驱动）/ node（节点形态与执行器）/
-│                                          tool（工具契约、注册与控制面）/ model / prompt / result / plan / route /
-│                                          trace / guard / session / cache / config / exception
+│   └── platform-agent-core                内核（包根 com.agentframework，2026-09-18 自 agent-framework 仓库整包并入，
+│                                          取代旧 platform-agent-framework，见 docs/agent-rebuild-spec.md §9）：
+│                                          engine / definition / crosscutting / runtime / infra / extension / sdk
 ├── 基础设施层
 │   ├── platform-common                    util / mybatis 类型处理器 / 分页 DTO
 │   └── platform-shared                    配置属性 / Prompt 加载 / 模型与 HTTP 装配 + 跨域 SPI：
@@ -33,9 +32,15 @@ customer-platform（父聚合 POM，groupId com.jjx.customer，包根 com.jjx.cu
 │   ├── platform-prompt                    Prompt 资产 / 版本 / 能力包与绑定 / prompts 资源
 │   └── platform-ingestion                 解析 / 分块 / 增强 / 富化 + 文档目录（DocumentCatalog 实现）
 ├── 业务层（调度 + 交付）
-│   ├── platform-business                  ★ 业务/调度：orchestration（ChatOrchestrator 决策链）
-│   │                                      + agents / workflows / tools / routing / runtime（DegradeGuard）
-│   │                                      + session / trace / rest / agent/schemas 资源
+│   ├── platform-business                  ★ 业务/调度（2026-09-19 重排，RAG 线与诊断线顶层分域）：
+│   │                                      engine/（agent-core 桥接：AgentEngineConfiguration 装配 + AgentCatalog
+│   │                                        + adapter/persistence/outcome 子包）
+│   │                                      workflow/common/（两域共用节点执行器）
+│   │                                      knowledge/（RAG 线：KnowledgeRunner + workflow/ 双图 + node/ 执行器
+│   │                                        + intent/normalize/rag）
+│   │                                      ops/（诊断线：OpsRunner + workflow/ + node/slot/tool/rest）
+│   │                                      orchestration/（ChatOrchestrator 决策骨架 + 8 协作类，纯跨域调度）
+│   │                                      + routing / runtime（DegradeGuard）/ session / trace / telemetry / agent/schemas 资源
 │   ├── platform-delivery                  交付通道：sse（端口实现 + 事件协议）/ message（会话消息持久化）
 │   │                                      / runtime（活动流注册表）/ service（入口薄壳）/ rest
 │   ├── platform-mcp                       MCP 扩展工具来源
@@ -55,7 +60,7 @@ POST /chat/stream
          ├─ ops 支路：OpsRunner（agent + workflow）→ Outcome 分派（追问/直答/升级）
          └─ RAG 主线：ConversationStore.historyContext → QueryRewriter → KnowledgeRunner
              （检索 = extension tool）→ knowledge.retrieval（多通道 + 两级答案缓存）
-             → knowledge.answer.KnowledgeAnswerService（流式生成）→ orchestration.rag.RagContextAssembler
+             → knowledge.answer.KnowledgeAnswerService（流式生成）→ knowledge.rag.RagContextAssembler
              → DeliveryPortFactory/SseDeliveryPort → sse.SseEventSender + message.ChatMessageWriter
 ```
 

@@ -6,10 +6,11 @@
 customer-platform（root pom，groupId com.jjx.customer，包根 com.jjx.customer.platform）
 │
 ├── 框架层（可复用，零业务依赖）
-│   └── platform-agent-framework           单模块一体（包按概念分组，无 core / engine 之分）：
-│                                          agent（Agent 与执行入口）/ workflow（流程声明与驱动）/ node（节点形态与执行器）/
-│                                          tool（工具契约、注册与控制面）/ model / prompt / result / plan / route /
-│                                          trace / guard / session / cache / config / exception
+│   └── platform-agent-core                内核（包根 com.agentframework，自 agent-framework 仓库整包并入，见
+│                                          docs/agent-rebuild-spec.md §9）：engine（引擎/构建器/执行器 SPI）/
+│                                          definition（workflow/node/agent/tool/region 声明）/ crosscutting（cache/guard/
+│                                          filter/interceptor/trace/metrics）/ runtime（session/slot/event/persistence）/
+│                                          infra（modelgateway/storage）/ extension / sdk
 │
 ├── 基础设施层
 │   ├── platform-common                    通用：util / mybatis 类型处理器 / 分页 DTO（最底层，无域依赖）
@@ -25,9 +26,15 @@ customer-platform（root pom，groupId com.jjx.customer，包根 com.jjx.custome
 │   └── platform-ingestion                 入库：解析 / 分块 / 增强 / 富化 + 文档目录（DocumentCatalog 实现）
 │
 ├── 业务层（调度 + 交付）
-│   ├── platform-business                  业务/调度：orchestration（ChatOrchestrator 决策链 + intent/normalize/rag 装配）/
-│   │                                      agents / workflows / tools / routing / runtime（DegradeGuard 请求准入）/
-│   │                                      session / trace / rest / agent/schemas 资源
+│   ├── platform-business                  业务/调度（2026-09-19 重排，RAG 线与诊断线顶层分域）：
+│   │                                      engine/（agent-core 桥接：AgentEngineConfiguration 装配、AgentCatalog、
+│   │                                        adapter/persistence/outcome 子包）
+│   │                                      workflow/common/（两域共用节点执行器：ActExecutor、EscalateExecutor、EscalateTerminal）
+│   │                                      knowledge/（RAG 线全部：KnowledgeRunner、workflow/ 双图工厂、node/ 七个执行器、
+│   │                                        intent/、normalize/、rag/）
+│   │                                      ops/（诊断线全部：OpsRunner、workflow/ 图工厂+stages、node/、slot/、tool/、rest/）
+│   │                                      orchestration/（ChatOrchestrator 决策骨架 + 8 个协作类，纯跨域调度）/
+│   │                                      routing / runtime（DegradeGuard）/ session / trace / telemetry / agent/schemas 资源
 │   ├── platform-delivery                  交付通道：sse（端口实现 + 事件协议）/ message（会话消息持久化）/
 │   │                                      runtime（活动流注册表）/ service（入口薄壳）/ rest
 │   ├── platform-mcp                       MCP 接入：外部扩展工具来源
@@ -45,14 +52,15 @@ POST /chat/stream
  └─ delivery.rest.ChatController                      通道入口（SSE 载体）
      └─ delivery.service.ChatService → business.orchestration.ChatOrchestrator.execute(…, sink)
          ├─ 决策链：会话恢复 → 归一化 → 规则短路 → 显式范式 → 指代悬空 → 意图分类 → 规则路由
-         ├─ ops 支路：framework agent + workflow（OpsRunner）→ Outcome 分派（追问/直答/升级）
+         │   （决策骨架在 ChatOrchestrator；各步实现体在 orchestration/ 的 8 个协作类）
+         ├─ ops 支路：framework agent + workflow（ops.OpsRunner，经 AgentBranchDispatcher 分派）→ Outcome 分派（追问/直答/升级）
          └─ RAG 主线：
              ├─ conversation.ConversationStore.historyContext（会话事实）
-             ├─ orchestration.normalize.QueryRewriter（LLM 改写）
-             ├─ KnowledgeRunner（agent + workflow；检索 = extension tool，执行权在框架引擎）
+             ├─ knowledge.normalize.QueryRewriter（LLM 改写）
+             ├─ knowledge.KnowledgeRunner（agent + workflow；检索 = extension tool，执行权在框架引擎）
              │   ├─ knowledge.retrieval（多通道检索 / 重排 / 后处理 + 两级答案缓存）
              │   └─ knowledge.answer.KnowledgeAnswerService（流式生成）
-             ├─ orchestration.rag.RagContextAssembler（上下文文本 + 引用溯源映射）
+             ├─ knowledge.rag.RagContextAssembler（上下文文本 + 引用溯源映射）
              └─ delivery.DeliveryPortFactory → delivery.sse.SseDeliveryPort
                  ├─ sse.SseEventSender（message / trace / citations / clarify / meta 事件协议）
                  └─ message.ChatMessageWriter（sa_conversation / sa_message 读写）
@@ -79,7 +87,7 @@ business → knowledge（RAG 能力）；delivery → business（编排入口）
 
 | 规则 | 说明 |
 |---|---|
-| 框架零业务依赖 | `platform-agent-framework` 不含任何 `platform-*` 业务模块依赖 |
+| 框架零业务依赖 | `platform-agent-core`（com.agentframework）不含任何 `platform-*` 业务模块依赖 |
 | 编排层不碰传输 | `ChatOrchestrator` 内不出现 `SseEmitter` / `SseEventSender` / `MessageMapper`（只依赖 shared SPI） |
 | 交付层不做决策 | `platform-delivery` 不判断意图/路由/检索，只执行"怎么送到用户" |
 | 路由/意图契约中立 | `platform.routing`、`platform.intent` 在 shared，business 与 eval 都依赖它，避免环 |
@@ -91,7 +99,7 @@ business → knowledge（RAG 能力）；delivery → business（编排入口）
 
 ### 2.1 包名
 
-- 根包：`com.jjx.customer.platform`；框架：`com.jjx.customer.platform.agent.framework.{core,engine}`。
+- 根包：`com.jjx.customer.platform`；框架：`com.agentframework`（platform-agent-core，刻意与业务包根分离）。
 - 全小写、单数、领域名词；禁用缩写暗号（`fw`、`mgr`、`util2`）。
 - 分层后缀固定：`orchestration`（编排决策）/ `domain`（数据）/ `runtime`（装配与运行）/ `session|trace|message`（持久化）/ `rest`（对外接口）/ `sse`（SSE 通道细节）。
 
@@ -99,10 +107,10 @@ business → knowledge（RAG 能力）；delivery → business（编排入口）
 
 | 后缀 | 含义 | 示例 |
 |---|---|---|
-| `Agent` / `Workflow` | 框架契约实现 | `KnowledgeFrameworkAgent`、`OpsDiagnoseWorkflow` |
-| `Tool`（`BaseTool`/`ExtensionTool`） | 工具能力 | `RetrievalExtensionTool`、`FinishBaseTool` |
-| `Rule` / `Strategy` | 路由 | `TraceIdShortCircuitRule`、`OpsIntentRouteStrategy` |
-| `Runner` | 一次执行的适配器 | `KnowledgeRunner` |
+| `Agent` / `Workflow` | 框架契约实现 | `AgentDefinition`、`WorkflowDefinition`（agent-core）|
+| `Tool` | 工具能力（单一内核契约） | `RetrievalTool`、`QueryLogsTool` |
+| `Rule` / `Strategy` | 路由 | `TraceIdShortCircuitRule`、`OpsIntentRouteRule` |
+| `Runner` | 一次执行的适配器 | `KnowledgeRunner`、`OpsRunner` |
 | `Orchestrator` | 一次请求的编排决策 | `ChatOrchestrator` |
 | `Port` / `Store` / `Catalog` | 跨域 SPI 契约（shared） | `DeliveryPort`、`ConversationStore`、`DocumentCatalog` |
 | `Controller` / `Service(+Impl)` / `Mapper` / `Entity` | 分层构件 | `ChatController`、`AgentTraceServiceImpl` |
