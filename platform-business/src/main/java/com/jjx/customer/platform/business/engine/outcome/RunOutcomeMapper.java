@@ -15,7 +15,7 @@ import java.util.Map;
  *   <li>其余完成态（{@code conclude} 出口）→ {@link OutcomeKind#DIRECT}。</li>
  * </ul>
  * <p>{@link OutcomeKind#WITH_CONTEXT} 不经本映射——knowledge 线检索完成后由
- * {@code FrameworkKnowledgeRunner} 自行判定（两段式：证据先就绪，生成交付段在引擎外）。</p>
+ * {@code KnowledgeRunner} 自行判定（两段式：证据先就绪，生成交付段在引擎外）。</p>
  */
 public final class RunOutcomeMapper {
 

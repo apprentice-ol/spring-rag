@@ -1,4 +1,4 @@
-package com.jjx.customer.platform.business;
+package com.jjx.customer.platform.business.trace;
 
 import com.agentframework.engine.core.ExecutionTraceStep;
 import com.agentframework.engine.core.RunResult;
@@ -24,12 +24,12 @@ import java.util.Map;
  * <p>执行指纹三元组（agent/workflow/promptHash）由 runner 侧 {@link AgentFingerprint}
  * 传入——SSE 事件、sa_agent_trace、eval 的 trace jsonb 共用本结构（不变量 5）。</p>
  */
-public final class FrameworkTraceMapper {
+public final class EngineTraceMapper {
 
     /** 预算槽名（ops / react 线的 LLM 调用自建计数）。 */
     static final String LLM_CALLS_SLOT = "llm_calls";
 
-    private FrameworkTraceMapper() {
+    private EngineTraceMapper() {
     }
 
     /**

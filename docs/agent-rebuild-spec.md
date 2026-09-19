@@ -140,7 +140,7 @@ Langfuse（trace/评分）、MCP（外部工具来源）、llm-observability（�
 |---|---|---|---|
 | R1 | 原生工具循环 `ModelPort`（JSON 工具协议） | LOOP 节点可真实调工具，单测覆盖 | ✅ 完成（`JsonProtocolModelPort` + 4 单测） |
 | R2 | ops 重建：槽位 + 工具归位（T1/T5/T6/T7）+ `OpsDiagnoseWorkflow` + 控制面契约 | O1–O11 验收通过 | ✅ 完成（框架新增 `ToolControl` 控制面；业务新增 `fw/ops/*` 与三阶段流程；4 单测） |
-| R3 | REST 诊断端点与 ops 对话路由切框架 | O11 通过 | ✅ 完成（`FrameworkOpsRunner` 同时供对话链路与 REST；ops 路由规则重建在 fw） |
+| R3 | REST 诊断端点与 ops 对话路由切框架 | O11 通过 | ✅ 完成（`OpsRunner` 同时供对话链路与 REST；ops 路由规则重建在 fw） |
 | R4 | eval 全轴切框架（react_loop 轴） | E1–E5 通过 | ✅ 完成（新增 `KnowledgeQaReactWorkflow` / `ReactFrameworkAgent`；eval 两轴都走框架） |
 | R5 | 删除旧实现与旧测试 | §6 不变量成立 | 🚧 主体完成：旧 tools/impl/mcp/workflow/slot/registry 与 5 组旧测试已删除（53 个测试随之移除），构建通过（136 测试绿）；剩余见 §8 收尾项 |
 
@@ -149,7 +149,7 @@ Langfuse（trace/评分）、MCP（外部工具来源）、llm-observability（�
 | 项 | 说明 | 影响 |
 |---|---|---|
 | `/agent/registry` 前端接口 | ✅ 已重建（`fw/AgentRegistryController`）：数据源改为框架 `AgentRegistry`，字段结构保持 `type/label/description/stages/tools`，前端零改动 | 已恢复 |
-| MCP 工具来源（T8） | ✅ 已重建：`fw/mcp/McpExtensionTool`（Spring AI ToolCallback → 框架 ExtensionTool，名字前缀防重名、参数序列化、错误回喂）+ `McpExtensionToolSource`（`rag.chat.agent.mcp.enabled/tool-prefix` 开关，无 server 时静默空清单），经 `FrameworkAgentConfiguration` 进注册表 | 已恢复 |
+| MCP 工具来源（T8） | ✅ 已重建：`fw/mcp/McpExtensionTool`（Spring AI ToolCallback → 框架 ExtensionTool，名字前缀防重名、参数序列化、错误回喂）+ `McpExtensionToolSource`（`rag.chat.agent.mcp.enabled/tool-prefix` 开关，无 server 时静默空清单），经 `AgentEngineConfiguration` 进注册表 | 已恢复 |
 | 旧 core 死代码 | ✅ 已清理：删除 `core/tool/**`（旧工具子系统）与 `Agent/AgentTask/AgentContext/AgentWorkspace/JsonSchemaValidator/RetrievalAgent/AgentStepDetails`；`core` 仅保留轨迹/会话/澄清/结果 8 个类 | 已清理 |
 | 会话/轨迹 SPI 化 | 目前 `AgentSessionService`/`AgentTraceService` 仍由业务直连（引擎不持久化，符合设计） | 无影响，属形态确认 |
 
@@ -183,12 +183,12 @@ R1–R5 全部完成，T8（MCP）已重接，`/agent/registry` 已恢复；业�
 |---|---|
 | `RetrievalExtensionTool` | RAG 检索扩展工具（沿用管线 SearchContext 口径，元数据透传保引用） |
 | `KnowledgeQaWorkflow` / `KnowledgeFrameworkAgent` | 知识问答流程与 Agent（STREAMING/CITATIONS/RETRIEVAL_METRICS） |
-| `FrameworkKnowledgeRunner` | 框架产物 ↔ 既有 `RetrievedChunk`/`AgentTrace` 映射；对话线与 eval 线共用 |
+| `KnowledgeRunner` | 框架产物 ↔ 既有 `RetrievedChunk`/`AgentTrace` 映射；对话线与 eval 线共用 |
 | `JsonProtocolModelPort` | 工具循环模型端口（工具协议 + 观测回喂 + 容错解析） |
 | `Opt/*`（`fw/ops`） | `query_logs`、`validate_request` 扩展工具；`ask_user`、`finish` 控制面工具；槽位目录 |
 | `OpsDiagnoseWorkflow` / `OpsDiagnoseFrameworkAgent` | 三阶段诊断流程（LOOP 节点 + 工具白名单）与 Agent（DIRECT 交付） |
 | `OpsIntentRouteStrategy` / `KnowledgeRouteStrategy` | 意图域路由（ops 优先，knowledge 兜底） |
-| `FrameworkAgentConfiguration` | 引擎与全部 SPI 的显式直配（无 starter） |
+| `AgentEngineConfiguration` | 引擎与全部 SPI 的显式直配（无 starter） |
 | 框架侧新增 | `AgentRequest.ATTR_INTENT_DOMAIN`（意图域驱动路由）、`ToolResult.control`（FINISH/ASK_USER） |
 
 ## 9. 内核替换（2026-09-18）：platform-agent-framework → agent-framework-core
@@ -225,7 +225,7 @@ R1–R5 全部完成，T8（MCP）已重接，`/agent/registry` 已恢复；业�
 4. **ops 图源自 server 联调版**（O1–O11 全过）：intake 问齐环 + 三阶段 think→act→decide + replan 三态 +
    escalate/conclude；`Stages` 模块化 + provides 对账（图是唯一事实源）原样保留。
 5. **会话 id 派生**：`engineSessionId = "ops-" + conversationId`（恢复链确定性）；REST 单轮 ephemeral 不落库；
-   存量 AWAITING_USER 会话跨版本恢复降级为带槽位重跑（`FrameworkOpsRunner.execute`）。
+   存量 AWAITING_USER 会话跨版本恢复降级为带槽位重跑（`OpsRunner.execute`）。
 6. **MCP 桥**改为内核 Tool 契约（schema 从 JSON Schema 字符串投影参数清单）。
 
 ### 9.3 行为差异（明示）

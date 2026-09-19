@@ -52,8 +52,8 @@ POST /chat/stream
  └─ delivery.rest.ChatController → delivery.service.ChatService（入口薄壳，只传 SseEmitter）
      └─ business.orchestration.ChatOrchestrator<SseEmitter>.execute(...)
          ├─ 决策：会话恢复 → 归一化 → 规则短路 → 显式范式 → 指代悬空 → 意图分类 → 规则路由 → 分支
-         ├─ ops 支路：FrameworkOpsRunner（agent + workflow）→ Outcome 分派（追问/直答/升级）
-         └─ RAG 主线：ConversationStore.historyContext → QueryRewriter → FrameworkKnowledgeRunner
+         ├─ ops 支路：OpsRunner（agent + workflow）→ Outcome 分派（追问/直答/升级）
+         └─ RAG 主线：ConversationStore.historyContext → QueryRewriter → KnowledgeRunner
              （检索 = extension tool）→ knowledge.retrieval（多通道 + 两级答案缓存）
              → knowledge.answer.KnowledgeAnswerService（流式生成）→ orchestration.rag.RagContextAssembler
              → DeliveryPortFactory/SseDeliveryPort → sse.SseEventSender + message.ChatMessageWriter

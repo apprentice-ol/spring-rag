@@ -16,7 +16,7 @@ import java.util.Optional;
 
 /**
  * 澄清会话存储（sa_agent_session）：读写侧方法签名与旧内核 {@code SessionStore}
- * 契约一致，改为业务自持（写入侧由 {@code FrameworkOpsRunner} 在引擎出口调用——
+ * 契约一致，改为业务自持（写入侧由 {@code OpsRunner} 在引擎出口调用——
  * 挂起/升级写 AWAITING_USER，终态写 DONE，替代旧 {@code SessionRecordingListener}）。
  *
  * <p>失败一律 warn + 降级（empty / false / 忽略）——会话状态丢失只影响"恢复追问"体验，不阻断对话主链路。</p>

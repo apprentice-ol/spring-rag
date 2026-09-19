@@ -1,4 +1,4 @@
-package com.jjx.customer.platform.config.telemetry;
+package com.jjx.customer.platform.business.telemetry;
 
 import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import com.jjx.customer.platform.intent.IntentResult;

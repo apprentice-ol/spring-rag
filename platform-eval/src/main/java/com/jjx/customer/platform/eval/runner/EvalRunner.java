@@ -10,7 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import com.jjx.ai.llmobservability.observation.span.TelemetrySpan;
-import com.jjx.customer.platform.business.FrameworkKnowledgeRunner;
+import com.jjx.customer.platform.business.knowledge.KnowledgeRunner;
 import com.jjx.customer.platform.business.knowledge.RewritePolicy;
 import com.jjx.customer.platform.business.knowledge.rag.RagContextAssembler;
 import com.jjx.customer.platform.common.exception.ClientException;
@@ -69,7 +69,7 @@ import java.util.stream.Collectors;
 public class EvalRunner {
 
     private final TelemetryTemplate ragTelemetry;
-    private final FrameworkKnowledgeRunner frameworkKnowledgeRunner;
+    private final KnowledgeRunner frameworkKnowledgeRunner;
     private final AgentProperties agentProperties;
     private final ChatProperties chatProperties;
     private final ObjectMapper objectMapper;
@@ -482,9 +482,9 @@ public class EvalRunner {
             // 全轴走框架主线：knowledge（确定性检索节点）/ react_loop（工具循环节点）
             // forEval：改写按开关走，并把本轮钉死在知识检索上——分类器把题认成运维故障
             // 就会被转走，这里拿到空 chunks 静默记 0 分，掉的是分类器的域覆盖不是检索质量
-            FrameworkKnowledgeRunner.KnowledgeAnswer answer = frameworkKnowledgeRunner.retrieve(
+            KnowledgeRunner.KnowledgeAnswer answer = frameworkKnowledgeRunner.retrieve(
                     question, searchContext, params.effectiveParadigm(),
-                    FrameworkKnowledgeRunner.RunContext.forEval(rewritePolicy));
+                    KnowledgeRunner.RunContext.forEval(rewritePolicy));
             if (answer.isRoutedElsewhere()) {
                 log.warn("[Eval] run={} item={} 被路由到 {}（强制检索未生效），该题按 0 召回计",
                         runCtx.runId(), item.getId(), answer.routeTarget());

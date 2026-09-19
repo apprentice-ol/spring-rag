@@ -1,4 +1,4 @@
-package com.jjx.customer.platform.business;
+package com.jjx.customer.platform.business.engine;
 
 import com.agentframework.crosscutting.interceptor.TaskPropagation;
 import com.agentframework.definition.agent.AgentDefinition;
@@ -45,8 +45,6 @@ import com.jjx.customer.platform.config.properties.AgentProperties;
 import com.jjx.customer.platform.config.properties.ChatProperties;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievalEngine;
 import com.jjx.customer.platform.knowledge.tools.RetrievalTool;
-import com.jjx.customer.platform.prompt.mapper.*;
-import com.jjx.customer.platform.prompt.service.PromptBindingService;
 import com.jjx.customer.platform.prompt.snapshot.PromptStorePromptProvider;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -56,7 +54,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 import java.time.Clock;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -69,14 +66,13 @@ import java.util.Set;
  * {@code StageModule} 自带并经 {@link OpsDiagnoseWorkflowFactory#reconcile} 对账
  * （图是唯一事实源）；knowledge 双图在引擎上直接注册。</p>
  *
- * <p>Prompt 资产管道：{@link PromptStorePromptProvider}（绑定包覆盖优先，回退 classpath）
- * + 装配期组合模板（think 正文 + 工具协议块，stages wireRuntime 注册）；
- * 引擎会话持久化走 {@code ops_engine_session/slots}（挂起恢复），澄清会话仍由
+ * <p>Prompt 资产管道见 {@link PromptAssetConfiguration}；引擎会话持久化走
+ * {@code ops_engine_session/slots}（挂起恢复），澄清会话仍由
  * {@code AgentSessionServiceImpl}（sa_agent_session）承担。</p>
  */
 @Configuration
 @EnableConfigurationProperties(OpsProperties.class)
-public class FrameworkAgentConfiguration {
+public class AgentEngineConfiguration {
 
     /**
      * 共享模型网关：唯一 provider = spring-ai（宿主 ChatModel，DeepSeek 端点）。
@@ -89,68 +85,6 @@ public class FrameworkAgentConfiguration {
         return gateway;
     }
 
-    /**
-     * Prompt 绑定解析服务：requiredKeys 清单由 {@link AgentCatalog} 推导注入
-     * （platform-prompt 不反向依赖 business）。
-     */
-    @Bean
-    public PromptBindingService promptBindingService(
-            PromptBindingMapper bindingMapper,
-            PromptBundleMapper bundleMapper,
-            PromptBundleReleaseMapper releaseMapper,
-            PromptMapper promptMapper,
-            PromptVersionMapper versionMapper,
-            PromptStore promptStore, ObjectMapper objectMapper) {
-        Map<String, List<String>> requiredKeys = new LinkedHashMap<>();
-        for (AgentCatalog.Entry entry : AgentCatalog.all()) {
-            requiredKeys.put(entry.id(), entry.allPromptKeys());
-        }
-        return new PromptBindingService(bindingMapper, bundleMapper, releaseMapper,
-                promptMapper, versionMapper, promptStore, objectMapper, requiredKeys);
-    }
-
-    /**
-     * Prompt 资产来源：key → agent 归属由 {@link AgentCatalog} 推导；
-     * 解析顺序 = 装配期组合模板 → 绑定包覆盖 → classpath 基线。
-     */
-    @Bean
-    public PromptStorePromptProvider agentPromptProvider(PromptStore promptStore,
-                                                         PromptBindingService bindingService) {
-        Map<String, String> keyOwner = new LinkedHashMap<>();
-        for (AgentCatalog.Entry entry : AgentCatalog.all()) {
-            // 人格层 / 任务层 key 不允许跨 agent 重复（命名空间红线，拼错即装配期失败）
-            for (String key : entry.agentPromptKeys()) {
-                putStrict(keyOwner, key, entry.id());
-            }
-            for (String key : entry.workflowPromptKeys()) {
-                putStrict(keyOwner, key, entry.id());
-            }
-            // answerPromptKey 允许共享（react_loop 复用 knowledge 的生成段 key，旧架构同语义）：
-            // 归属首个声明者；该 key 生成段在引擎外，绑定覆盖按各自 agent 的指纹路径独立解析
-            if (entry.answerPromptKey() != null) {
-                keyOwner.putIfAbsent(entry.answerPromptKey(), entry.id());
-            }
-        }
-        // ops think 的 workflow 层资产（组合模板的正文来源）也归属 ops agent
-        for (String asset : List.of(OpsDiagnoseWorkflowFactory.INVESTIGATE_PROMPT,
-                OpsDiagnoseWorkflowFactory.RESOLVE_PROMPT, OpsDiagnoseWorkflowFactory.VERIFY_PROMPT)) {
-            keyOwner.putIfAbsent(asset, AgentCatalog.OPS.id());
-        }
-        return new PromptStorePromptProvider(promptStore, bindingService, keyOwner);
-    }
-
-    /** 命名空间红线：同 key 被两个 agent 的人格/任务层声明即装配期失败。 */
-    private static void putStrict(Map<String, String> keyOwner, String key, String agentId) {
-        String previous = keyOwner.putIfAbsent(key, agentId);
-        if (previous != null && !previous.equals(agentId)) {
-            throw new IllegalStateException("Prompt key 跨 agent 重复: " + key
-                    + "（" + previous + " 与 " + agentId + "）——人格/任务层 key 须各归各的命名空间");
-        }
-    }
-
-    /**
-     * 引擎本体（destroyMethod=close 释放内部资源）。
-     */
     /**
      * 把调用方线程的遥测上下文搬进引擎的执行线程。
      *
@@ -167,10 +101,16 @@ public class FrameworkAgentConfiguration {
         TaskPropagation.install(ContextPropagator::wrap);
     }
 
+    /**
+     * 引擎本体（destroyMethod=close 释放内部资源）。
+     *
+     * <p>Prompt 来源注入容器单例 {@link PromptStorePromptProvider}（{@link PromptAssetConfiguration}
+     * 装配）：组合模板与 runtime 注册均落在该单例上。先前是本类自调用再造一个私有实例
+     * （CGLIB 代理不自调用）——该 provider 全仓仅引擎消费，单例化后解析结果逐字节不变。</p>
+     */
     @Bean(destroyMethod = "close")
     public Engine agentEngine(ChatModel chatModel,
-                              PromptStore promptStore,
-                              PromptBindingService bindingService,
+                              PromptStorePromptProvider promptProvider,
                               RetrievalEngine retrievalEngine,
                               DataSource dataSource,
                               ObjectMapper objectMapper,
@@ -183,7 +123,6 @@ public class FrameworkAgentConfiguration {
                               QueryRewriter queryRewriter,
                               @org.springframework.beans.factory.annotation.Value(
                                       "${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
-        PromptStorePromptProvider promptProvider = agentPromptProvider(promptStore, bindingService);
 
         // ---- 工具面（共享注册表：RAG 检索 + ops 诊断 + 时间）----
         DefaultToolRegistry sharedRegistry = new DefaultToolRegistry();

@@ -1,4 +1,6 @@
-package com.jjx.customer.platform.business;
+package com.jjx.customer.platform.business.knowledge;
+
+import com.jjx.customer.platform.business.trace.EngineTraceMapper;
 
 import com.agentframework.engine.core.Engine;
 import com.agentframework.engine.core.RunResult;
@@ -39,7 +41,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class FrameworkKnowledgeRunner {
+public class KnowledgeRunner {
 
     /** 管线检索参数（SearchContext）在引擎槽位里的键。 */
     public static final String ATTR_SEARCH_CONTEXT = RetrievalTool.SEARCH_CONTEXT_SLOT;
@@ -156,7 +158,7 @@ public class FrameworkKnowledgeRunner {
         List<RetrievedChunk> chunks = toChunks(result, agentId);
         AgentFingerprint fingerprint = new AgentFingerprint(entry.id(), entry.workflowId(),
                 fingerprintResolver.promptHash(entry.id()));
-        return new KnowledgeAnswer(chunks, FrameworkTraceMapper.toBusinessTrace(result, fingerprint),
+        return new KnowledgeAnswer(chunks, EngineTraceMapper.toBusinessTrace(result, fingerprint),
                 stringSlot(result, KnowledgeQaGraphFactory.INTENT_SLOT),
                 booleanSlot(result, KnowledgeQaGraphFactory.NEEDS_RETRIEVAL_SLOT, true),
                 stringSlot(result, KnowledgeQaGraphFactory.ROUTE_TARGET_SLOT),

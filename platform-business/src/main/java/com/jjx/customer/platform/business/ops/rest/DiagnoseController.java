@@ -1,6 +1,6 @@
 package com.jjx.customer.platform.business.ops.rest;
 
-import com.jjx.customer.platform.business.FrameworkOpsRunner;
+import com.jjx.customer.platform.business.ops.OpsRunner;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievalBudget;
 import com.jjx.customer.platform.knowledge.retrieval.SearchContext;
@@ -33,7 +33,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DiagnoseController {
 
-    private final FrameworkOpsRunner frameworkOpsRunner;
+    private final OpsRunner frameworkOpsRunner;
     private final ChatProperties chatProperties;
     private final AgentProperties agentProperties;
 
@@ -45,7 +45,7 @@ public class DiagnoseController {
     @PostMapping("/trace")
     public DiagnoseResponse diagnose(@RequestParam String traceId) {
         // 框架主线：与对话链路同一实现（REST 为单轮：conversationId 为空，不落会话）
-        FrameworkOpsRunner.OpsAnswer answer = frameworkOpsRunner.run("按 traceId 诊断：" + traceId,
+        OpsRunner.OpsAnswer answer = frameworkOpsRunner.run("按 traceId 诊断：" + traceId,
                 OpsSlotCatalog.sanitized(Map.of(OpsSlotCatalog.TRACE_ID, traceId)), null);
         return new DiagnoseResponse(traceId, answer.text(), answer.kind().name(),
                 answer.trace() == null ? 0 : answer.trace().getLlmCallCount());

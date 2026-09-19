@@ -85,7 +85,7 @@ public final class AgentCatalog {
     /**
      * 历史范式别名：这些 id 已不在 {@link #ALL} 里，但旧评测参数快照、旧脚本、
      * 绕过前端的直接调用仍在传。在此解析到当前范式，**否则会静默降级成 knowledge**
-     * （见 {@code FrameworkKnowledgeRunner} 的 {@code byId(...).orElse(KNOWLEDGE)}）——
+     * （见 {@code KnowledgeRunner} 的 {@code byId(...).orElse(KNOWLEDGE)}）——
      * 传 react 却跑了知识检索，而结果里还记着 paradigm=react，最难查的一类问题。
      */
     private static final Map<String, String> ALIASES = Map.of(

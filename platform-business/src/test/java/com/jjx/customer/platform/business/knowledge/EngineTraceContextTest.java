@@ -65,7 +65,7 @@ class EngineTraceContextTest {
 
     @Test
     void 节点执行器应能看到调用方的父span() {
-        // 生产由 FrameworkAgentConfiguration 注入 ContextPropagator::wrap；
+        // 生产由 AgentEngineConfiguration 注入 ContextPropagator::wrap；
         // 这里用等价的纯 OTel 写法，免得测试反过来依赖遥测库。
         // 顺带记录钩子被调了几次、捕获时上下文长什么样——失败时要能一眼看出断在哪一环。
         StringBuilder diag = new StringBuilder();

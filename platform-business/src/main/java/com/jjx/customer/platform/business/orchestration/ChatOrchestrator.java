@@ -3,8 +3,8 @@ package com.jjx.customer.platform.business.orchestration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import com.jjx.ai.llmobservability.observation.logging.TelemetryLogger;
-import com.jjx.customer.platform.business.FrameworkKnowledgeRunner;
-import com.jjx.customer.platform.business.FrameworkOpsRunner;
+import com.jjx.customer.platform.business.knowledge.KnowledgeRunner;
+import com.jjx.customer.platform.business.ops.OpsRunner;
 import com.jjx.customer.platform.business.engine.PromptFingerprintResolver;
 import com.jjx.customer.platform.business.engine.AgentCatalog;
 import com.jjx.customer.platform.business.knowledge.RewritePolicy;
@@ -83,8 +83,8 @@ public class ChatOrchestrator<S> {
 
     private final DeliveryPortFactory<S> deliveryPortFactory;
     private final ConversationStore conversationStore;
-    private final FrameworkKnowledgeRunner frameworkKnowledgeRunner;
-    private final FrameworkOpsRunner frameworkOpsRunner;
+    private final KnowledgeRunner frameworkKnowledgeRunner;
+    private final OpsRunner frameworkOpsRunner;
     private final PromptFingerprintResolver promptFingerprintResolver;
     private final RouteRegistry routeRegistry;
     private final AgentProperties agentProperties;
@@ -262,9 +262,9 @@ public class ChatOrchestrator<S> {
         // 作为初始槽位喂进去，再从产物槽位把该接手的活读回来。
         String historyForRewrite = conversationStore.historyContext(conversationId);
         long tRetrieve = System.currentTimeMillis();
-        FrameworkKnowledgeRunner.KnowledgeAnswer knowledgeAnswer = frameworkKnowledgeRunner.retrieve(
+        KnowledgeRunner.KnowledgeAnswer knowledgeAnswer = frameworkKnowledgeRunner.retrieve(
                 question, searchCtx, paradigm,
-                new FrameworkKnowledgeRunner.RunContext(historyForRewrite, null, traceId,
+                new KnowledgeRunner.RunContext(historyForRewrite, null, traceId,
                         agentChoice, activeSession == null ? null : activeSession.agentId(),
                         RewritePolicy.AUTO, false));
         List<RetrievedChunk> chunks = knowledgeAnswer.chunks();
@@ -418,7 +418,7 @@ public class ChatOrchestrator<S> {
 
         long t = System.currentTimeMillis();
         // 框架主线：ops 三阶段 workflow（查日志 → 检索/生成或纠正 → 校验收尾），执行权在框架引擎
-        FrameworkOpsRunner.OpsAnswer answer;
+        OpsRunner.OpsAnswer answer;
         try {
             answer = frameworkOpsRunner.run(question, mergedSlots, conversationId);
         } finally {

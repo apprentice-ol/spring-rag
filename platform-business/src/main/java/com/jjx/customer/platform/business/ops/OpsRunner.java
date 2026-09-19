@@ -1,4 +1,6 @@
-package com.jjx.customer.platform.business;
+package com.jjx.customer.platform.business.ops;
+
+import com.jjx.customer.platform.business.trace.EngineTraceMapper;
 
 import com.agentframework.engine.core.Engine;
 import com.agentframework.engine.core.RunResult;
@@ -30,7 +32,7 @@ import org.springframework.stereotype.Component;
  * 运维诊断主线执行器（对话链路与 REST 端点共用，签名与返回契约完全不变）。
  *
  * <p>内部执行权在新内核引擎（图 = {@code ops_diagnose_v2}，装配见
- * {@code FrameworkAgentConfiguration}）：</p>
+ * {@code AgentEngineConfiguration}）：</p>
  * <ul>
  *   <li>会话恢复：sa_agent_session 有已确认槽位且引擎会话（id = {@code ops-<conversationId>}
  *       确定性派生）可 load → {@code engine.resume}（答复写 user_clarify 槽，问齐与环内追问
@@ -44,7 +46,7 @@ import org.springframework.stereotype.Component;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class FrameworkOpsRunner {
+public class OpsRunner {
 
     /** 一次诊断的执行产物（交付由调用方决定：SSE / REST 投影）。 */
     public record OpsAnswer(OutcomeKind kind, String text, TraceView trace) {
@@ -69,7 +71,7 @@ public class FrameworkOpsRunner {
             }
         }
         AgentCatalog.Entry ops = AgentCatalog.OPS;
-        TraceView trace = FrameworkTraceMapper.toBusinessTrace(result, new AgentFingerprint(
+        TraceView trace = EngineTraceMapper.toBusinessTrace(result, new AgentFingerprint(
                 ops.id(), ops.workflowId(), fingerprintResolver.promptHash(ops.id())));
         return new OpsAnswer(kind, textOf(result), trace);
     }

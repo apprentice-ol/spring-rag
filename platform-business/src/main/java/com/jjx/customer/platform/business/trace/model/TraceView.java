@@ -43,7 +43,7 @@ public class TraceView {
     /**
      * @param startTimeMs 轨迹起点（整轮真实开始执行的时刻）。总耗时 = 读取时刻 - 该值，
      *                    所以起点必须是"执行开始"而不是"构造 TraceView 的时刻"。
-     *                    <p>框架路径由 FrameworkTraceMapper 用引擎的整轮耗时反推起点——
+     *                    <p>框架路径由 EngineTraceMapper 用引擎的整轮耗时反推起点——
      *                    那是在执行完之后才映射的，直接取"此刻"会把总耗时算成映射到落库的间隔。</p>
      */
     public TraceView(String paradigm, String workflowId, String promptHash, long startTimeMs) {

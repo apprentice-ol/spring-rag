@@ -45,11 +45,11 @@ POST /chat/stream
  └─ delivery.rest.ChatController                      通道入口（SSE 载体）
      └─ delivery.service.ChatService → business.orchestration.ChatOrchestrator.execute(…, sink)
          ├─ 决策链：会话恢复 → 归一化 → 规则短路 → 显式范式 → 指代悬空 → 意图分类 → 规则路由
-         ├─ ops 支路：framework agent + workflow（FrameworkOpsRunner）→ Outcome 分派（追问/直答/升级）
+         ├─ ops 支路：framework agent + workflow（OpsRunner）→ Outcome 分派（追问/直答/升级）
          └─ RAG 主线：
              ├─ conversation.ConversationStore.historyContext（会话事实）
              ├─ orchestration.normalize.QueryRewriter（LLM 改写）
-             ├─ FrameworkKnowledgeRunner（agent + workflow；检索 = extension tool，执行权在框架引擎）
+             ├─ KnowledgeRunner（agent + workflow；检索 = extension tool，执行权在框架引擎）
              │   ├─ knowledge.retrieval（多通道检索 / 重排 / 后处理 + 两级答案缓存）
              │   └─ knowledge.answer.KnowledgeAnswerService（流式生成）
              ├─ orchestration.rag.RagContextAssembler（上下文文本 + 引用溯源映射）
@@ -102,7 +102,7 @@ business → knowledge（RAG 能力）；delivery → business（编排入口）
 | `Agent` / `Workflow` | 框架契约实现 | `KnowledgeFrameworkAgent`、`OpsDiagnoseWorkflow` |
 | `Tool`（`BaseTool`/`ExtensionTool`） | 工具能力 | `RetrievalExtensionTool`、`FinishBaseTool` |
 | `Rule` / `Strategy` | 路由 | `TraceIdShortCircuitRule`、`OpsIntentRouteStrategy` |
-| `Runner` | 一次执行的适配器 | `FrameworkKnowledgeRunner` |
+| `Runner` | 一次执行的适配器 | `KnowledgeRunner` |
 | `Orchestrator` | 一次请求的编排决策 | `ChatOrchestrator` |
 | `Port` / `Store` / `Catalog` | 跨域 SPI 契约（shared） | `DeliveryPort`、`ConversationStore`、`DocumentCatalog` |
 | `Controller` / `Service(+Impl)` / `Mapper` / `Entity` | 分层构件 | `ChatController`、`AgentTraceServiceImpl` |
