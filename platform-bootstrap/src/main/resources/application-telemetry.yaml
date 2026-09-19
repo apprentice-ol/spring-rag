@@ -34,13 +34,16 @@ telemetry:
   #   baggage-span-attributes: true    # false 时 baggage 不落 span（Langfuse 会话分组等随之失效）
 
   # 内容捕获与摘要限额（启动期一次性生效，默认值见 TelemetryProperties.Limits，按需覆盖）
+  # 2026-09-19 与服务器口径对齐（原先本地全量不截断）：span 批次体积超 OpenObserve
+  # 单请求上限 → 导出整批 400 被弃（"request body too large"），traces 流 08-24 起断流，
+  # OpenObserve 的 trace DAG 因此缺失。启用摘要+截断后单 span ≤8KB，批次回到 OO 可收范围。
   limits:
-    summarize: false                 # 测试阶段关闭摘要，保留完整输入/输出 JSON
-    truncate: false                  # 测试阶段关闭截断，保留完整输入/输出
-    max-span-io: 100000000           # 兜底字符上限；truncate=false 时不生效
-    summarize-max-string: 100000000  # 测试阶段大值，避免摘要字符串截断
-    summarize-max-preview: 1000000   # 测试阶段大值，避免集合/数组只留预览
-    summarize-max-map-entries: 1000000 # 测试阶段大值，避免 Map 只留前几条
+    summarize: true                  # 输入/输出做摘要（同 application-telemetry-server.yaml 实测口径）
+    truncate: true                   # 超长字段截断
+    max-span-io: 8192                # 单个 span 最大捕获 8KB（原 1 亿）
+    summarize-max-string: 2000
+    summarize-max-preview: 500
+    summarize-max-map-entries: 100
 
   # ---------------------------------------------------------------
   # 2. OTel Collector：可选开关
