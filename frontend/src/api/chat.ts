@@ -16,6 +16,8 @@ export interface MessageItem {
   citations?: string | null
   /** 关联 Agent 轨迹的 traceId（历史消息加载时后端批量回填，跳 OpenObserve 全链路用） */
   traceId?: string | null
+  /** 澄清/决策卡片载荷 JSON（随消息落库；刷新页面后据此重新渲染卡片） */
+  clarify?: string | null
 }
 
 /** 回答引用溯源项（后端 Citation record 镜像）：ref 对应正文 [N] 角标 */
@@ -156,17 +158,38 @@ export interface StreamMeta {
   paradigm: string | null
 }
 
-/** SSE clarify 事件（运维诊断追问中断）：缺失槽位问题列表，一次问齐（后端 ClarifyRequest 镜像） */
+/** SSE clarify 事件（运维诊断追问中断）：缺失槽位问题列表，一次问齐（后端 ClarifyRequest 镜像）。
+ *  人在环中扩展：DECIDE 决策移交带 kind/options/evidence——渲染证据要点 + 点选按钮，
+ *  点击回传 #decision:<value>；旧事件无这些字段，按问齐卡片渲染（零影响）。 */
 export interface ClarifySlotQuestion {
   slot: string
   question: string
   hint: string | null
   required: boolean
+  /** 候选值（目录声明；点击直接作为回答发送），旧事件无此字段 */
+  options?: string[] | null
+  /** 机器已补全的值（P3）；有值即「已自动补全，等你确认」，点击纠正回传 #override:<slot>=<value> */
+  value?: string | null
+  /** 补全来源（rule/default/llm/log_query/user_override），前端映射成角标文案 */
+  provenance?: string | null
+  /** 来源依据（如「日志反查关键字「订单接口」命中」）——卡片上回答「这值哪来的」 */
+  evidence?: string | null
+}
+export interface ClarifyChoice {
+  value: string
+  label: string
+  description: string | null
 }
 export interface ClarifyEvent {
   sessionId: string | null
   summary: string
   questions: ClarifySlotQuestion[]
+  /** 已自动补全、等用户确认的槽位（P3；带值 + 来源角标，可点选纠正）；旧事件无此字段 */
+  reviewed?: ClarifySlotQuestion[] | null
+  kind?: string | null
+  options?: ClarifyChoice[] | null
+  evidence?: string[] | null
+  allowFreeText?: boolean | null
 }
 
 export interface StreamHandlers {
@@ -184,6 +207,7 @@ export interface StreamHandlers {
  * 流式问答（SSE GET）。按 SSE 规范解析：event 行决定类型（message→回答块 / trace→agent 轨迹 / meta→消息元信息），
  * 一个事件可由多个 data: 行组成，空行结束。agent 参数指定范式（naive/react）。
  * signal 传 AbortController 的信号：abort 视为正常结束（onDone）而非 onError——「停止生成」用它。
+ * autonomy 传会话自主档位（L1/L2/L3；空 = 后端按会话记录/缺省 L2）。
  */
 export async function streamChat(
   question: string,
@@ -191,8 +215,12 @@ export async function streamChat(
   handlers: StreamHandlers,
   agent?: string,
   signal?: AbortSignal,
+  autonomy?: string,
 ): Promise<void> {
   const params = new URLSearchParams({ question, conversationId })
+  if (autonomy) {
+    params.set('autonomy', autonomy)
+  }
   if (agent) {
     // agent = RAG 链内范式（兼容旧语义）；agentChoice = 用户显式选择标记（后端意图路由只认它，
     // 防止旧客户端默认携带的 agent=knowledge 被误判为显式选择而旁路意图识别）

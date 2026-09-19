@@ -1,16 +1,16 @@
 package com.jjx.customer.platform.business.engine;
 
-import com.jjx.customer.platform.business.engine.AgentCatalog;
 import com.jjx.customer.platform.config.prompt.PromptStore;
 import com.jjx.customer.platform.prompt.service.PromptBindingService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
 /**
  * Prompt 指纹解析器：按范式（= Agent id）解析全层 prompt 的内容 hash——

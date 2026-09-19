@@ -77,6 +77,27 @@ public class SseDeliveryPort implements DeliveryPort {
         sseSender.completeEmitter(emitter);
     }
 
+    /** 卡片载荷序列化（Jackson 线程安全，静态复用）。 */
+    private static final com.fasterxml.jackson.databind.ObjectMapper MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * 人在环中版追问：结构化请求直出（DECIDE 决策移交带证据与点选项）。
+     * 落库/正文文案与 SSE 事件同源（buildAskText 渲染），纯文本用户不点按钮也能照常回复。
+     */
+    @Override
+    public void emitClarify(String conversationId, ClarifyRequest clarify, String paradigm, DeliveryContext ctx) {
+        String askText = buildAskText(clarify);
+        sseSender.sendClarifyEvent(emitter, clarify);
+        // 卡片随消息落库：刷新页面后从历史接口读回同款结构，重新渲染成卡片（正文文本还原不出选项/来源）
+        Long msgId = messageWriter.saveMessage(conversationId, "assistant", askText, null, toJson(clarify));
+        log.conversationOutput(askText);
+        sseSender.sendEvent(emitter, askText);
+        recordTrace(msgId, paradigm);
+        sseSender.sendMetaEvent(emitter, msgId, otelTraceId, paradigm);
+        sseSender.completeEmitter(emitter);
+    }
+
     @Override
     public void emitEscalate(String conversationId, String text, String paradigm, DeliveryContext ctx) {
         String reason = StringUtils.hasText(text) ? text : "目前掌握的信息还不足以继续排查。";
@@ -242,9 +263,38 @@ public class SseDeliveryPort implements DeliveryPort {
         }
     }
 
-    /** 追问文案：summary + 缺失项清单（与 clarify 事件卡片一致）。 */
+    /** 结构化载荷序列化（失败按 null 落库——卡片刷新后不渲染，但绝不阻断对话）。 */
+    private String toJson(Object payload) {
+        try {
+            return MAPPER.writeValueAsString(payload);
+        } catch (Exception e) {
+            log.warn("[[SSE]] 卡片载荷序列化失败（刷新后不重渲染）: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 追问文案：问齐 = summary + 缺失项清单；决策移交 = 问句 + 证据要点 + 选项（与 clarify 事件卡片一致）。 */
     static String buildAskText(ClarifyRequest clarify) {
         StringBuilder sb = new StringBuilder();
+        if (clarify.isDecision()) {
+            sb.append(clarify.summary() == null || clarify.summary().isBlank()
+                    ? "排查需要你的判断" : clarify.summary()).append('\n');
+            if (!clarify.evidence().isEmpty()) {
+                sb.append("\n已查明：\n");
+                for (String point : clarify.evidence()) {
+                    sb.append("- ").append(point).append('\n');
+                }
+            }
+            if (!clarify.options().isEmpty()) {
+                sb.append("\n你可以：\n");
+                for (ClarifyRequest.ClarifyChoice choice : clarify.options()) {
+                    // 点选按钮走前端 #decision:value；纯文本用户直接回复说明同样生效
+                    sb.append("- ").append(choice.label()).append('\n');
+                }
+                sb.append("\n（直接回复补充信息也可以，我将按新线索继续排查）");
+            }
+            return sb.toString().trim();
+        }
         sb.append(clarify.summary() == null || clarify.summary().isBlank()
                 ? "需要补充以下信息" : clarify.summary()).append("：\n");
         int n = 0;
@@ -254,6 +304,12 @@ public class SseDeliveryPort implements DeliveryPort {
                 sb.append("（").append(q.hint()).append("）");
             }
             sb.append('\n');
+        }
+        if (!clarify.evidence().isEmpty()) {
+            sb.append("\n已自动补全（如有误请直接指出）：\n");
+            for (String point : clarify.evidence()) {
+                sb.append("- ").append(point).append('\n');
+            }
         }
         return sb.toString().trim();
     }

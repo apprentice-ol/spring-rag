@@ -16,5 +16,6 @@ public interface ChatService {
      *                       null/空 = 自动档（意图识别路由）
      * @param emitter        SSE 输出端
      */
-    void streamChat(String question, String conversationId, String agent, String agentChoice, SseEmitter emitter);
+    void streamChat(String question, String conversationId, String agent, String agentChoice,
+                    String autonomy, SseEmitter emitter);
 }

@@ -5,7 +5,7 @@ import {
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
   ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined, FileSearchOutlined,
 } from '@ant-design/icons-vue'
-import { streamChat, cancelChat, type AgentTrace, type Citation } from '../api/chat'
+import { streamChat, cancelChat, type AgentTrace, type Citation, type ClarifyChoice, type ClarifyEvent, type ClarifySlotQuestion } from '../api/chat'
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
@@ -34,6 +34,22 @@ const md = new MarkdownIt({ html:true, linkify:true, typographer:true, breaks:tr
 
 function renderMarkdown(text:string): string { return text?md.render(text):'' }
 
+/** 诊断结论里「上下文来源」段的标题行（服务端 ConcludeExecutor 固定追加，不进正文渲染）。 */
+const CONTEXT_TITLE = '本次诊断的上下文自动补全'
+
+/**
+ * 「上下文来源」段在正文里的起点；没有该段返回 -1。
+ *
+ * <p>服务端追加形态为 {@code \n\n——\n本次诊断的上下文自动补全：\n- slot = value（依据）}。
+ * 从标题往回找最近的一条「——」：结论正文自己也可能出现「——」，倒着找必然命中服务端那条。</p>
+ */
+function contextBlockStart(text:string): number {
+  const title = text.indexOf(CONTEXT_TITLE)
+  if (title < 0) return -1
+  const marker = text.lastIndexOf('——', title)
+  return marker < 0 ? title : marker
+}
+
 // ── 引用溯源渲染 ──
 /** 该消息正文中的 [N] 角标（仅保留 citations 里真实存在的 ref，防 LLM 幻觉编号） */
 function usedCitations(m: Msg): Citation[] {
@@ -48,7 +64,10 @@ function usedCitations(m: Msg): Citation[] {
  * 只替换与 citations 匹配的编号（防幻觉编号），注入内容为纯数字，无 XSS 面。
  */
 function renderWithCitations(m: Msg): string {
-  const html = renderMarkdown(m.content)
+  const content = m.content ?? ''
+  const start = contextBlockStart(content)
+  // 上下文来源段由 contextRows 单独渲染成结构化清单，正文里剥掉——否则同一段会显示两遍
+  const html = renderMarkdown(start < 0 ? content : content.slice(0, start))
   if (!m.citations?.length) return html
   const refs = new Set(m.citations.map(c => c.ref))
   // ① 链接式：<a href="#cite-N">N</a> → 角标
@@ -56,9 +75,51 @@ function renderWithCitations(m: Msg): string {
     return refs.has(Number(num)) ? makeBadge(Number(num)) : whole
   })
   // ② 裸 [N]（sup 标签内无方括号，二次替换不会误伤）
-  return linked.replace(/\[(\d{1,2})\]/g, (whole, num: string) => {
+  const badged = linked.replace(/\[(\d{1,2})\]/g, (whole, num: string) => {
     return refs.has(Number(num)) ? makeBadge(Number(num)) : whole
   })
+  return withCodeCopy(badged)
+}
+
+/**
+ * 给每个代码块加一条「复制」操作条（结论里的修复报文最常用）。
+ * 原始代码存进 data-code（base64，避免 HTML 属性转义问题），点击时由 onBubbleClick 取用。
+ */
+function withCodeCopy(html: string): string {
+  return html.replace(/<pre class="hljs"><code>([\s\S]*?)<\/code><\/pre>/g, (whole, inner: string) => {
+    const text = inner.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+    let encoded = ''
+    try { encoded = btoa(unescape(encodeURIComponent(text))) } catch { encoded = '' }
+    return `<div class="code-block"><div class="code-bar"><button class="code-copy" data-code="${encoded}">复制</button></div>${whole}</div>`
+  })
+}
+
+/**
+ * 结论正文里的「上下文来源」段 → 结构化行。
+ *
+ * <p>服务端（ConcludeExecutor）用固定格式追加：{@code ——
+本次诊断的上下文自动补全：
+- slot = value（依据）}，
+ * 这里把它从正文里摘出来单独渲染成来源清单，正文只留结论本身。</p>
+ */
+function contextRows(m: Msg): { slot: string; value: string; evidence: string }[] {
+  if (m.role !== 'assistant') return []
+  const content = m.content ?? ''
+  const start = contextBlockStart(content)
+  if (start < 0) return []
+  const block = content.slice(start)
+  const rows: { slot: string; value: string; evidence: string }[] = []
+  for (const line of block.split('\n')) {
+    const hit = line.match(/^-\s*([a-z_]+)\s*=\s*(.*?)（(.*)）\s*$/)
+    if (hit) rows.push({ slot: slotLabel(hit[1]), value: shortPlain(hit[2]), evidence: hit[3] })
+  }
+  return rows
+}
+
+/** 来源行里的值：截断展示（完整值在 title） */
+function shortPlain(value: string): string {
+  const t = (value || '').trim()
+  return t.length > 48 ? t.slice(0, 48) + '…' : t
 }
 
 function makeBadge(ref: number): string {
@@ -78,6 +139,14 @@ function openCitations(m: Msg, ref?: number) {
 }
 
 function onBubbleClick(e: MouseEvent, m: Msg) {
+  const copyBtn = (e.target as HTMLElement).closest('button.code-copy')
+  if (copyBtn) {
+    const encoded = copyBtn.getAttribute('data-code') || ''
+    try {
+      void copyWithToast(decodeURIComponent(escape(atob(encoded))), '已复制代码块')
+    } catch { /* 编码异常忽略 */ }
+    return
+  }
   const target = (e.target as HTMLElement).closest('sup.cite-badge')
   if (!target) return
   const ref = Number(target.getAttribute('data-cite-ref'))
@@ -119,6 +188,33 @@ const composerFocused = ref(false)
 /** 移动端：左侧会话列表抽屉开关 */
 const mobileConvOpen = ref(false)
 
+/**
+ * 会话自主档位（人在环中 P3）：L1 多问我 / L2 默认 / L3 少问我。空值 = 跟随会话记录（缺省 L2）。
+ * 随每次请求发送（后端按「本轮参数 > 会话记录 > 缺省」定档），也随挂起会话落库延续。
+ */
+const autonomy = ref('')
+const AUTONOMY_OPTIONS = [
+  { value: '', label: '默认档', desc: '目录缺省 + 高置信推断 + 日志反查（推荐）' },
+  { value: 'L1', label: '多问我', desc: '不自动补全：缺什么问什么，推断与日志反查全关' },
+  { value: 'L3', label: '少问我', desc: '推断门槛放宽、日志多查一轮，尽量减少追问' },
+]
+
+/** 槽位短名（已有目录七槽；未知槽位名原样显示） */
+const SLOT_LABELS: Record<string, string> = {
+  environment: '环境', interface: '接口', time: '时间',
+  error: '报错', payload: '报文', symptoms: '现象', trace_id: '关键数据',
+}
+function slotLabel(slot: string): string { return SLOT_LABELS[slot] || slot }
+
+/** 自动补全来源 → 角标文案（与后端 SlotProvenance.label 同口径） */
+const PROVENANCE_LABELS: Record<string, string> = {
+  llm: '模型推断', log_query: '日志反查', default: '缺省值', rule: '规则提取',
+  user_override: '已更正', user: '你提供',
+}
+function provenanceLabel(source?: string | null): string {
+  return PROVENANCE_LABELS[source || ''] || '自动补全'
+}
+
 const title = computed(() => currentTitle())
 
 // 切换会话后：滚动到底、新对话聚焦输入框
@@ -135,13 +231,172 @@ let abortCtl: AbortController | null = null
 const stopping = ref(false)
 
 async function send() {
-  const q = input.value.trim()
+  await sendText(input.value.trim())
+  input.value = ''
+}
+
+/**
+ * 决策移交点选（人在环中）：把选项 value 以 #decision: 前缀发出（后端 HumanResponse.parse 消费），
+ * 用户气泡显示选项 label 而非协议原文；点过的卡片立即退场（决策已交，防止重复点击）。
+ */
+async function sendDecision(value: string, label: string) {
+  if (sending.value) return
+  const card = decisionTarget.value
+  if (card) card.clarify = undefined
+  decisionTarget.value = null
+  await sendText(`#decision:${value}`, label)
+}
+
+/**
+ * 决策卡片点选分流：终止类选项 = 立即回传（确定性协议，零模型调用）；
+ * 「我补充信息，继续排查」这类 = **聚焦输入框让用户说**——空发一条会被后端判为"没收到新信息"
+ * 而原样再问一轮，按钮看起来就像坏的。
+ */
+function decideAction(c: ClarifyChoice) {
+  if (sending.value) return
+  if (c.value === 'terminate') {
+    void sendDecision(c.value, c.label)
+    return
+  }
+  nextTick(() => inputRef.value?.focus())
+}
+
+/**
+ * 选项按钮分流（按卡片类别）：
+ * DECIDE 的「继续」= 让用户说（聚焦输入框）；DECIDE 的「终止」与 CONFIRM 的「确认」= 立即确定性回传。
+ */
+function onOptionClick(kind: string | null | undefined, c: ClarifyChoice) {
+  if (sending.value) return
+  if (c.value === 'terminate' || kind === 'CONFIRM') {
+    void sendDecision(c.value, c.label)
+    return
+  }
+  nextTick(() => inputRef.value?.focus())
+}
+
+/** 当前待决策卡片（点选后置空退场）；DECIDE 才有，问齐卡片不进 */
+const decisionTarget = ref<Msg | null>(null)
+
+/**
+ * 点选纠正自动补全值（人在环中 P3）：回传 #override:<slot>=<value>（后端 HumanResponse.parse
+ * 确定性消费，零模型调用），用户气泡显示「环境 改为 test」而非协议原文。
+ */
+/** 就地编辑态（一次只编辑一行）：槽位名 + 编辑中的值 */
+const editingSlot = ref('')
+const editingValue = ref('')
+
+function startEdit(i: number, r: ClarifySlotQuestion) {
+  editingSlot.value = r.slot
+  editingValue.value = pickOf(i, r.slot) || r.value || ''
+}
+
+function cancelEdit() {
+  editingSlot.value = ''
+  editingValue.value = ''
+}
+
+/** 就地编辑确定 → 进「待提交」集合（不直接发送，用户可继续改别的再一起提交） */
+function commitEdit(i: number, r: ClarifySlotQuestion) {
+  const value = editingValue.value.trim()
+  cancelEdit()
+  setPick(i, r.slot, value)
+}
+
+/**
+ * 卡片内「待提交」的选择：key = `${消息下标}|${槽位}`，value = 选中值（空串 = 清空该项）。
+ *
+ * <p>点选只改这张卡的本地状态，**不倒进输入框、也不每点一条消息**——想改几项就改几项，
+ * 最后点「提交」一次性发出去（`#fill:<json>`，后端确定性消费、零模型调用）。</p>
+ */
+const picks = ref<Record<string, string>>({})
+const pickKey = (i: number, slot: string) => `${i}|${slot}`
+
+function pickOf(i: number, slot: string): string {
+  return picks.value[pickKey(i, slot)] ?? ''
+}
+
+function hasPick(i: number, slot: string): boolean {
+  return pickKey(i, slot) in picks.value
+}
+
+function pickCount(i: number): number {
+  const prefix = i + '|'
+  return Object.keys(picks.value).filter(k => k.startsWith(prefix)).length
+}
+
+function setPick(i: number, slot: string, value: string) {
+  if (sending.value) return
+  picks.value = { ...picks.value, [pickKey(i, slot)]: value }
+}
+
+function clearPick(i: number, slot: string) {
+  const next = { ...picks.value }
+  delete next[pickKey(i, slot)]
+  picks.value = next
+}
+
+function clearPicks(i: number) {
+  const prefix = i + '|'
+  const next: Record<string, string> = {}
+  for (const [k, v] of Object.entries(picks.value)) {
+    if (!k.startsWith(prefix)) next[k] = v
+  }
+  picks.value = next
+}
+
+/** 提交这张卡上的全部选择：一个 `#fill:<json>`（多槽一次到位，后端按当前值自动判补缺/推翻） */
+async function submitPicks(i: number) {
+  if (sending.value) return
+  const prefix = i + '|'
+  const entries = Object.entries(picks.value).filter(([k]) => k.startsWith(prefix))
+  if (!entries.length) return
+  const payload: Record<string, string> = {}
+  const labels: string[] = []
+  for (const [key, value] of entries) {
+    const slot = key.slice(prefix.length)
+    payload[slot] = value
+    labels.push(`${slotLabel(slot)} ${value || '清空'}`)
+  }
+  clearPicks(i)
+  await sendText(`#fill:${JSON.stringify(payload)}`, labels.join(' · '))
+}
+
+/**
+ * 问齐卡片的引导句：环内 ask_user 由模型组织问法（带上下文），入环问齐则是套话——
+ * 套话不重复展示（eyebrow 已经说了是补充信息），短问句也不占地方。
+ */
+function leadOf(clarify: ClarifyEvent): string {
+  const s = (clarify.summary || '').trim()
+  return s.length > 24 && !s.startsWith('请补充以下信息') ? s : ''
+}
+
+/** 卡片上的值展示：ISO 时间窗压成人读形态，长值截断（完整值挂 title） */
+function shortValue(value?: string | null): string {
+  const v = (value || '').trim()
+  const iso = v.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})~(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/)
+  if (iso) {
+    const sameDay = iso[1] === iso[3]
+    return sameDay ? `${iso[1]} ${iso[2]} ~ ${iso[4]}` : `${iso[1]} ${iso[2]} ~ ${iso[3]} ${iso[4]}`
+  }
+  return v.length > 56 ? v.slice(0, 56) + '…' : v
+}
+
+/** 卡片上的「已自动补全」行（带值即为机器补全项；旧事件无该字段则为空数组） */
+function overridableRows(m: Msg): ClarifySlotQuestion[] {
+  return (m.clarify?.reviewed || []).filter(r => !!r.value)
+}
+
+/** 纠正候选：目录候选值去掉当前值（当前值点它没意义），最多展示 4 个防卡片膨胀 */
+function correctOptions(r: ClarifySlotQuestion): string[] {
+  return (r.options || []).filter(o => o !== r.value).slice(0, 4)
+}
+
+async function sendText(q: string, display?: string) {
   if (!q || sending.value) return
 
-  messages.value.push({role:'user',content:q})
+  messages.value.push({role:'user',content:display || q})
   messages.value.push({role:'assistant',content:'',streaming:true})
   const ans:Msg = messages.value[messages.value.length - 1] as Msg
-  input.value = ''
   sending.value = true
   stopping.value = false
   abortCtl = new AbortController()
@@ -153,6 +408,8 @@ async function send() {
 
   await streamChat(q, activeId.value, {
     onContent:(chunk)=>{
+      // 挂起卡片已接管展示（问齐/决策移交）：后端随后补发的正文文本版（askText）不进气泡，防双发
+      if (ans.clarify) return
       pending+=chunk
       const full=ans.content+pending
       const fenceCount=(full.match(/^```/gm)||[]).length
@@ -165,7 +422,14 @@ async function send() {
     // 静默丢弃 → 新回答无 [N] 角标、无「引用」按钮（历史消息走 DB 解析不受影响）——
     // 2026-09-11 修复：3a72fc7 重构时丢失
     onCitations:(cs)=>{ ans.citations = cs },
-    onClarify:(c)=>{ ans.clarify = c },
+    onClarify:(c)=>{
+      ans.clarify = c
+      // 卡片接管展示：清掉此前累积的过程文案（"正在排查，请稍候…"等），后续正文由 onContent 丢弃
+      pending = ''
+      ans.content = ''
+      // DECIDE 决策移交卡片登记为待决策目标（点选后退场）
+      decisionTarget.value = c.kind === 'DECIDE' ? ans : null
+    },
     onMeta:(meta)=>{
       if (meta.messageId != null) ans.id = meta.messageId
       if (meta.traceId) ans.traceId = meta.traceId
@@ -182,7 +446,7 @@ async function send() {
       }
       sending.value = false; scrollToBottomIfStuck()
     },
-  }, agent.value, abortCtl.signal)
+  }, agent.value, abortCtl.signal, autonomy.value)
 }
 
 /** 停止生成：立即 abort 本地流（反馈即时），再通知服务端（dispose 计费 + 部分回答落库） */
@@ -448,12 +712,127 @@ function fillSuggestion(s: string) {
           <div v-if="m.streaming&&!m.content" class="typing-indicator"><span></span><span></span><span></span></div>
           <div v-else-if="m.role==='user'" class="msg-text user-text">{{ m.content }}</div>
           <div v-else class="markdown-body" v-html="renderWithCitations(m)" @click="onBubbleClick($event, m)"></div>
-          <!-- 运维诊断追问卡片：缺失槽位一次问齐（clarify 事件；用户在输入框补充回答即可续跑） -->
-          <div v-if="m.clarify" class="clarify-card">
-            <div v-for="(q,qi) in m.clarify.questions" :key="qi" class="clarify-item">
-              <span class="clarify-q">{{ qi+1 }}. {{ q.question }}</span>
-              <a-tag v-if="q.hint" color="blue" class="clarify-hint">{{ q.hint }}</a-tag>
+          <!-- 诊断结论的「上下文来源」段：服务端用固定格式追加（—— / 本次诊断的上下文自动补全：/ - slot = value（依据）），
+               解析成结构化行渲染，不再当普通正文 -->
+          <div v-if="m.role==='assistant' && contextRows(m).length" class="conclusion-context">
+            <div class="conclusion-context-title">本次诊断的上下文来源</div>
+            <div v-for="(row,ri) in contextRows(m)" :key="ri" class="conclusion-context-row">
+              <span class="auto-slot">{{ row.slot }}</span>
+              <span class="auto-value" :title="row.value">{{ row.value }}</span>
+              <span class="conclusion-context-evidence">{{ row.evidence }}</span>
             </div>
+          </div>
+          <!-- 运维诊断问齐卡片（clarify 事件）：缺什么问什么 + 已补全的机器值可纠正。
+               候选值点选=填入输入框（不直接发送）——一轮答全多项，而不是每点一次等一整轮排查 -->
+          <div v-if="m.clarify && m.clarify.kind !== 'DECIDE'" class="clarify-card"
+               :class="{ stale: i < messages.length - 1 }">
+            <div class="hitl-eyebrow">{{ m.clarify.kind === 'CONFIRM' ? '确认信息' : '补充信息' }}</div>
+            <!-- 模型自己组织的问法（环内 ask_user）：比逐槽问句多一层上下文，非套话才显示 -->
+            <div v-if="leadOf(m.clarify)" class="clarify-lead">{{ leadOf(m.clarify) }}</div>
+            <div v-for="(q,qi) in m.clarify.questions" :key="qi" class="clarify-item">
+              <span class="clarify-q"><span class="num clarify-no">{{ qi+1 }}</span>{{ q.question }}</span>
+              <span v-if="q.hint && !(q.options && q.options.length)" class="clarify-hint">{{ q.hint }}</span>
+              <div v-if="q.options && q.options.length" class="clarify-options">
+                <button v-for="opt in q.options" :key="opt" class="clarify-opt"
+                        :class="{ picked: pickOf(i, q.slot) === opt }"
+                        :disabled="sending" @click="setPick(i, q.slot, opt)">{{ opt }}</button>
+              </div>
+            </div>
+            <!-- 已自动补全（P3）：值 + 来源角标 + 依据（回答"这值哪来的"）+ 就地改/清空。
+                 每一行都能改——只给有候选值的行配按钮，提示语就是在骗人（曾实测踩到） -->
+            <div v-if="overridableRows(m).length" class="clarify-auto">
+              <div class="clarify-auto-title">{{ m.clarify.kind === 'CONFIRM'
+                ? '我理解的信息 · 不对可点「改」或「清空」' : '已自动补全 · 不对可点「改」或「清空」' }}</div>
+              <div v-for="r in overridableRows(m)" :key="r.slot" class="auto-row">
+                <template v-if="editingSlot !== r.slot">
+                  <span class="auto-slot">{{ slotLabel(r.slot) }}</span>
+                  <!-- 值本身即入口：hover 变主色 + 虚线下划线，点一下进就地编辑 -->
+                  <template v-if="hasPick(i, r.slot)">
+                    <span class="auto-value picked" :title="'待提交：' + (pickOf(i, r.slot) || '（清空）')">
+                      → {{ pickOf(i, r.slot) ? shortValue(pickOf(i, r.slot)) : '清空' }}
+                    </span>
+                    <button class="clarify-opt auto-act" title="撤销这次修改"
+                            @click="clearPick(i, r.slot)">撤销</button>
+                  </template>
+                  <template v-else>
+                    <span class="auto-value" :title="(r.value || '') + '（点击修改）'"
+                          @click="startEdit(i, r)">{{ shortValue(r.value) }}</span>
+                    <span class="auto-badge" :class="'auto-badge-' + (r.provenance || 'auto')">{{ provenanceLabel(r.provenance) }}</span>
+                    <span class="auto-fix">
+                      <button v-for="opt in correctOptions(r)" :key="opt" class="clarify-opt auto-opt"
+                              :class="{ picked: pickOf(i, r.slot) === opt }"
+                              :disabled="sending" @click="setPick(i, r.slot, opt)">改成 {{ opt }}</button>
+                      <button class="clarify-opt auto-act" :disabled="sending" title="手动填一个新值"
+                              @click="startEdit(i, r)">改</button>
+                      <button class="clarify-opt auto-act auto-act-clear" :disabled="sending"
+                              title="清掉这项（当作没填）" @click="setPick(i, r.slot, '')">清空</button>
+                    </span>
+                  </template>
+                  <span v-if="r.evidence" class="auto-evidence" :title="r.evidence">{{ r.evidence }}</span>
+                </template>
+                <template v-else>
+                  <span class="auto-slot">{{ slotLabel(r.slot) }}</span>
+                  <input v-model="editingValue" class="auto-input" :placeholder="r.value || '新值…'"
+                         @keydown.enter="commitEdit(i, r)" @keydown.esc="cancelEdit()" />
+                  <span class="auto-fix">
+                    <button class="clarify-opt" :disabled="sending" @click="commitEdit(i, r)">确定</button>
+                    <button class="clarify-opt" @click="cancelEdit()">取消</button>
+                  </span>
+                </template>
+              </div>
+            </div>
+            <!-- 旧事件兼容：没有结构化 reviewed 时按文本透出 autoNote -->
+            <div v-else-if="m.clarify.evidence && m.clarify.evidence.length" class="clarify-auto">
+              <div class="clarify-auto-title">已自动补全（不对就点「改成 …」）</div>
+              <div v-for="(e,ei) in m.clarify.evidence" :key="ei" class="clarify-auto-line">{{ e }}</div>
+            </div>
+            <!-- CONFIRM 确认门：改完点「确认，开始排查」才进诊断 -->
+            <div v-if="m.clarify.options?.length" class="decide-options clarify-options-row">
+              <button v-for="c in m.clarify.options" :key="c.value"
+                      class="decide-btn decide-btn-primary" :disabled="sending"
+                      :title="c.description || c.label"
+                      @click="onOptionClick(m.clarify?.kind, c)">{{ c.label }}</button>
+            </div>
+            <!-- 卡片内选择 → 一次提交（点选不再倒进输入框、也不每点一条消息） -->
+            <div v-if="pickCount(i) > 0" class="clarify-submit">
+              <button class="decide-btn decide-btn-primary" :disabled="sending" @click="submitPicks(i)">
+                {{ m.clarify.kind === 'CONFIRM' ? '提交修改' : '提交' }}（{{ pickCount(i) }} 项）
+              </button>
+              <button class="clarify-opt" :disabled="sending" @click="clearPicks(i)">清空选择</button>
+            </div>
+            <div class="clarify-foot">{{ m.clarify.kind === 'CONFIRM'
+              ? (pickCount(i) > 0 ? '先「提交修改」，确认单会按新值刷新；再点「确认，开始排查」'
+                  : '确认无误就点上面的按钮开始排查；要改哪项点「改」或「清空」')
+              : '点候选值即在卡片里选中（可多选），改完点「提交」；也可以直接在输入框里打字回答' }}</div>
+          </div>
+          <!-- 决策移交卡片（人在环中 DECIDE）：证据要点 + 点选项；点选回传 #decision:value，
+               自由文本回复同样生效（后端按「继续排查」消化）；点选后卡片退场防重复。
+               主操作（继续排查）实心强调，终止为弱化次要操作——防止误触。 -->
+          <div v-else-if="m.clarify" class="decide-card" :class="{ stale: i < messages.length - 1 }">
+            <div class="hitl-eyebrow decide-eyebrow">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <path d="M12 8.5v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                <circle cx="12" cy="16.8" r="1.3" fill="currentColor" />
+                <path d="M10.3 4.2 3.6 15.6c-.7 1.2.2 2.7 1.6 2.7h13.6c1.4 0 2.3-1.5 1.6-2.7L13.7 4.2c-.7-1.2-2.7-1.2-3.4 0Z"
+                      stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" />
+              </svg>
+              排查需要你的判断
+            </div>
+            <div class="decide-summary">{{ m.clarify.summary }}</div>
+            <ul v-if="m.clarify.evidence?.length" class="decide-evidence">
+              <li v-for="(e,ei) in m.clarify.evidence" :key="ei">
+                <span class="num decide-ev-no">{{ ei + 1 }}</span>
+                <span class="decide-ev-text">{{ e }}</span>
+              </li>
+            </ul>
+            <div v-if="m.clarify.options?.length" class="decide-options">
+              <button v-for="c in m.clarify.options" :key="c.value"
+                      class="decide-btn" :class="{ 'decide-btn-primary': c.value !== 'terminate' }"
+                      :disabled="sending"
+                      :title="c.description || c.label"
+                      @click="decideAction(c)">{{ c.label }}</button>
+            </div>
+            <div class="decide-hint">补充信息（traceId / 时间 / 报文 / 你的怀疑方向）后发送即可续跑；也可以直接终止</div>
           </div>
           <span v-if="m.streaming&&m.content" class="stream-cursor"></span>
           <!-- 操作条：轨迹回看 + 引用溯源 + traceId（chip 可复制）+ OpenObserve 全链路（流式结束后） -->
@@ -512,6 +891,16 @@ function fillSuggestion(s: string) {
               </a-select-option>
             </a-select>
             <ParadigmHelp :options="chatParadigmOptions()" />
+          </div>
+          <div class="composer-paradigm">
+            <span class="bar-label">自主</span>
+            <a-select v-model:value="autonomy" size="small" class="bar-select" :disabled="sending"
+                      :popup-match-select-width="false" title="会话自主档位（人在环中）">
+              <a-select-option v-for="o in AUTONOMY_OPTIONS" :key="o.value || 'default'" :value="o.value"
+                               :title="o.desc">
+                {{ o.label }}
+              </a-select-option>
+            </a-select>
           </div>
           <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
           <!-- 同一按钮：空闲=主色发送，生成中=红色描边停止（实心方块符号；停止态不可带 loading——antd loading 按钮不可点击） -->
@@ -719,11 +1108,86 @@ function fillSuggestion(s: string) {
 .cite-preview { margin-top:4px; font-size:12px; color:var(--color-ink-secondary); line-height:1.6; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
 .cite-source-link { flex-shrink:0; font-size:11px; margin-top:4px; display:inline-block; }
 .msg-actions { display:flex; align-items:center; gap:2px; flex-wrap:wrap; margin-top:8px; padding-top:6px; border-top:1px dashed var(--color-border-light); }
-/* 运维诊断追问卡片（clarify 事件）：缺失槽位清单 + 取值提示 */
+/* 人在环中卡片公共：eyebrow 小标签（问齐 / 决策共用风格骨架） */
+.hitl-eyebrow { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.08em; color:var(--color-ink-tertiary); text-transform:uppercase; margin-bottom:6px; }
+.hitl-eyebrow svg { width:13px; height:13px; flex-shrink:0; }
+
+/* 运维诊断问齐卡片（clarify 事件）：问题清单 + 候选值点选 + 自动补全透出 */
 .clarify-card { margin-top:10px; padding:10px 12px; background:var(--color-primary-light); border:1px solid var(--color-border-light); border-radius:var(--radius-md); }
-.clarify-item { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:3px 0; font-size:13px; color:var(--color-ink); }
+.clarify-lead { margin:2px 0 6px; font-size:12.5px; line-height:1.65; color:var(--color-ink-secondary); }
+.clarify-item { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; padding:4px 0; font-size:13px; color:var(--color-ink); }
 .clarify-q { font-weight:500; }
-.clarify-hint { font-size:11px; }
+.clarify-no { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; margin-right:4px; font-size:10px; color:var(--color-primary); background:var(--color-surface); border:1px solid var(--color-border-light); border-radius:var(--radius-sm); transform:translateY(-1px); }
+.clarify-hint { font-size:11.5px; color:var(--color-ink-tertiary); }
+.clarify-options-row { padding-left:0; }
+.clarify-options { display:flex; gap:6px; flex-wrap:wrap; width:100%; padding:2px 0 2px 20px; }
+.clarify-opt { padding:2px 10px; font-size:12px; border:1px solid var(--color-border); border-radius:var(--radius-sm); background:var(--color-surface); color:var(--color-ink-secondary); cursor:pointer; transition:all .15s; }
+.clarify-opt:hover:not(:disabled) { border-color:var(--color-primary); color:var(--color-primary); }
+.clarify-opt:disabled { opacity:.5; cursor:not-allowed; }
+.clarify-opt:focus-visible { outline:none; box-shadow:0 0 0 2px var(--color-focus-ring); }
+.clarify-auto { margin-top:8px; padding:8px 10px; background:var(--color-surface); border:1px dashed var(--color-border-light); border-radius:var(--radius-sm); }
+.clarify-auto-title { font-size:11px; font-weight:600; letter-spacing:.05em; color:var(--color-ink-tertiary); margin-bottom:4px; }
+.clarify-auto-line { font-size:12px; line-height:1.6; color:var(--color-ink-secondary); word-break:break-word; }
+/* 一行信息：槽位 → 值 → 来源角标 ……（右推）动作；依据独占第二行。
+   值不抢满整行（曾把角标顶到 600px 外，读起来是断的） */
+.auto-row { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; padding:3px 0; font-size:12px; color:var(--color-ink-secondary); }
+.auto-row + .auto-row { border-top:1px dashed var(--color-border-light); padding-top:6px; margin-top:2px; }
+.auto-slot { flex:0 0 auto; min-width:48px; color:var(--color-ink); font-weight:500; }
+.auto-value { flex:0 1 auto; max-width:44%; min-width:0; font-family:var(--font-mono, monospace); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  cursor:pointer; border-bottom:1px dashed transparent; transition:color .12s ease, border-color .12s ease; }
+.auto-value:hover { color:var(--color-primary); border-bottom-color:var(--color-primary); }
+.auto-badge { flex:0 0 auto; padding:0 6px; font-size:10.5px; line-height:16px; border-radius:99px; border:1px solid var(--color-border-light); color:var(--color-ink-tertiary); background:var(--color-surface); }
+.auto-badge-llm { color:var(--color-warning-ink, var(--color-primary)); border-color:currentColor; }
+.auto-badge-log_query { color:var(--color-primary); border-color:currentColor; }
+.auto-fix { display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; align-items:center; }
+/* 改 = 主色文字动作（低噪，hover 才出边框）；清空 = 危险语汇（平时灰，hover 转警示色） */
+.auto-fix .auto-act { padding:0 7px; font-size:11px; line-height:17px; color:var(--color-primary); border-color:transparent; background:transparent; }
+.auto-fix .auto-act:hover:not(:disabled) { border-color:var(--color-primary); background:var(--color-primary-light); }
+.auto-fix .auto-act-clear { color:var(--color-ink-tertiary); }
+.auto-fix .auto-act-clear:hover:not(:disabled) { color:var(--color-warning-ink, #d46b08); border-color:var(--color-warning-ink, #d46b08); background:transparent; }
+/* 候选替换值：虚线胶囊 = "建议值"（与问句候选值的实线胶囊区分：那是"你的回答"，这是"系统的推荐"） */
+.auto-fix .auto-opt { padding:0 8px; font-size:11px; line-height:17px; border-style:dashed; color:var(--color-primary); }
+.auto-fix .auto-opt:hover:not(:disabled) { border-style:solid; background:var(--color-primary-light); }
+/* 选中态：卡片内待提交（主色实心感，与"点一下就走"的老行为区分） */
+.clarify-opt.picked { border-style:solid; border-color:var(--color-primary); background:var(--color-primary-light); color:var(--color-primary); font-weight:600; }
+.clarify-opt.picked::before { content:'✓ '; }
+.auto-value.picked { color:var(--color-primary); font-weight:600; border-bottom-color:var(--color-primary); }
+/* 卡片底部提交行：选了几项就出现，一次提交 */
+/* 诊断结论：上下文来源清单 + 代码块复制条（结论里的修复报文） */
+.conclusion-context { margin-top:10px; padding:8px 10px; background:var(--color-surface-secondary); border:1px solid var(--color-border-light); border-radius:var(--radius-sm); }
+.conclusion-context-title { font-size:11px; font-weight:600; letter-spacing:.05em; color:var(--color-ink-tertiary); margin-bottom:5px; }
+.conclusion-context-row { display:flex; align-items:baseline; gap:6px; padding:2px 0; font-size:11.5px; color:var(--color-ink-secondary); }
+.conclusion-context-evidence { flex:1 1 auto; min-width:0; color:var(--color-ink-tertiary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.code-block { position:relative; margin:8px 0; }
+.code-bar { display:flex; justify-content:flex-end; margin-bottom:-6px; }
+.code-copy { padding:0 8px; font-size:11px; line-height:18px; color:var(--color-ink-tertiary); background:var(--color-surface); border:1px solid var(--color-border-light); border-radius:var(--radius-sm); cursor:pointer; }
+.code-copy:hover { color:var(--color-primary); border-color:var(--color-primary); }
+/* 历史卡片（不再是最后一条 = 已翻页的旧交互）：可读但不可点，避免对着早已答复过的卡片操作 */
+.clarify-card.stale .clarify-opt, .clarify-card.stale .decide-btn,
+.clarify-card.stale .auto-value, .decide-card.stale .decide-btn { pointer-events:none; opacity:.6; cursor:default; }
+.clarify-card.stale .clarify-foot::before { content:'历史记录 · '; color:var(--color-ink-tertiary); }
+.clarify-submit { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:10px; border-top:1px dashed var(--color-border-light); }
+.auto-evidence { flex-basis:100%; padding-left:54px; font-size:11px; color:var(--color-ink-tertiary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.auto-input { flex:1 1 160px; min-width:0; padding:2px 8px; font-size:12px; font-family:var(--font-mono, monospace); color:var(--color-ink); background:var(--color-surface); border:1px solid var(--color-primary); border-radius:var(--radius-sm); outline:none; }
+.clarify-foot { margin-top:8px; font-size:11.5px; color:var(--color-ink-tertiary); border-top:1px dashed var(--color-border-light); padding-top:8px; }
+
+/* 决策移交卡片（人在环中 DECIDE）：signal 强调条 + 证据编号列表 + 主次按钮 */
+.decide-card { margin-top:10px; padding:12px 14px; background:var(--color-signal-bg); border:1px solid var(--color-border-light); border-left:3px solid var(--color-signal); border-radius:var(--radius-md); display:flex; flex-direction:column; gap:8px; }
+.decide-eyebrow { color:var(--color-warning-ink); margin-bottom:0; }
+.decide-summary { font-size:13.5px; font-weight:600; color:var(--color-ink); line-height:1.5; }
+.decide-evidence { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:4px; }
+.decide-evidence li { display:flex; gap:8px; align-items:baseline; font-size:12.5px; line-height:1.55; color:var(--color-ink-secondary); }
+.decide-ev-no { flex-shrink:0; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; color:var(--color-warning-ink); background:var(--color-surface); border:1px solid var(--color-border-light); border-radius:var(--radius-sm); }
+.decide-ev-text { min-width:0; word-break:break-word; }
+.decide-options { display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; }
+.decide-btn { padding:6px 14px; font-size:13px; font-weight:500; border:1px solid var(--color-border); border-radius:var(--radius-md); background:var(--color-surface); color:var(--color-ink-secondary); cursor:pointer; transition:all .15s; }
+.decide-btn:hover:not(:disabled) { border-color:var(--color-danger); color:var(--color-danger); }
+/* 主操作（继续排查）：实心 primary；次操作（终止）：hover 才显 danger，弱化防误触 */
+.decide-btn-primary { background:var(--color-primary); border-color:var(--color-primary); color:#fff; }
+.decide-btn-primary:hover:not(:disabled) { background:var(--color-primary-hover); border-color:var(--color-primary-hover); color:#fff; }
+.decide-btn:disabled { opacity:.5; cursor:not-allowed; }
+.decide-btn:focus-visible { outline:none; box-shadow:0 0 0 2px var(--color-focus-ring); }
+.decide-hint { font-size:11.5px; color:var(--color-ink-tertiary); border-top:1px dashed var(--color-border-light); padding-top:8px; }
 .action-btn { display:inline-flex; align-items:center; gap:4px; border:none; background:none; padding:2px 8px; font-size:12px; color:var(--color-ink-tertiary); cursor:pointer; border-radius:var(--radius-sm); transition:color .15s, background .15s; }
 .action-btn:hover { color:var(--color-primary); background:var(--color-primary-light); }
 /* traceId chip：等宽缩略展示（悬停 title 看全量，旁边复制按钮取全文） */

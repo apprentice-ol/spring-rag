@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.delivery;
 
+import com.jjx.customer.platform.clarify.ClarifyRequest;
+
 /**
  * 交付端口（SPI）：编排层只负责"产出什么"，交付层决定"怎么送到用户"。
  *
@@ -18,6 +20,16 @@ public interface DeliveryPort {
 
     /** 追问（结构化澄清）。 */
     void emitClarify(String conversationId, String text, String paradigm, DeliveryContext context);
+
+    /**
+     * 追问（结构化澄清，人在环中版）：带 {@link com.jjx.customer.platform.clarify.ClarifyRequest}
+     * 全量结构（DECIDE 决策移交时含证据与点选项）。
+     * 默认兜底旧签名——实现方可覆写以消费结构化字段，未覆写时退化为纯文本（向后兼容）。
+     */
+    default void emitClarify(String conversationId, ClarifyRequest clarify,
+                             String paradigm, DeliveryContext context) {
+        emitClarify(conversationId, clarify.summary(), paradigm, context);
+    }
 
     /** 升级/卡住说明（转追问文案）。 */
     void emitEscalate(String conversationId, String text, String paradigm, DeliveryContext context);

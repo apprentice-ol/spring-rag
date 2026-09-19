@@ -61,7 +61,8 @@ public final class AgentCatalog {
                     "workflow/ops_diagnose_v2/verify"),
             List.of("workflow/ops_diagnose_v2/slot-extract",
                     "workflow/ops_diagnose_v2/replan",
-                    "workflow/ops_diagnose_v2/auto-resolve"),
+                    "workflow/ops_diagnose_v2/auto-resolve",
+                    "workflow/ops_diagnose_v2/human-response"),
             null);
 
     /** 知识问答（单次多通道检索直出）。 */

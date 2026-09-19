@@ -91,6 +91,17 @@ public class ChatMessageWriter implements ConversationStore {
 
     /** 同上，带引用溯源 JSON（仅 RAG assistant 消息非空）。会话 updated_at 由 ensureConversation 统一刷新。 */
     public Long saveMessage(String conversationId, String role, String content, String citationsJson) {
+        return saveMessage(conversationId, role, content, citationsJson, null);
+    }
+
+    /**
+     * 同上，带交互卡片载荷（澄清/决策卡片的结构化 JSON）。
+     *
+     * <p>卡片只活在 SSE 事件里的话，刷新页面就没了——正文文本还原不出结构（问题/选项/来源角标）。
+     * 随消息落库后，历史接口把 JSON 一并返回，前端即可重新渲染同样的卡片。</p>
+     */
+    public Long saveMessage(String conversationId, String role, String content, String citationsJson,
+            String clarifyJson) {
         if (content == null || content.isBlank()) {
             return null;
         }
@@ -99,6 +110,7 @@ public class ChatMessageWriter implements ConversationStore {
         messageEntity.setRole(role);
         messageEntity.setContent(content);
         messageEntity.setCitations(citationsJson);
+        messageEntity.setClarify(clarifyJson);
         messageEntity.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(messageEntity);
         return messageEntity.getId();

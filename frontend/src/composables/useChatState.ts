@@ -23,7 +23,7 @@ export interface Msg {
   trace?: AgentTrace
   /** 引用溯源（SSE citations 事件/历史加载获得；正文 [N] 角标据此渲染） */
   citations?: Citation[]
-  /** 运维诊断追问（SSE clarify 事件；缺失槽位问题列表，一次问齐，仅本轮内存态） */
+  /** 人在环中卡片（SSE clarify 事件 / 历史加载获得；随消息落库，刷新页面后重渲染） */
   clarify?: ClarifyEvent
 }
 
@@ -65,6 +65,7 @@ function toMsg(m: {
   content: string
   createdAt: string
   citations?: string | null
+  clarify?: string | null
   traceId?: string | null
 }): Msg {
   let citations: Citation[] | undefined
@@ -75,12 +76,22 @@ function toMsg(m: {
       /* 损坏的引用 JSON 忽略 */
     }
   }
+  // 卡片载荷随消息落库：刷新后重新渲染同款卡片（正文文本还原不出问题/选项/来源角标）
+  let clarify: ClarifyEvent | undefined
+  if (m.clarify) {
+    try {
+      clarify = JSON.parse(m.clarify)
+    } catch {
+      /* 损坏的卡片 JSON 忽略 */
+    }
+  }
   return {
     id: m.id,
     role: m.role,
     content: m.content,
     ts: m.createdAt ? new Date(m.createdAt).getTime() : undefined,
     citations,
+    clarify,
     traceId: m.traceId || undefined,
   }
 }

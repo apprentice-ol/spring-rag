@@ -4,6 +4,7 @@ import com.agentframework.crosscutting.interceptor.InterceptorAttributes;
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
 import com.agentframework.definition.tool.ToolDefinition;
+import com.agentframework.definition.workflow.HumanRequest;
 import com.agentframework.engine.core.NodeContext;
 import com.agentframework.engine.core.NodeResult;
 import com.agentframework.engine.policy.PolicyAttributes;
@@ -48,6 +49,9 @@ public class ActExecutor implements NodeExecutor {
     /** 用户补充槽位名（与入口问齐共用，恢复输入经 Input.slots 写入）。 */
     public static final String USER_CLARIFY_SLOT = "user_clarify";
 
+    /** 用户方向指令槽位名（人在环中：软消费，注入各阶段 think prompt，不改图结构）。 */
+    public static final String USER_DIRECTIVE_SLOT = "user_directive";
+
     private final String prefix;
 
     private final String stageName;
@@ -67,6 +71,9 @@ public class ActExecutor implements NodeExecutor {
 
     /** ask_user 可声明的合法槽位名（构造注入，来源 = 调用方自己的槽位目录）。 */
     private final List<String> askableSlotNames;
+
+    /** 动态槽摘要槽位名（人在环中：模型声明 + 用户回复的沉淀，跨阶段注入 think 上下文）。 */
+    public static final String DYNAMIC_SLOTS_SLOT = "dynamic_slots";
 
     /**
      * @param prefix            阶段槽位前缀（inv/res/ver）
@@ -115,6 +122,19 @@ public class ActExecutor implements NodeExecutor {
                 writes.put(PENDING_ASK_SLOT, "");
                 writes.put(PENDING_ASK_SLOTS_SLOT, "");
                 writes.put(USER_CLARIFY_SLOT, reply);
+                // 动态槽沉淀（人在环中）：模型声明的自定义槽 → 用户回复落值，跨阶段可见
+                //（单动态槽直落结构化值 + 累计进 dynamic_slots 摘要；多动态槽整段进 directive 软消费）
+                List<HumanRequest.SlotAsk> dynamicAsks = declaredDynamicAsks(context);
+                if (dynamicAsks.size() == 1) {
+                    HumanRequest.SlotAsk ask = dynamicAsks.getFirst();
+                    String prior = context.slots().getString(DYNAMIC_SLOTS_SLOT, "");
+                    String line = ask.name() + " = " + preview(reply);
+                    writes.put(DYNAMIC_SLOTS_SLOT, prior.isBlank() ? line : prior + "\n" + line);
+                    writes.put(ask.name(), reply);
+                } else if (!dynamicAsks.isEmpty()) {
+                    writes.put(USER_DIRECTIVE_SLOT, reply);
+                }
+                writes.put(HumanRequest.PENDING_SLOT, "");
                 writes.put("has_calls", 1);
                 writes.put("llm_calls", llmCalls(context) + 1);
                 return NodeResult.completed(node.id(), "已收到补充：" + reply, writes)
@@ -188,9 +208,17 @@ public class ActExecutor implements NodeExecutor {
             }
             case ASK_USER -> {
                 String question = intent.text().isBlank() ? "需要补充信息后继续" : intent.text();
+                // 模型看不到槽位现状，会问已经填好的槽（实测：日志反查刚补出报文，它转头又问"有请求报文吗"）——
+                // 已填的目录槽从结构化问句里剔除（问句正文仍保留，用户想改还能答）；动态槽是模型综合判断声明的，照旧
+                List<HumanRequest.SlotAsk> effectiveAsks = intent.askSlots().stream()
+                        .filter(ask -> ask.dynamic() || context.slots().getString(ask.name(), "").isBlank())
+                        .toList();
                 // 挂起前必须消费触发状态：scratchpad 记录提问、pending_ask 置位（幂等标记）；
-                // 模型声明的期望槽位一并暂存（交付层据此渲染结构化表单，空 = 纯文本追问）
-                String askSlots = String.join(",", intent.askSlots());
+                // 声明的槽位（目录 + 动态）产出结构化 HumanRequest 暂存——交付层渲染问句卡片
+                //（目录槽 label 空，投影时查目录补问句；动态槽带模型给的问句/提示/候选）
+                String askSlots = effectiveAsks.stream()
+                        .filter(a -> !a.dynamic()).map(HumanRequest.SlotAsk::name)
+                        .collect(java.util.stream.Collectors.joining(","));
                 scratchpad += "AskUser: " + question + "\n（等待用户补充）\n---\n";
                 writes.put("scratchpad", scratchpad);
                 writes.put(PENDING_ASK_SLOT, question);
@@ -198,6 +226,8 @@ public class ActExecutor implements NodeExecutor {
                 return NodeResult.suspended(node.id(), question)
                         .withSlotWrite(PENDING_ASK_SLOT, question)
                         .withSlotWrite(PENDING_ASK_SLOTS_SLOT, askSlots)
+                        .withSlotWrite(HumanRequest.PENDING_SLOT,
+                                writeClarifyRequest(question, effectiveAsks))
                         .withSlotWrite("scratchpad", scratchpad);
             }
             case ESCALATE -> {
@@ -405,26 +435,64 @@ public class ActExecutor implements NodeExecutor {
     }
 
     /**
-     * 解析 ask_user 声明的期望槽位名：只收目录内的名字（模型编造的名字全部丢弃，
-     * 退化为纯文本追问），按目录顺序去重。
+     * 解析 ask_user 声明的期望槽位（混合声明，人在环中动态槽）：
+     * <ul>
+     *   <li>字符串项 / 对象项 name 在白名单内 → 目录槽（label 空，交付层查目录补问句），
+     *       按目录顺序去重——与旧协议完全兼容；</li>
+     *   <li>对象项 {@code {"name","question","hint","options"}} 且 name 不在白名单 →
+     *       <b>模型综合判断声明的动态槽</b>：name 须为小写标识符、不得与目录重名、必须带问句
+     *       （无问句的乱造声明全部丢弃）。用户回复沉淀为该槽位值，跨阶段可见。</li>
+     * </ul>
      *
      * @param value 协议里的 slots 字段
-     * @return 合法槽位名列表（可为空）
+     * @return 槽位声明列表（可为空）
      */
-    private List<String> askSlotsOf(Object value) {
+    private List<HumanRequest.SlotAsk> askSlotsOf(Object value) {
         if (!(value instanceof List<?> raw) || raw.isEmpty()) {
             return List.of();
         }
-        List<String> accepted = new java.util.ArrayList<>();
-        for (String name : askableSlotNames) {
+        List<HumanRequest.SlotAsk> asks = new java.util.ArrayList<>();
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        // 目录槽：白名单顺序优先（渲染顺序稳定），去重
+        for (String allowed : askableSlotNames) {
             for (Object item : raw) {
-                if (item != null && name.equals(String.valueOf(item).trim())
-                        && !accepted.contains(name)) {
-                    accepted.add(name);
+                if (item != null && allowed.equals(nameOfAskItem(item)) && seen.add(allowed)) {
+                    asks.add(new HumanRequest.SlotAsk(allowed, null, null, null, null, List.of(), false));
                 }
             }
         }
-        return accepted;
+        // 动态槽：对象声明 + 名字合法 + 不撞目录 + 带问句
+        for (Object item : raw) {
+            if (!(item instanceof Map<?, ?> declared)) {
+                continue;
+            }
+            Object rawName = declared.get("name");
+            String name = rawName == null ? "" : String.valueOf(rawName).trim();
+            if (name.isBlank() || !name.matches("[a-z][a-z0-9_]{0,31}")
+                    || askableSlotNames.contains(name) || !seen.add(name)) {
+                continue;
+            }
+            Object rawQuestion = declared.get("question");
+            String question = rawQuestion == null ? "" : String.valueOf(rawQuestion).trim();
+            if (question.isBlank()) {
+                continue; // 无问句的动态槽无效（防乱造）
+            }
+            List<String> options = declared.get("options") instanceof List<?> list
+                    ? list.stream().map(String::valueOf).toList() : List.of();
+            Object hint = declared.get("hint");
+            asks.add(new HumanRequest.SlotAsk(name, question,
+                    hint == null ? null : String.valueOf(hint), null, "model", options, true));
+        }
+        return asks;
+    }
+
+    /** 声明项的槽位名（字符串项即名字；对象项取 name 字段）。 */
+    private static String nameOfAskItem(Object item) {
+        if (item instanceof Map<?, ?> declared) {
+            Object name = declared.get("name");
+            return name == null ? "" : String.valueOf(name).trim();
+        }
+        return item == null ? "" : String.valueOf(item).trim();
     }
 
     private Map<String, Object> parseOneLineJson(String raw) {
@@ -461,6 +529,34 @@ public class ActExecutor implements NodeExecutor {
         return context.input() == null ? "" : context.input().text();
     }
 
+    /**
+     * 挂起时声明的动态槽（从暂存的 HumanRequest 反解）。
+     *
+     * @param context 节点上下文
+     * @return 动态槽声明列表（无暂存/解析失败/纯目录声明时为空）
+     */
+    private List<HumanRequest.SlotAsk> declaredDynamicAsks(NodeContext context) {
+        String json = context.slots().getString(HumanRequest.PENDING_SLOT, "");
+        if (json.isBlank()) {
+            return List.of();
+        }
+        try {
+            HumanRequest request = objectMapper.readValue(json, HumanRequest.class);
+            return request.slots().stream().filter(HumanRequest.SlotAsk::dynamic).toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /** 问齐请求序列化（失败兜底空串 = 纯文本挂起，行为不变）。 */
+    private String writeClarifyRequest(String question, List<HumanRequest.SlotAsk> asks) {
+        try {
+            return objectMapper.writeValueAsString(HumanRequest.clarify(question, asks));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     private int llmCalls(NodeContext context) {
         Object value = context.slots().get("llm_calls");
         return value instanceof Number number ? number.intValue() : 0;
@@ -488,10 +584,11 @@ public class ActExecutor implements NodeExecutor {
      * @param toolName  工具名（TOOL 时）
      * @param arguments 工具参数（TOOL 时）
      * @param text      文本（answer/ask_user/escalate 的载荷）
-     * @param askSlots  ask_user 声明的期望补充槽位名（目录内、去重；其余意图为空）
+     * @param askSlots  ask_user 声明的期望补充槽位（目录槽 label 为空、由交付层查目录补渲染；
+     *                  动态槽带模型给的问句/提示/候选；其余意图为空）
      */
     record Intent(Kind kind, String toolName, Map<String, Object> arguments, String text,
-            List<String> askSlots) {
+            List<HumanRequest.SlotAsk> askSlots) {
 
         static Intent answer(String text) {
             return new Intent(Kind.ANSWER, "", Map.of(), text, List.of());
@@ -501,7 +598,7 @@ public class ActExecutor implements NodeExecutor {
             return new Intent(Kind.ASK_USER, "", Map.of(), question, List.of());
         }
 
-        static Intent askUser(String question, List<String> slots) {
+        static Intent askUser(String question, List<HumanRequest.SlotAsk> slots) {
             return new Intent(Kind.ASK_USER, "", Map.of(), question,
                     slots == null ? List.of() : List.copyOf(slots));
         }

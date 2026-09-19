@@ -6,8 +6,10 @@
 时间：{{slots.time}}
 报错：{{slots.error}}
 报文：{{slots.payload}}
+响应：{{slots.response}}
 现象：{{slots.symptoms}}
 traceId：{{slots.trace_id}}
+排查中用户补充（自定义槽位，同样可作为排查依据）：{{slots.dynamic_slots}}
 
 ## 排查思路
 1. 关键数据优先：用户给了 traceId / 流水号 / orderNo / requestId 等唯一键时，

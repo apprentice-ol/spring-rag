@@ -44,6 +44,12 @@ public class AgentSessionEntity {
     /** 阶段产物一句话摘要 */
     private String summary;
 
+    /** 会话自主档位（人在环中 P3：L1 多问我 / L2 默认 / L3 少问我；null = 缺省 L2） */
+    private String autonomyLevel;
+
+    /** 诊断链 traceId（首轮生成，后续追问轮沿用——同一次诊断跨多轮仍是一条链） */
+    private String chainTraceId;
+
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;

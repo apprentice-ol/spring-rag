@@ -15,9 +15,12 @@ import com.agentframework.engine.toolexecutor.ToolContext;
 import com.agentframework.engine.toolexecutor.ToolResult;
 import com.agentframework.engine.toolexecutor.ToolInvocation;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
+import com.jjx.customer.platform.business.ops.AutonomyLevel;
+import com.jjx.customer.platform.business.ops.AutonomyPolicy;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
+import com.jjx.customer.platform.business.ops.slot.SlotProvenance;
 import com.jjx.customer.platform.business.ops.tool.InterfaceCatalog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,16 +39,21 @@ import org.slf4j.LoggerFactory;
  * 三层递进（成本递增）——
  *
  * <ol>
- *   <li><b>规则快通道</b>（零成本、确定性）：相对时间换算（{@link RelativeTimeParser}，
- *       含缺省值「最近30分钟」）、从已有文本正则提接口路径；</li>
- *   <li><b>LLM 推断</b>（≤1 次，计入 llm_calls）：高置信（≥0.7）推断值才生效；</li>
- *   <li><b>日志反查</b>（≤2 次 query_logs）：接口名/错误码当关键字模糊查 → 提取 traceId →
- *       traceId 精查 → 从日志行提取报文 / 接口 / 错误。</li>
+ *   <li><b>规则快通道</b>（零成本、确定性）：相对时间换算（{@link RelativeTimeParser}）、
+ *       从已有文本正则提接口路径、接口清单唯一匹配，以及目录缺省值（如 time 的「最近30分钟」）；</li>
+ *   <li><b>LLM 推断</b>（≤1 次，计入 llm_calls）：置信度过线（L2 ≥0.7 / L3 ≥0.5）的推断值才生效；</li>
+ *   <li><b>日志反查</b>（L2 ≤2 次 / L3 ≤3 次 query_logs）：接口名/错误码当关键字模糊查 →
+ *       提取 traceId → traceId 精查 → 从日志行提取报文 / 接口 / 错误。</li>
  * </ol>
  *
- * <p>全部补全落 {@code inferred_slots}（JSON provenance：槽位/值/方式/依据）与
- * {@code auto_resolve_note}（人类可读），供问齐文案纠错提示与结论证据链透明化；
- * 仍缺的槽走原有问齐环兜底。补不了的静默跳过，绝不因此挂起或失败。</p>
+ * <p><b>自主档位（P3）</b>：三层各自受 {@link AutonomyPolicy}（目录声明 ∩ 会话档位）管辖——
+ * L1 只做用户原文的确定性提取，不代填缺省、不推断、不反查；L3 把推断门槛降到 0.5、
+ * 反查额度提到 3 次（多出的一轮用于带窗查无果时去掉时间窗重试）。</p>
+ *
+ * <p>全部补全落 {@code inferred_slots}（JSON provenance：槽位/值/来源/依据，见
+ * {@link SlotProvenance}）与 {@code auto_resolve_note}（人类可读），供问齐文案纠错提示、
+ * 前端「模型推断」角标与结论证据链透明化；仍缺的槽走原有问齐环兜底。
+ * 补不了的静默跳过，绝不因此挂起或失败。</p>
  */
 public class AutoResolveExecutor implements NodeExecutor {
 
@@ -54,10 +62,24 @@ public class AutoResolveExecutor implements NodeExecutor {
     /** 补全溯源槽位名（JSON：[{slot,value,method,evidence}]）。 */
     public static final String INFERRED_SLOTS_SLOT = "inferred_slots";
 
-    /** LLM 推断置信度门槛。 */
-    static final double CONFIDENCE_THRESHOLD = 0.7;
     private static final Pattern API_PATH = Pattern.compile("/[a-zA-Z][\\w-]*(?:/[\\w.-]+)+");
     private static final Pattern JSON_BLOCK = Pattern.compile("\\{[^{}]{10,}}");
+
+    /** 遥测/框架内务 JSON（应用自身的 step 日志等）：首键即内务字段，明显不是业务请求报文。 */
+    private static final Pattern TELEMETRY_JSON = Pattern.compile(
+            "\\{\\s*\"(_event|step|step_index|stepIndex|level|logger|thread|timestamp|ts|duration_ms|durationMs)\"");
+
+    /** 报文槽长度上限：超过这个长度的"JSON 块"多半是日志片段而非真实报文。 */
+    private static final int MAX_PAYLOAD_LENGTH = 4000;
+
+    /** 响应提取的准入标记：日志行自己写明是响应/返回才提取（与报文同口径：宁可漏不可错）。 */
+    private static final Pattern RESPONSE_MARKER = Pattern.compile(
+            "响应|返回报文|返回结果|返回体|response|respBody", Pattern.CASE_INSENSITIVE);
+
+    /** 报文提取的准入标记：日志行自己写明是请求报文才提取（业务系统日志的常见写法）。 */
+    private static final Pattern PAYLOAD_MARKER = Pattern.compile(
+            "报文|入参|请求体|请求参数|请求报文|payload|requestBody|request_body|reqBody",
+            Pattern.CASE_INSENSITIVE);
     private static final Logger log = LoggerFactory.getLogger(AutoResolveExecutor.class);
 
     private final SingleTurnModel inferModel;
@@ -92,27 +114,35 @@ public class AutoResolveExecutor implements NodeExecutor {
     public NodeResult execute(NodeDefinition node, NodeContext context) {
         Map<String, String> confirmed = SlotExtractExecutor.confirmedSlots(context);
         String question = context.input() == null ? "" : context.input().text();
+        // 会话档位（人在环中 P3）：目录声明 ∩ 档位 = 本次允许的自主边界（交集偏保守）
+        AutonomyPolicy policy = AutonomyPolicy.of(context.slots().getString(AutonomyLevel.SLOT, ""));
         Map<String, Object> writes = new LinkedHashMap<>();
         List<Map<String, String>> provenance = new ArrayList<>();
         int toolCalls = 0;
         boolean llmUsed = false;
 
-        // ---- 层 1：规则快通道（time 换算/缺省、接口路径正则） ----
-        resolveTimeByRule(confirmed, question, writes, provenance);
-        resolveInterfaceByRule(confirmed, question, writes, provenance);
+        // ---- 层 1：规则快通道（time 换算/缺省、接口路径正则）----
+        // 顺带为日志反查备好两个前提：时间窗 + 关键字（接口名是关键字的首选来源）
+        resolveTimeByRule(confirmed, question, writes, provenance, policy);
+        resolveInterfaceByRule(confirmed, question, writes, provenance, policy);
         confirmed.putAll(asStrings(writes));
 
-        // ---- 层 2：LLM 推断（≤1 次，只推 inferable 且仍缺的槽；带当前时间锚点供口语时间换算） ----
-        List<OpsSlotCatalog.Spec> llmTargets = targets(confirmed, OpsSlotCatalog.Spec::inferable);
-        if (!llmTargets.isEmpty() && inferModel != null) {
-            llmUsed = true;
-            inferByModel(llmTargets, confirmed, question, writes, provenance);
+        // ---- 层 2：日志反查（一手信息源：关键字 + 时间窗 → traceId → 精查挖 接口/请求报文/响应/报错）----
+        if (toolExecutor != null) {
+            toolCalls = resolveFromLogs(node, context, confirmed, writes, provenance, policy);
+            confirmed.putAll(asStrings(writes));
+            // 挖出的证据（报文里的接口路径、报错里的业务叫法）回头喂给规则层——否则会出现
+            // 「日志里明明有线索，卡片还在问接口是哪个」
+            resolveInterfaceByRule(confirmed, question, writes, provenance, policy);
             confirmed.putAll(asStrings(writes));
         }
 
-        // ---- 层 3：日志反查（≤2 次：关键字查 traceId → 精查提取报文/接口/错误） ----
-        if (toolExecutor != null) {
-            toolCalls = resolveFromLogs(node, context, confirmed, writes, provenance);
+        // ---- 层 3：LLM 推断（≤1 次，补日志挖不到的那部分；此时上下文已含日志证据）----
+        List<OpsSlotCatalog.Spec> llmTargets = targets(confirmed, policy::allowsInfer);
+        if (!llmTargets.isEmpty() && inferModel != null) {
+            llmUsed = true;
+            inferByModel(llmTargets, confirmed, question, writes, provenance, policy);
+            confirmed.putAll(asStrings(writes));
         }
 
         // ---- 汇总：重算缺口 + provenance + 说明 ----
@@ -136,7 +166,7 @@ public class AutoResolveExecutor implements NodeExecutor {
     // -----------------------------------------------------------------------------------------
 
     private void resolveTimeByRule(Map<String, String> confirmed, String question,
-            Map<String, Object> writes, List<Map<String, String>> provenance) {
+            Map<String, Object> writes, List<Map<String, String>> provenance, AutonomyPolicy policy) {
         if (!isBlank(confirmed.get(OpsSlotCatalog.TIME))) {
             return;
         }
@@ -146,15 +176,19 @@ public class AutoResolveExecutor implements NodeExecutor {
         String method;
         String evidence;
         if (window != null) {
-            method = "rule";
+            // 用户自己说的相对时间 → 换算，不是假设，任何档位都做
+            method = SlotProvenance.SOURCE_RULE;
             evidence = "输入时间表达换算：" + raw + " → " + window;
         } else {
+            if (!policy.allowsCatalogDefault()) {
+                return; // L1：不代填缺省窗口，缺时间就问用户
+            }
             OpsSlotCatalog.Spec spec = specOf(OpsSlotCatalog.TIME);
             window = RelativeTimeParser.parse(spec.defaultValue(), clock);
             if (window == null) {
                 return;
             }
-            method = "default";
+            method = SlotProvenance.SOURCE_DEFAULT;
             evidence = "缺省策略：" + spec.defaultValue();
         }
         writes.put(OpsSlotCatalog.TIME, window);
@@ -162,7 +196,7 @@ public class AutoResolveExecutor implements NodeExecutor {
     }
 
     private void resolveInterfaceByRule(Map<String, String> confirmed, String question,
-            Map<String, Object> writes, List<Map<String, String>> provenance) {
+            Map<String, Object> writes, List<Map<String, String>> provenance, AutonomyPolicy policy) {
         if (!isBlank(confirmed.get(OpsSlotCatalog.INTERFACE))) {
             return;
         }
@@ -172,16 +206,21 @@ public class AutoResolveExecutor implements NodeExecutor {
         if (m.find()) {
             String path = m.group();
             writes.put(OpsSlotCatalog.INTERFACE, path);
-            provenance.add(provenance(OpsSlotCatalog.INTERFACE, path, "rule", "文本中识别到接口路径"));
+            provenance.add(provenance(OpsSlotCatalog.INTERFACE, path, SlotProvenance.SOURCE_RULE,
+                    "文本中识别到接口路径"));
             return;
         }
         // 接口清单匹配：业务叫法（「token获取失败」「发票冲红」）在目录中找相关接口。
+        // 这是"猜"（目录联想），受档位管辖：L1 不猜，缺接口就问用户
+        if (!policy.allowsInfer(specOf(OpsSlotCatalog.INTERFACE))) {
+            return;
+        }
         // 唯一命中才补全（确定性）；多命中是冲突，留给问齐表单点选（交付层注入候选）
         List<InterfaceCatalog.Iface> candidates = InterfaceCatalog.suggest(source);
         if (candidates.size() == 1) {
             InterfaceCatalog.Iface iface = candidates.get(0);
             writes.put(OpsSlotCatalog.INTERFACE, iface.name());
-            provenance.add(provenance(OpsSlotCatalog.INTERFACE, iface.name(), "rule",
+            provenance.add(provenance(OpsSlotCatalog.INTERFACE, iface.name(), SlotProvenance.SOURCE_RULE,
                     "接口清单唯一匹配：" + iface.title()));
         }
     }
@@ -191,7 +230,7 @@ public class AutoResolveExecutor implements NodeExecutor {
     // -----------------------------------------------------------------------------------------
 
     private void inferByModel(List<OpsSlotCatalog.Spec> targets, Map<String, String> confirmed, String question,
-            Map<String, Object> writes, List<Map<String, String>> provenance) {
+            Map<String, Object> writes, List<Map<String, String>> provenance, AutonomyPolicy policy) {
         try {
             List<String[]> missingLines = targets.stream()
                     .map(spec -> new String[] {spec.name(),
@@ -217,7 +256,7 @@ public class AutoResolveExecutor implements NodeExecutor {
                 String value = item.path("value").asText("");
                 double confidence = item.path("confidence").asDouble(0);
                 String evidence = item.path("evidence").asText("模型推断");
-                if (confidence < CONFIDENCE_THRESHOLD || isBlank(slot) || isBlank(value)) {
+                if (confidence < policy.inferConfidence() || isBlank(slot) || isBlank(value)) {
                     continue;
                 }
                 OpsSlotCatalog.Spec spec = targets.stream()
@@ -229,7 +268,8 @@ public class AutoResolveExecutor implements NodeExecutor {
                 }
                 String normalized = spec.normalize(value.trim());
                 writes.put(slot, normalized);
-                provenance.add(provenance(slot, normalized, "llm", "confidence=" + confidence + "，" + evidence));
+                provenance.add(provenance(slot, normalized, SlotProvenance.SOURCE_INFERRED,
+                        "confidence=" + confidence + "，" + evidence));
             }
         } catch (Exception e) {
             log.warn("[ops-auto] LLM 推断失败（静默跳过）：{}", e.getMessage());
@@ -241,10 +281,10 @@ public class AutoResolveExecutor implements NodeExecutor {
     // -----------------------------------------------------------------------------------------
 
     /**
-     * @return 实际发生的工具调用次数（≤2）
+     * @return 实际发生的工具调用次数（L2 ≤2 / L3 ≤3）
      */
     private int resolveFromLogs(NodeDefinition node, NodeContext context, Map<String, String> confirmed,
-            Map<String, Object> writes, List<Map<String, String>> provenance) {
+            Map<String, Object> writes, List<Map<String, String>> provenance, AutonomyPolicy policy) {
         int calls = 0;
         // 关键数据槽可能是标准 traceId（全链路精查），也可能是业务键（orderNo/requestId，当关键字模糊查）
         String traceKey = confirmed.get(OpsSlotCatalog.TRACE_ID);
@@ -255,26 +295,27 @@ public class AutoResolveExecutor implements NodeExecutor {
                 confirmed.get(OpsSlotCatalog.INTERFACE),
                 abbreviate(confirmed.get(OpsSlotCatalog.ERROR), 20),
                 abbreviate(confirmed.get(OpsSlotCatalog.SYMPTOMS), 20));
-        boolean anythingResolvable = targets(confirmed, OpsSlotCatalog.Spec::resolvable).stream()
+        boolean anythingResolvable = targets(confirmed, policy::allowsResolve).stream()
                 .anyMatch(spec -> spec.name().equals(OpsSlotCatalog.TRACE_ID)
                         || isBlank(confirmed.get(spec.name())));
-        if (!keyIsTraceId && !isBlank(keyword) && anythingResolvable) {
-            // 关键数据优先：keyword 必查；时间窗只在用户明确给出时作为过滤条件，不硬造窗口挡住历史日志
-            Map<String, Object> args = new LinkedHashMap<>();
-            args.put("keyword", keyword);
-            args.put("limit", 10);
-            String window = confirmed.get(OpsSlotCatalog.TIME);
-            if (!isBlank(window)) {
-                String[] range = splitWindow(window);
-                args.put("start", range[0]);
-                args.put("end", range[1]);
-            }
-            ToolResult result = runTool("query_logs", args, node, context);
+        // 反查前提（用户口径）：关键字 + 时间窗**都要有**才去翻日志——两者都是用户给的或推断层填的。
+        // 只有关键字没时间窗 = 全时段扫描：慢，而且很容易捞到无关记录（实测把平台自己的日志当业务日志）
+        String window = confirmed.get(OpsSlotCatalog.TIME);
+        if (!keyIsTraceId && !isBlank(keyword) && !isBlank(window) && anythingResolvable) {
+            String traceId = searchByKeyword(keyword, window, node, context);
             calls++;
-            String traceId = extractTraceId(result);
+            // 换条件重试：带时间窗查无果 → 去掉窗口再查一次（用户给的时间窗本身可能就是错的）。
+            // 只有预算还留得下后续精查时才做——L2 的两次额度刚好是「关键字 + 精查」，L3 才有余量
+            if (traceId == null && !isBlank(window) && calls + 1 < policy.maxResolveCalls()) {
+                traceId = searchByKeyword(keyword, "", node, context);
+                calls++;
+                if (traceId != null) {
+                    log.info("[ops-auto] 换条件重试命中（去掉时间窗）：keyword={}", keyword);
+                }
+            }
             if (traceId != null) {
                 writes.put(OpsSlotCatalog.TRACE_ID, traceId);
-                provenance.add(provenance(OpsSlotCatalog.TRACE_ID, traceId, "log_query",
+                provenance.add(provenance(OpsSlotCatalog.TRACE_ID, traceId, SlotProvenance.SOURCE_LOG,
                         "日志反查关键字「" + keyword + "」命中"));
                 confirmed.put(OpsSlotCatalog.TRACE_ID, traceId);
             }
@@ -282,15 +323,55 @@ public class AutoResolveExecutor implements NodeExecutor {
         // ② traceId 精查提取 报文/接口/错误（业务键不是 traceId，已在 ① 当关键字查过，不能再走精查）
         String traceId = firstNonBlank(asString(writes.get(OpsSlotCatalog.TRACE_ID)),
                 keyIsTraceId ? traceKey : null);
-        boolean needsDetail = targets(confirmed, OpsSlotCatalog.Spec::resolvable).stream()
+        boolean needsDetail = targets(confirmed, policy::allowsResolve).stream()
                 .anyMatch(spec -> isBlank(confirmed.get(spec.name()))
                         && isBlank(asString(writes.get(spec.name()))));
-        if (traceId != null && !traceId.isBlank() && needsDetail && calls < 2) {
+        if (traceId != null && !traceId.isBlank() && needsDetail && calls < policy.maxResolveCalls()) {
             ToolResult detail = runTool("query_logs", Map.of("trace_id", traceId, "limit", 30), node, context);
             calls++;
             extractFromLogLines(detail, confirmed, writes, provenance);
         }
         return calls;
+    }
+
+    /**
+     * 关键字模糊查一次，返回命中的 traceId。
+     *
+     * @param keyword 关键字（业务键 / 接口名 / 错误摘要）
+     * @param window  时间窗（{@code start~end}，空 = 不限时段）
+     * @return 命中最多出现的 traceId；无命中返回 null
+     */
+    private String searchByKeyword(String keyword, String window, NodeDefinition node, NodeContext context) {
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("keyword", keyword);
+        args.put("limit", 10);
+        if (!isBlank(window)) {
+            String[] range = splitWindow(window);
+            args.put("start", range[0]);
+            args.put("end", range[1]);
+        }
+        return extractTraceId(runTool("query_logs", args, node, context));
+    }
+
+    /**
+     * 取文本里最长的合法 JSON 块（超长/无块返回 null）。
+     *
+     * @param text 候选来源文本（已按行内标记过滤）
+     * @return JSON 文本；无可用块返回 null
+     */
+    private static String bestJsonBlock(String text) {
+        Matcher m = JSON_BLOCK.matcher(text);
+        String best = null;
+        while (m.find()) {
+            String candidate = m.group();
+            if (candidate.length() > MAX_PAYLOAD_LENGTH) {
+                continue;
+            }
+            if (best == null || candidate.length() > best.length()) {
+                best = candidate;
+            }
+        }
+        return best;
     }
 
     /** @return 是否标准 traceId 形态（16-64 位 hex）——决定走全链路精查还是关键字模糊查 */
@@ -304,14 +385,27 @@ public class AutoResolveExecutor implements NodeExecutor {
         if (!(logs instanceof List<?> lines) || lines.isEmpty()) {
             return;
         }
-        // 汇总文本：接口路径 / 错误行 / 报文块 都从这里提取
+        // 汇总文本：接口路径 / 错误行 / 报文块 都从这里提取。
+        // 应用自身的遥测行（{"_event":"step.output",...}）整行跳过——里面的 prompt 模板/步骤 JSON
+        // 会被"最长 JSON 块"选中当成报文（实测卡片上摆出 replan 的输出协议模板）
         StringBuilder all = new StringBuilder();
+        StringBuilder payloadSource = new StringBuilder(); // 只收"自己写明是报文"的行
+        StringBuilder responseSource = new StringBuilder(); // 只收"自己写明是响应"的行
         String firstError = null;
         for (Object line : lines) {
             if (line instanceof Map<?, ?> row) {
                 Object msgRaw = row.get("msg");
                 String msg = msgRaw == null ? "" : String.valueOf(msgRaw);
+                if (msg.isBlank() || TELEMETRY_JSON.matcher(msg).lookingAt()) {
+                    continue;
+                }
                 all.append(msg).append('\n');
+                if (PAYLOAD_MARKER.matcher(msg).find()) {
+                    payloadSource.append(msg).append('\n');
+                }
+                if (RESPONSE_MARKER.matcher(msg).find()) {
+                    responseSource.append(msg).append('\n');
+                }
                 if (firstError == null && "ERROR".equalsIgnoreCase(String.valueOf(row.get("level")))) {
                     Object exceptionRaw = row.get("exception");
                     String exception = exceptionRaw == null ? "" : String.valueOf(exceptionRaw);
@@ -324,27 +418,30 @@ public class AutoResolveExecutor implements NodeExecutor {
             Matcher m = API_PATH.matcher(text);
             if (m.find()) {
                 writes.put(OpsSlotCatalog.INTERFACE, m.group());
-                provenance.add(provenance(OpsSlotCatalog.INTERFACE, m.group(), "log_query", "traceId 精查日志命中接口路径"));
+                provenance.add(provenance(OpsSlotCatalog.INTERFACE, m.group(), SlotProvenance.SOURCE_LOG, "traceId 精查日志命中接口路径"));
             }
         }
         if (isBlank(confirmed.get(OpsSlotCatalog.ERROR)) && isBlank(asString(writes.get(OpsSlotCatalog.ERROR)))
                 && firstError != null) {
             writes.put(OpsSlotCatalog.ERROR, firstError);
-            provenance.add(provenance(OpsSlotCatalog.ERROR, firstError, "log_query", "traceId 精查命中 ERROR 级日志"));
+            provenance.add(provenance(OpsSlotCatalog.ERROR, firstError, SlotProvenance.SOURCE_LOG, "traceId 精查命中 ERROR 级日志"));
         }
+        // 只从"行内明确写了这是请求报文/响应"的行里提取（报文/入参/请求体/payload｜响应/返回/response）。
+        // 两者都是高影响槽：猜错了会毒化第二阶段的生成/纠正，宁可漏（让模型 ask_user 问用户）
         if (isBlank(confirmed.get(OpsSlotCatalog.PAYLOAD)) && isBlank(asString(writes.get(OpsSlotCatalog.PAYLOAD)))) {
-            Matcher m = JSON_BLOCK.matcher(text);
-            String best = null;
-            while (m.find()) {
-                String candidate = m.group();
-                if (best == null || candidate.length() > best.length()) {
-                    best = candidate;
-                }
-            }
+            String best = bestJsonBlock(payloadSource.toString());
             if (best != null) {
                 writes.put(OpsSlotCatalog.PAYLOAD, best);
-                provenance.add(provenance(OpsSlotCatalog.PAYLOAD, abbreviate(best, 60) + "…", "log_query",
-                        "traceId 精查日志提取请求报文"));
+                provenance.add(provenance(OpsSlotCatalog.PAYLOAD, abbreviate(best, 60) + "…", SlotProvenance.SOURCE_LOG,
+                        "日志行明确标注的请求报文"));
+            }
+        }
+        if (isBlank(confirmed.get(OpsSlotCatalog.RESPONSE)) && isBlank(asString(writes.get(OpsSlotCatalog.RESPONSE)))) {
+            String best = bestJsonBlock(responseSource.toString());
+            if (best != null) {
+                writes.put(OpsSlotCatalog.RESPONSE, best);
+                provenance.add(provenance(OpsSlotCatalog.RESPONSE, abbreviate(best, 60) + "…", SlotProvenance.SOURCE_LOG,
+                        "日志行明确标注的业务响应"));
             }
         }
     }
@@ -457,12 +554,7 @@ public class AutoResolveExecutor implements NodeExecutor {
     }
 
     private static Map<String, String> provenance(String slot, String value, String method, String evidence) {
-        Map<String, String> item = new LinkedHashMap<>();
-        item.put("slot", slot);
-        item.put("value", value);
-        item.put("method", method);
-        item.put("evidence", evidence);
-        return item;
+        return SlotProvenance.entry(slot, value, method, evidence);
     }
 
     private static String[] splitWindow(String window) {

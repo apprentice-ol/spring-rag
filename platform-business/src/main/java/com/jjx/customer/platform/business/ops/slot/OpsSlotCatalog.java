@@ -34,6 +34,8 @@ public final class OpsSlotCatalog {
     public static final String ERROR = "error";
     /** 槽位名：请求报文。 */
     public static final String PAYLOAD = "payload";
+    /** 槽位名：响应报文（业务系统返回了什么）。 */
+    public static final String RESPONSE = "response";
     /** 槽位名：补充现象。 */
     public static final String SYMPTOMS = "symptoms";
     /** 槽位名：链路 id。 */
@@ -76,6 +78,11 @@ public final class OpsSlotCatalog {
                     "完整请求报文（JSON 文本原样保留）；**不确定就不要填**，报文在生成/纠正阶段才会被要求",
                     List.of())
                     .withAuto(null, false, true),          // RESOLVE：trace_id 精查日志提取请求报文
+            new Spec(RESPONSE, false, "业务系统返回了什么？（选填）", "响应报文 / 返回码 / 返回消息", null,
+                    "业务系统的响应原文（返回报文/返回码/返回消息）；**只有日志里明确是响应才填**，"
+                            + "没挖到就不要猜——诊断要看「系统真实返回了什么」而不是用户以为返回了什么",
+                    List.of())
+                    .withAuto(null, false, true),          // RESOLVE：日志里写明「响应/返回」的行
             new Spec(SYMPTOMS, false, "还有什么补充现象？", "如：偶发 / 全部失败 / 返回超时", null,
                     "补充现象描述（\"偶发\"\"全部失败\"\"返回超时\"等）",
                     List.of()),                            // 不自主补全：主观补充只能问用户
@@ -129,6 +136,7 @@ public final class OpsSlotCatalog {
           .slot(TIME, com.agentframework.definition.workflow.SlotType.STRING)
           .slot(ERROR, com.agentframework.definition.workflow.SlotType.STRING)
           .slot(PAYLOAD, com.agentframework.definition.workflow.SlotType.STRING)
+          .slot(RESPONSE, com.agentframework.definition.workflow.SlotType.STRING)
           .slot(SYMPTOMS, com.agentframework.definition.workflow.SlotType.STRING)
           .slot(TRACE_ID, com.agentframework.definition.workflow.SlotType.STRING);
     }

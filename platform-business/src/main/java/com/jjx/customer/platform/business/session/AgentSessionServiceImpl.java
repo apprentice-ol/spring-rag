@@ -1,5 +1,6 @@
 package com.jjx.customer.platform.business.session;
 
+import com.jjx.customer.platform.business.ops.AutonomyLevel;
 import com.jjx.customer.platform.business.session.entity.AgentSessionEntity;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -92,6 +93,14 @@ public class AgentSessionServiceImpl {
             agentSessionEntity.setSlots(objectMapper.writeValueAsString(state.slots()));
             agentSessionEntity.setMissingSlots(objectMapper.writeValueAsString(state.missingSlots()));
             agentSessionEntity.setSummary(state.summary());
+            if (state.autonomyLevel() != null && !state.autonomyLevel().isBlank()) {
+                agentSessionEntity.setAutonomyLevel(state.autonomyLevel());
+            }
+            // 链 id 只在首轮写（恢复轮沿用同一个，别被本轮的 otelTraceId 顶掉）
+            if (agentSessionEntity.getChainTraceId() == null
+                    && state.chainTraceId() != null && !state.chainTraceId().isBlank()) {
+                agentSessionEntity.setChainTraceId(state.chainTraceId());
+            }
             agentSessionEntity.setUpdateTime(LocalDateTime.now());
             if (create) {
                 sessionMapper.insert(agentSessionEntity);
@@ -125,7 +134,31 @@ public class AgentSessionServiceImpl {
     /** DB 实体 → 会话契约模型（键映射：conversationId → sessionId，agentType → agentId）。 */
     private AgentSessionState toState(AgentSessionEntity e) {
         return new AgentSessionState(e.getConversationId(), e.getAgentType(), e.getStage(),
-                parseStatus(e.getStatus()), readSlots(e.getSlots()), readNames(e.getMissingSlots()), e.getSummary());
+                parseStatus(e.getStatus()), readSlots(e.getSlots()), readNames(e.getMissingSlots()),
+                e.getSummary(), e.getAutonomyLevel(), e.getChainTraceId());
+    }
+
+    /**
+     * 会话自主档位（人在环中 P3）：与状态无关地读该会话已存的档位——
+     * 会话记录在挂起时创建，之后每轮沿用；读不到一律回缺省 {@link AutonomyLevel#L2}。
+     *
+     * @param sessionId 会话标识（对话 conversationId）
+     * @return 档位（查不到/异常 = 缺省 L2，绝不阻断对话）
+     */
+    public AutonomyLevel autonomyOf(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return AutonomyLevel.L2;
+        }
+        try {
+            AgentSessionEntity e = sessionMapper.selectOne(new LambdaQueryWrapper<AgentSessionEntity>()
+                    .eq(AgentSessionEntity::getConversationId, sessionId)
+                    .orderByDesc(AgentSessionEntity::getId)
+                    .last("LIMIT 1"));
+            return AutonomyLevel.parse(e == null ? null : e.getAutonomyLevel());
+        } catch (Exception ex) {
+            log.warn("[AgentSession] 读取自主档位失败（按缺省 L2）: {}", ex.getMessage());
+            return AutonomyLevel.L2;
+        }
     }
 
     private static AgentSessionState.Status parseStatus(String status) {

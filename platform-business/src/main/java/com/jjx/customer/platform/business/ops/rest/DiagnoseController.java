@@ -1,5 +1,6 @@
 package com.jjx.customer.platform.business.ops.rest;
 
+import com.jjx.customer.platform.business.ops.AutonomyLevel;
 import com.jjx.customer.platform.business.ops.OpsRunner;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievalBudget;
@@ -40,13 +41,19 @@ public class DiagnoseController {
     /**
      * 按 traceId 诊断（traceId 预填槽位；缺其余必填槽时返回追问说明而非结论）。
      *
-     * @param traceId 链路 ID（从日志的 [traceId,spanId] 取）
+     * @param traceId  链路 ID（从日志的 [traceId,spanId] 取）
+     * @param autonomy 会话自主档位（L1/L2/L3；空 = 缺省 L2）——单轮无会话可沿用，旋钮只在本次生效
      */
     @PostMapping("/trace")
-    public DiagnoseResponse diagnose(@RequestParam String traceId) {
+    public DiagnoseResponse diagnose(@RequestParam String traceId,
+                                     @RequestParam(required = false) String autonomy) {
         // 框架主线：与对话链路同一实现（REST 为单轮：conversationId 为空，不落会话）
-        OpsRunner.OpsAnswer answer = frameworkOpsRunner.run("按 traceId 诊断：" + traceId,
-                OpsSlotCatalog.sanitized(Map.of(OpsSlotCatalog.TRACE_ID, traceId)), null);
+        Map<String, String> slots = new java.util.LinkedHashMap<>(
+                OpsSlotCatalog.sanitized(Map.of(OpsSlotCatalog.TRACE_ID, traceId)));
+        if (StringUtils.hasText(autonomy)) {
+            slots.put(AutonomyLevel.SLOT, AutonomyLevel.parse(autonomy).name());
+        }
+        OpsRunner.OpsAnswer answer = frameworkOpsRunner.run("按 traceId 诊断：" + traceId, slots, null);
         return new DiagnoseResponse(traceId, answer.text(), answer.kind().name(),
                 answer.trace() == null ? 0 : answer.trace().getLlmCallCount());
     }

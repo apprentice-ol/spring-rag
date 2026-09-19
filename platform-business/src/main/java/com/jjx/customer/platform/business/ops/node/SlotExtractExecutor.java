@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  *
  * <p>语义对齐参考实现的 {@code extractSlotsIfNeeded + normalizeSlots}：
  * 声明式归一（environment 别名折叠）→ 已确认值优先、只填空缺 →
- * 写 {@code missing_count}（必填缺失数，供 {@code slots_gate} 表达式）。
+ * 写 {@code missing_count}（必填缺失数，供 {@code auto_gate} / {@code slots_regate} 表达式）。
  * 无空缺或模型不可用时零 LLM 短路。</p>
  *
  * <p>time 槽在抽取当下就规范化为 ISO 窗口：口语原文（「昨天下午」「今天下午3点」）
@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
  */
 public class SlotExtractExecutor implements NodeExecutor {
 
-    /** 必填缺失计数槽位名（slots_gate / slots_regate 的判定依据）。 */
+    /** 必填缺失计数槽位名（auto_gate / slots_regate 的判定依据）。 */
     public static final String MISSING_COUNT_SLOT = "missing_count";
     /** 抽槽原始输出槽位名。 */
     public static final String EXTRACT_RAW_SLOT = "slot_extract_raw";

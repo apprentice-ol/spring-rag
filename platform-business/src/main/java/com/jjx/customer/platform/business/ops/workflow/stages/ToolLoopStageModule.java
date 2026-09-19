@@ -130,9 +130,16 @@ public final class ToolLoopStageModule implements StageModule {
 
     @Override
     public void wireRuntime(EngineBuilder engineBuilder, SharedDeps deps) {
-        // Prompt 协议块：人写 hint 优先，否则用工具 schema 渲染
+        // Prompt 协议块：工具行一律由工具 schema 渲染，参数名不手写（手写会与契约漂移）
         List<String> toolLines = stage.tools().stream()
-                .map(line -> line.hint() != null ? line.hint() : deps.schemaText().get(line.toolId()))
+                .map(toolId -> {
+                    String line = deps.schemaText().get(toolId);
+                    if (line == null || line.isBlank()) {
+                        throw new IllegalStateException("工具 schema 描述缺失: " + toolId
+                                + "（AgentEngineConfiguration 的 schemaText 必须覆盖阶段声明的全部工具）");
+                    }
+                    return line;
+                })
                 .toList();
         // think 模板正文：Prompt 资产（绑定包覆盖优先，classpath 基线兜底）；正文缺失 = 资产文件被删，快速失败
         String body = deps.promptBody().apply(stage.promptAssetId());
@@ -154,7 +161,7 @@ public final class ToolLoopStageModule implements StageModule {
             engineBuilder.nodeExecutor(stage.replanExecutorName(),
                     new ReplanExecutor(stage.prefix(), stage.title(), next.title(),
                             stage.thinkNode(), next.thinkNode(), deps.model(), deps.mapper(),
-                            deps.promptBody()));
+                            deps.promptBody(), deps.humanResponseInterpreter()));
         }
     }
 }

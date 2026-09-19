@@ -22,6 +22,10 @@ public class MessageEntity {
     @TableField(value = "citations", typeHandler = JsonbTypeHandler.class)
     private String citations;
 
+    /** 澄清卡片结构化载荷（ClarifyRequest JSON；刷新页面后据此重新渲染卡片） */
+    @TableField(value = "clarify", typeHandler = JsonbTypeHandler.class)
+    private String clarify;
+
     /** 关联 Agent 轨迹的 traceId（非表字段，历史消息加载时批量回填，跳 OpenObserve 全链路用） */
     @TableField(exist = false)
     private String traceId;

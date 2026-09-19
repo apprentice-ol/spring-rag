@@ -4,6 +4,7 @@ import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
 
 import com.agentframework.engine.toolexecutor.DefaultToolExecutor;
 import com.agentframework.engine.toolexecutor.DefaultToolRegistry;
+import com.jjx.customer.platform.business.ops.HumanResponseInterpreter;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
 import com.jjx.customer.platform.business.ops.tool.ValidateRequestTool;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,5 +40,15 @@ public record SharedDeps(DefaultToolRegistry sharedRegistry, DefaultToolExecutor
         this(sharedRegistry, toolExecutor, mapper, model, clock, maxLlmCalls, schemaText, validateTool,
                 key -> null, (key, template) -> {
                 });
+    }
+
+    /**
+     * 用户回复解释器（人在环中 P2）：解释器是纯函数式的（模型 + JSON + prompt 源），
+     * 各执行器各持一份即可，无需共享实例。
+     *
+     * @return 回复解释器（模型不可用时内部退化到 {@code #decision:} 前缀解析）
+     */
+    public HumanResponseInterpreter humanResponseInterpreter() {
+        return new HumanResponseInterpreter(model, mapper, promptBody);
     }
 }

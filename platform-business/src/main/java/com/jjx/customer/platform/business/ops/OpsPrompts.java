@@ -1,5 +1,6 @@
 package com.jjx.customer.platform.business.ops;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 
 import java.util.List;
 
@@ -80,6 +81,11 @@ public final class OpsPrompts {
             }
             sb.append("""
 
+                    目录槽覆盖不了的信息维度（如发版版本号、上游依赖系统、具体业务单号类型），
+                    可以在 slots 里用对象声明**自定义槽位**（只在确实需要用户补充时声明，问句要具体）：
+                    {"ask_user":"问句","slots":[{"name":"release_version","question":"最近一次发版的版本号？","hint":"如 v2.3.1"}]}
+                    自定义槽位名不得与上面的目录槽重名；用户回复会沉淀为该槽位值，后续阶段直接可用。
+
                     ## 本阶段可用工具（白名单之外的工具一律不可用）
                     **args 的键必须严格使用下面列出的参数名，不得自造参数名。**
                     """);
@@ -89,6 +95,10 @@ public final class OpsPrompts {
             sb.append("\n## 已执行的工具结果（Action/Observation 过程记录，不要重复执行）\n")
                     .append("{{slots.").append(scratchpadSlot).append("}}\n");
         }
+        // 人在环中：用户补充说明 / 方向指令（软消费——模型自行判断是否采纳，不改图结构）。
+        // 多数轮次没有这一项，用模板默认值渲染成「（无）」，避免空标题诱发模型自行脑补
+        sb.append("\n## 用户补充说明（用户在排查过程中给出的信息或方向，按需采纳）\n")
+                .append("{{slots.").append(ActExecutor.USER_DIRECTIVE_SLOT).append("|（无）}}\n");
         // replan 修正段：未裁决时渲染为空（replan_note 默认空串），adjust 时携带重跑提示
         sb.append("\n## 修正要求（上一轮 replan 裁决）\n{{slots.replan_note}}\n");
         return sb.toString();

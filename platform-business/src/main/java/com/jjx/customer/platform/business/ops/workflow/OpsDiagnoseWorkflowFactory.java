@@ -40,9 +40,9 @@ import java.util.Set;
  * build 期 {@code GRAPH_BACKEDGE_UNGOVERNED} 校验兜底。</p>
  *
  * <pre>
- * extract_slots → slots_gate ─┬─（缺必填）→ auto_resolve → auto_gate ─┬─（补齐）→ inv_think
- *                             │        （规则→LLM→反查 三层自救）      └─（仍缺）→ collect_slots ⇄ slots_regate（问齐兜底）
- *                             └─（齐备）→ inv_think → inv_act → inv_decide ─┬─（有调用）→ inv_think
+ * extract_slots → auto_resolve（规则→日志反查→推断）→ auto_gate ─┬─（齐备）→ confirm_slots → 用户确认
+ *                                       （日志是一手信息源）      └─（仍缺）→ collect_slots ⇄ slots_regate（问齐兜底）
+ * confirm_slots → inv_think → inv_act → inv_decide ─┬─（有调用）→ inv_think
  *                                                                          └─→ replan_1 ─┬ continue → res_think
  *                                                                                        ├ adjust → inv_think
  *                                                                                        └ escalate → escalate_node
@@ -63,10 +63,6 @@ public final class OpsDiagnoseWorkflowFactory {
      */
     public static final String EXTRACT_SLOTS_NODE = "extract_slots";
     /**
-     * 槽位门禁节点 id（缺必填 → 自主补全）。
-     */
-    public static final String SLOTS_GATE_NODE = "slots_gate";
-    /**
      * 自主补全节点 id（规则 → LLM → 日志反查，问用户之前的自救层）。
      */
     public static final String AUTO_RESOLVE_NODE = "auto_resolve";
@@ -78,6 +74,10 @@ public final class OpsDiagnoseWorkflowFactory {
      * 一次问齐节点 id（挂起等用户补充，恢复即重入）。
      */
     public static final String COLLECT_SLOTS_NODE = "collect_slots";
+    /**
+     * 基本信息确认门节点 id（人在环中：齐备后先让用户确认再开诊断）。
+     */
+    public static final String CONFIRM_SLOTS_NODE = "confirm_slots";
     /**
      * 补答后再判定节点 id。
      */
@@ -149,6 +149,10 @@ public final class OpsDiagnoseWorkflowFactory {
      * 一次问齐执行器注册名。
      */
     public static final String ASK_MISSING_EXECUTOR = "ops-ask-missing";
+    /**
+     * 基本信息确认门执行器注册名。
+     */
+    public static final String CONFIRM_EXECUTOR = "ops-confirm";
     /**
      * 阶段 1 工具循环 Act 执行器注册名。
      */

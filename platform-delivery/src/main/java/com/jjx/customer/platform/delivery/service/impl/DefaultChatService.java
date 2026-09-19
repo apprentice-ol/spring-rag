@@ -23,7 +23,8 @@ public class DefaultChatService implements ChatService {
     }
 
     @Override
-    public void streamChat(String question, String conversationId, String agent, String agentChoice, SseEmitter emitter) {
-        orchestrator.execute(question, conversationId, agent, agentChoice, emitter);
+    public void streamChat(String question, String conversationId, String agent, String agentChoice,
+                           String autonomy, SseEmitter emitter) {
+        orchestrator.execute(question, conversationId, agent, agentChoice, autonomy, emitter);
     }
 }

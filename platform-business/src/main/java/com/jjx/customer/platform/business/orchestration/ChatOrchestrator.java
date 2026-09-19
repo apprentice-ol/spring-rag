@@ -79,30 +79,36 @@ public class ChatOrchestrator<S> {
      * @param conversationId 会话 ID
      * @param agent          agent 范式（检索链内编排用；兼容旧客户端/评测，不参与意图路由）
      * @param agentChoice    用户显式选择的范式（新前端用户主动选择时才发送；参与意图路由）
+     * @param autonomy       会话自主档位（人在环中 P3：L1/L2/L3，前端旋钮随请求发送；空 = 沿用会话记录）
      * @param sink           传输载体（交给交付端口）
      */
-    public void execute(String question, String conversationId, String agent, String agentChoice, S sink) {
+    public void execute(String question, String conversationId, String agent, String agentChoice,
+                        String autonomy, S sink) {
         DeliveryPort entryPort = deliveryPortFactory.begin(sink, conversationId, question, null, null, null);
         entryPort.beginRequest(conversationId);
         try {
-            doExecute(question, conversationId, agent, agentChoice, sink);
+            doExecute(question, conversationId, agent, agentChoice, autonomy, sink);
         } finally {
             entryPort.endRequest(conversationId);
         }
     }
 
     /** 编排主体（决策链）。 */
-    private void doExecute(String question, String conversationId, String agent, String agentChoice, S sink) {
+    private void doExecute(String question, String conversationId, String agent, String agentChoice,
+                           String autonomy, S sink) {
         conversationStore.ensureConversation(conversationId, question);
         conversationStore.appendUserMessage(conversationId, question);
         long startTime = System.currentTimeMillis();
-        String otelTraceId = currentTraceId();
 
         // ========== 0. 活动会话恢复（优先级最高，先于归一化/意图分类——否则"prod 环境，接口是 xxx"
         // 这类补槽消息会被误判成闲聊/悬空指代）==========
         ResumeCoordinator.ResumeDecision resume = resumeCoordinator.findResumable(conversationId);
         AgentSessionState activeSession = resume.activeSession();
         boolean resumed = resume.resumed();
+        // 诊断链不断链：追问轮沿用首轮 traceId（否则每轮开新链，一次诊断散成 N 段孤立轨迹，
+        // OpenObserve 深链与轨迹回看都是断的）
+        String otelTraceId = activeSession != null && StringUtils.hasText(activeSession.chainTraceId())
+                ? activeSession.chainTraceId() : currentTraceId();
 
         String ruleNormalized = obsTemplate.step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
         if (ruleNormalized.isBlank()) {
@@ -119,14 +125,14 @@ public class ChatOrchestrator<S> {
             RouteDecision d = firstPass.shortCircuit().get();
             log.info("[对话编排] 规则短路直接进 {} 分支: traceId={}", d.agentType(), traceId);
             agentBranchDispatcher.runAgentBranch(d.agentType(),
-                    question, conversationId, sink, otelTraceId, d.prefillSlots(), null);
+                    question, conversationId, sink, otelTraceId, d.prefillSlots(), null, autonomy);
             return;
         }
         if (resumed) {
             // 恢复：本轮消息是补充信息，按会话归属路由给创建它的 agent 合并槽位继续
             // （会话 agentType 空白/未知回 ops——存量 sa_agent_session 全是 ops 的旧数据兼容）
             agentBranchDispatcher.runAgentBranch(resumeCoordinator.requireResumeTarget(activeSession),
-                    question, conversationId, sink, otelTraceId, Map.of(), activeSession.slots());
+                    question, conversationId, sink, otelTraceId, Map.of(), activeSession.slots(), autonomy);
             return;
         }
 
@@ -138,7 +144,8 @@ public class ChatOrchestrator<S> {
         // 检索型范式（knowledge/react_loop）仍走下方 RAG 链的 agent 编排（产物是 chunks+流式答案）。
         if (AgentCatalog.OPS.id().equalsIgnoreCase(agentChoice)) {
             log.info("[对话编排] 用户显式选择 {}，跳过意图分类直接进该 agent", agentChoice);
-            agentBranchDispatcher.runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink, otelTraceId, Map.of(), null);
+            agentBranchDispatcher.runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink,
+                    otelTraceId, Map.of(), null, autonomy);
             return;
         }
 
@@ -173,7 +180,8 @@ public class ChatOrchestrator<S> {
         // ===== 检索主线：知识问答 = 框架 Agent + Workflow（检索=extension tool，执行权在框架引擎）=====
         // ?agent= 指定范式轴（knowledge / react_loop）；ops 型在更早分支已进 agent 支路。
         if (AgentCatalog.OPS.id().equalsIgnoreCase(agent)) {
-            agentBranchDispatcher.runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink, otelTraceId, Map.of(), null);
+            agentBranchDispatcher.runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink,
+                    otelTraceId, Map.of(), null, autonomy);
             return;
         }
         String paradigm = StringUtils.hasText(agent) ? agent : AgentCatalog.KNOWLEDGE.id();
@@ -224,7 +232,7 @@ public class ChatOrchestrator<S> {
             log.info("[对话编排] 图内路由转 {}（domain={}），转交该 agent",
                     knowledgeAnswer.routeTarget(), knowledgeAnswer.intent());
             agentBranchDispatcher.runAgentBranch(knowledgeAnswer.routeTarget(), question, conversationId, sink, otelTraceId,
-                    knowledgeAnswer.prefillSlots(), null);
+                    knowledgeAnswer.prefillSlots(), null, autonomy);
             return;
         }
 

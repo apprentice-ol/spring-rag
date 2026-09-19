@@ -32,7 +32,9 @@ customer-platform（root pom，groupId com.jjx.customer，包根 com.jjx.custome
 │   │                                      workflow/common/（两域共用节点执行器：ActExecutor、EscalateExecutor、EscalateTerminal）
 │   │                                      knowledge/（RAG 线全部：KnowledgeRunner、workflow/ 双图工厂、node/ 七个执行器、
 │   │                                        intent/、normalize/、rag/）
-│   │                                      ops/（诊断线全部：OpsRunner、workflow/ 图工厂+stages、node/、slot/、tool/、rest/）
+│   │                                      ops/（诊断线全部：OpsRunner、人在环中（HumanResponseInterpreter 回复解释器 /
+│   │                                        AutonomyLevel+AutonomyPolicy 自主档位）、workflow/ 图工厂+stages、
+│   │                                        node/、slot/（SlotProvenance 槽位来源）、tool/、rest/）
 │   │                                      orchestration/（ChatOrchestrator 决策骨架 + 8 个协作类，纯跨域调度）/
 │   │                                      routing / runtime（DegradeGuard）/ session / trace / telemetry / agent/schemas 资源
 │   ├── platform-delivery                  交付通道：sse（端口实现 + 事件协议）/ message（会话消息持久化）/

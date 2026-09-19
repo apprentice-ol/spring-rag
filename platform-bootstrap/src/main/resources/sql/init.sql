@@ -122,6 +122,9 @@ CREATE TABLE IF NOT EXISTS sa_message (
 CREATE INDEX IF NOT EXISTS idx_sa_msg_conv ON sa_message (conversation_id);
 -- 旧库补列（幂等；init 模式 always，每次启动安全执行）
 ALTER TABLE sa_message ADD COLUMN IF NOT EXISTS citations JSONB;
+-- 人在环中：追问/决策卡片的结构化载荷（刷新页面后卡片要能重新渲染，正文文本还原不出结构）
+ALTER TABLE sa_message ADD COLUMN IF NOT EXISTS clarify JSONB;
+COMMENT ON COLUMN sa_message.clarify IS '澄清卡片结构化载荷（ClarifyRequest JSON，刷新后重渲染用）';
 
 -- ===== 节点级执行日志（P7）=====
 CREATE TABLE IF NOT EXISTS sa_ingestion_task_node (
@@ -469,3 +472,11 @@ CREATE INDEX IF NOT EXISTS idx_sa_cache_ans_prompt ON sa_cache_answer (prompt_ha
 
 -- 会话粘住 prompt 组合：恢复追问轮精确重建当时的 release 对（bundleId:releaseNo|...，null=无绑定）
 ALTER TABLE sa_agent_session ADD COLUMN IF NOT EXISTS prompt_releases VARCHAR(256);
+
+-- 人在环中 P3：会话自主档位（L1 多问我 / L2 默认 / L3 少问我；null = 按缺省 L2 处理）
+ALTER TABLE sa_agent_session ADD COLUMN IF NOT EXISTS autonomy_level VARCHAR(8);
+COMMENT ON COLUMN sa_agent_session.autonomy_level IS '会话自主档位（L1/L2/L3，null=缺省 L2）';
+
+-- 人在环中：诊断链 traceId（首轮生成，后续追问轮沿用）——一次诊断跨多轮也是一条链
+ALTER TABLE sa_agent_session ADD COLUMN IF NOT EXISTS chain_trace_id VARCHAR(64);
+COMMENT ON COLUMN sa_agent_session.chain_trace_id IS '诊断链 traceId（同一次诊断跨轮沿用，轨迹不断链）';

@@ -67,12 +67,13 @@ public class ChatController {
     public SseEmitter stream(@RequestParam String question,
                              @RequestParam(required = false) String conversationId,
                              @RequestParam(required = false) String agent,
-                             @RequestParam(required = false) String agentChoice) {
+                             @RequestParam(required = false) String agentChoice,
+                             @RequestParam(required = false) String autonomy) {
         // 5 分钟超时
         SseEmitter emitter = new SseEmitter(300_000L);
         Thread.ofVirtual().start(ContextPropagator.wrap(() -> {
             try {
-                chatService.streamChat(question, conversationId, agent, agentChoice, emitter);
+                chatService.streamChat(question, conversationId, agent, agentChoice, autonomy, emitter);
             } catch (Exception e) {
                 log.error("[ChatController] 流式处理异常", e);
                 // 发标准 error 事件后正常 complete。不用 completeWithError：那会触发容器
