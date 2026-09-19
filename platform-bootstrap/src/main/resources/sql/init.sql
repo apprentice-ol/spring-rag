@@ -21,6 +21,26 @@ CREATE INDEX IF NOT EXISTS idx_spr_ai_store_vec_emb
     ON spring_ai_store_vector
     USING hnsw (embedding vector_cosine_ops);
 
+-- ===== 父块存档（小块检索、大块生成，2026-09-18；见 plan/2026-09-18-small-to-big-retrieval.md）=====
+-- 向量表存子块（打分排序粒度），本表存父块原文（生成上下文粒度）。
+-- parent_key = doc_id + ":" + 父块 chunk_index（IndexerNode 生成，确定性）；与向量表同生命周期
+-- （IngestionEngineService 幂等清理 / IngestionController 删除文档时同批删除）。
+CREATE TABLE IF NOT EXISTS sa_chunk_parent (
+    id            BIGSERIAL    PRIMARY KEY,
+    parent_key    VARCHAR(128) NOT NULL UNIQUE,
+    doc_id        VARCHAR(64)  NOT NULL,
+    collection_id BIGINT,
+    doc_name      VARCHAR(255),
+    outline_path  VARCHAR(512),
+    content       TEXT         NOT NULL,
+    created_at    TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sa_chunk_parent_doc ON sa_chunk_parent (doc_id);
+-- 子块 → 父块的反查走 parent_key（聚合器批量 IN 查询）
+CREATE INDEX IF NOT EXISTS idx_spr_ai_store_vec_parent
+    ON spring_ai_store_vector ((metadata->>'parent_key'))
+    WHERE metadata->>'parent_key' IS NOT NULL;
+
 -- 文档元数据
 CREATE TABLE IF NOT EXISTS sa_document (
     id              BIGSERIAL    PRIMARY KEY,
@@ -139,8 +159,14 @@ CREATE TABLE IF NOT EXISTS sa_eval_item (
     id               BIGSERIAL PRIMARY KEY,
     dataset_id       BIGINT    NOT NULL,
     item_key         VARCHAR(64),                            -- 可选用例标识
-    category         VARCHAR(32),                            -- qa / summarization / adversarial
+    category         VARCHAR(32),                            -- 7 类：factoid/definition/explanation/multi-aspect/list/comparison/yes-no
     question         TEXT      NOT NULL,
+    -- 难度（LiveRAG 源数据的 IRT 标注；官方按 irt_diff 四分位分 4 档，每档约 224 题）
+    difficulty       VARCHAR(8),                             -- E / M / D / HD（由 irt_diff 四分位定档）
+    irt_diff         NUMERIC(8,4),                           -- IRT 难度参数 b：**越大越难**（实测与 ACS 相关 -0.97）
+    irt_disc         NUMERIC(8,4),                           -- IRT 区分度参数 a
+    acs              NUMERIC(8,4),                           -- 各参赛系统平均正确率：越大越容易
+    acs_std          NUMERIC(8,4),                           -- ACS 标准差
     query_embedding  VECTOR(1024),                           -- 预存，跑批前回填（MyBatis 不映射，走 JDBC）
     expected_doc_ids JSONB,                                  -- 检索 ground truth（task_id 列表）
     expected_answer  TEXT,                                   -- Phase 2 用，本轮留字段
@@ -194,6 +220,9 @@ ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS rewrite BOOLEAN NOT NULL DEF
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS expected_doc_ids JSONB;
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS expected_doc_names JSONB;
 -- agent 框架对照：执行轨迹 + 范式轴
+-- ⚠️ agent_trace 自 2026-09-18 起不再写入本表（列保留兼容历史数据）：实测单条轨迹平均 22KB 而每条
+-- item 有 9 个指标行，把同一份轨迹存 9 遍，sa_eval_metric 395MB 里 352MB（89%）是这份冗余副本。
+-- 轨迹改存 sa_eval_item_trace（每 run+item+attempt 一行），本列不再被任何读路径使用
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS agent_trace JSONB;
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NULL DEFAULT 'naive';
 ALTER TABLE sa_eval_run    ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NULL DEFAULT 'naive';
@@ -206,6 +235,21 @@ ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS generated_answer TEXT;
 -- per-question 检索模式标识（仅检索期望文档；重评可覆盖原 run 设置，
 -- 上限对照记录须与常规记录区分展示，避免误读分数）
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS per_question BOOLEAN NOT NULL DEFAULT false;
+
+-- 评测条目 agent 执行轨迹（每 run + item + attempt 一行）
+-- 从 sa_eval_metric 拆出：轨迹是「每条 item 一份」的，塞进「每条 item × 每个指标」的指标表会被复制
+-- 指标数次（实测 9 次），冗余副本占满整表。拆出后落库体积降约 89%，且轨迹与指标解耦，
+-- 指标表可以放心按指标聚合/裁剪列。attempt 与 sa_eval_metric 同口径（0=原始批，1..=第 n 次重评）
+CREATE TABLE IF NOT EXISTS sa_eval_item_trace (
+    id          BIGSERIAL PRIMARY KEY,
+    run_id      BIGINT  NOT NULL,
+    item_id     BIGINT  NOT NULL,
+    attempt     INT     NOT NULL DEFAULT 0,
+    trace_id    VARCHAR(64),                         -- item root trace 的 traceId，关联 OpenObserve
+    agent_trace JSONB,                               -- AgentTrace JSON（检索/工具调用轨迹）
+    create_time TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sa_eval_item_trace_run ON sa_eval_item_trace (run_id);
 
 -- ===== 评测体系中文释义（表/列注释，DB 客户端可见）=====
 COMMENT ON TABLE sa_eval_dataset IS '评测数据集';
@@ -262,6 +306,16 @@ COMMENT ON COLUMN sa_eval_metric.latency_ms IS '该条检索耗时（毫秒）';
 COMMENT ON COLUMN sa_eval_metric.trace_id IS 'traceId（预留，关联 OpenObserve）';
 COMMENT ON COLUMN sa_eval_metric.category IS '条目分类（冗余自 sa_eval_item.category，便于运行记录展示/筛选）';
 COMMENT ON COLUMN sa_eval_metric.create_time IS '创建时间';
+COMMENT ON COLUMN sa_eval_metric.agent_trace IS '【已弃用·仅历史数据】agent 执行轨迹，2026-09-18 起改存 sa_eval_item_trace（原先每条 item 的轨迹被 9 个指标行各存一份）';
+
+COMMENT ON TABLE sa_eval_item_trace IS '评测条目 agent 执行轨迹（每 run + item + attempt 一行，与 sa_eval_metric 解耦）';
+COMMENT ON COLUMN sa_eval_item_trace.id IS '自增主键';
+COMMENT ON COLUMN sa_eval_item_trace.run_id IS '所属运行 ID（sa_eval_run.id）';
+COMMENT ON COLUMN sa_eval_item_trace.item_id IS '所属条目 ID（sa_eval_item.id）';
+COMMENT ON COLUMN sa_eval_item_trace.attempt IS '评估序号：0=原始批，1/2/3…=第 n 次单条重评（与 sa_eval_metric.attempt 同口径）';
+COMMENT ON COLUMN sa_eval_item_trace.trace_id IS '该 item root trace 的 traceId（关联 OpenObserve/Langfuse）';
+COMMENT ON COLUMN sa_eval_item_trace.agent_trace IS 'AgentTrace JSON（检索/工具调用轨迹）';
+COMMENT ON COLUMN sa_eval_item_trace.create_time IS '创建时间';
 
 -- ===== Agent 执行轨迹（线上 chat 持久化，供管理后台分析多步决策规律、反哺 naive）=====
 CREATE TABLE IF NOT EXISTS sa_agent_trace (

@@ -5,7 +5,7 @@ package com.jjx.customer.platform.eval.domain;
  *
  * <p>检索参数均支持 per-request 覆盖（见 SearchContext / RetrievalBudget）。
  * rewrite：是否启用查询改写（QueryRewriter），false=裸检索（默认，向后兼容）。
- * paradigm：agent 范式（knowledge/ops_diagnose/react_loop；历史 naive/react 由 AgentRegistry alias 映射），
+ * paradigm：agent 范式（knowledge/ops_diagnose/react_loop；历史 naive/react 由 {@code AgentCatalog.ALIASES} 映射），
  * 默认 knowledge（等价旧 naive，单次检索 baseline）。rrf-k 与通道权重未纳入。</p>
  * perQuestion：per-question 检索模式（实验开关），检索限定在该题 expected_doc_ids 内。
  */

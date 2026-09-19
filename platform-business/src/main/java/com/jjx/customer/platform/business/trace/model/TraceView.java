@@ -37,10 +37,20 @@ public class TraceView {
     }
 
     public TraceView(String paradigm, String workflowId, String promptHash) {
+        this(paradigm, workflowId, promptHash, System.currentTimeMillis());
+    }
+
+    /**
+     * @param startTimeMs 轨迹起点（整轮真实开始执行的时刻）。总耗时 = 读取时刻 - 该值，
+     *                    所以起点必须是"执行开始"而不是"构造 TraceView 的时刻"。
+     *                    <p>框架路径由 FrameworkTraceMapper 用引擎的整轮耗时反推起点——
+     *                    那是在执行完之后才映射的，直接取"此刻"会把总耗时算成映射到落库的间隔。</p>
+     */
+    public TraceView(String paradigm, String workflowId, String promptHash, long startTimeMs) {
         this.paradigm = paradigm;
         this.workflowId = workflowId;
         this.promptHash = promptHash;
-        this.startTimeMs = System.currentTimeMillis();
+        this.startTimeMs = startTimeMs;
     }
 
     /**
@@ -83,6 +93,7 @@ public class TraceView {
         if (s == null) {
             return "";
         }
-        return s.length() > 200 ? s.substring(0, 200) + "…" : s;
+        // 1200：保住前端「展开全文」的信息量（工具观测/决策全文），同时限制单步落库体积
+        return s.length() > 1200 ? s.substring(0, 1200) + "…" : s;
     }
 }

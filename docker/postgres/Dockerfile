@@ -1,4 +1,4 @@
-# springai-rag 专用 postgres：pgvector + pg_search（BM25）
+# customer-platform 专用 postgres：pgvector + pg_search（BM25）
 # 基础镜像自带 pgvector；pg_search（ParadeDB，Tantivy 内核）通过 GitHub release deb 安装
 # （ParadeDB apt 源已下线，只能从 GitHub releases 下载）。
 # shared_preload_libraries 用启动参数 -c 传入（无需改数据卷里的 postgresql.conf）。

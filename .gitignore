@@ -30,10 +30,13 @@ logs/
 application-local.yaml
 application-prod.yaml
 
-# Frontend（node_modules 依赖 + dist 构建产物；前端源码 frontend/src 正常提交。
-# 注意：rag-core/src/main/resources/static 是 dist 的拷贝、spring boot 服务前端的方式，保留提交使 clone 即用）
+# Frontend（node_modules 依赖 + dist 构建产物；前端源码 frontend/src 正常提交）
 node_modules/
 frontend/dist/
+# 前端构建产物：build-local.sh 的 [2/3] 步把 frontend/dist/* 拷到这里、由 Spring Boot 打进 jar。
+# 与上面的 frontend/dist 是同一份东西，同样不入库——克隆后跑一次 build-local.sh 即可生成。
+# （旧注释里提到的 rag-core/src/main/resources/static 模块已不存在，规则随之修正）
+platform-bootstrap/src/main/resources/static/
 
 # 运行时数据（LiveRAG 等下载缓存，运行时生成；评测 parquet 数据集保留入库）
 /data/

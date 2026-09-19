@@ -1,7 +1,7 @@
 package com.jjx.customer.platform.mcp;
 
 
-import com.jjx.customer.platform.agent.framework.tool.AgentTool;
+import com.agentframework.engine.toolexecutor.Tool;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * MCP 扩展工具来源：把 MCP server 暴露的工具桥接成框架扩展工具。
+ * MCP 扩展工具来源：把 MCP server 暴露的工具桥接成新内核 {@link Tool} 注册表条目。
  *
  * <p>开关与命名：{@code rag.chat.agent.mcp.enabled}（默认 false）、
  * {@code rag.chat.agent.mcp.tool-prefix}（默认 {@code mcp_}）。
@@ -36,11 +36,11 @@ public class McpExtensionToolSource {
     }
 
     /** 全部 MCP 扩展工具（未启用/无 server 时为空）。 */
-    public List<AgentTool> tools() {
+    public List<Tool> tools() {
         if (!enabled) {
             return List.of();
         }
-        List<AgentTool> tools = new ArrayList<>();
+        List<Tool> tools = new ArrayList<>();
         for (ToolCallbackProvider provider : providers) {
             for (ToolCallback callback : provider.getToolCallbacks()) {
                 if (callback == null || callback.getToolDefinition() == null) {

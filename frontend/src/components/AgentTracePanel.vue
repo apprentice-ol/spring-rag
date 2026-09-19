@@ -50,11 +50,14 @@ onMounted(() => {
 function stepCount(r: AgentTraceRecord): number {
   return parseSteps(r.steps).length
 }
-/** 改写轨迹：retrieve 步的 input（query）序列 —— 看 react 多次检索的 query 怎么变 */
+/** 检索轨迹：检索步的 query 序列（旧名 retrieve / 新图节点 kb_retrieve、react_*_act）——看多轮检索的 query 怎么变 */
+const RETRIEVE_ACTIONS = ['retrieve', 'kb_retrieve']
 function rewriteTrail(r: AgentTraceRecord): string {
-  const retrieves = parseSteps(r.steps)
-    .filter((s) => s.action === 'retrieve')
+  const steps = parseSteps(r.steps)
+  const retrieves = steps
+    .filter((s) => RETRIEVE_ACTIONS.includes(s.action) || (s.action.endsWith('_act') && s.inputSummary))
     .map((s) => s.inputSummary)
+    .filter((q): q is string => !!q)
   return retrieves.length ? retrieves.join('  →  ') : '—'
 }
 function openDetail(r: AgentTraceRecord) {
@@ -88,7 +91,7 @@ const columns = useResizableColumns([
   { title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 180 },
   { title: '问题', dataIndex: 'question', key: 'question', width: 280, ellipsis: true },
   { title: '步数', key: 'stepCount', width: 70, align: 'center' as const },
-  { title: '改写轨迹（retrieve 的 query 序列）', key: 'trail', width: 240, ellipsis: true },
+  { title: '检索轨迹（query 序列）', key: 'trail', width: 240, ellipsis: true },
   { title: 'LLM', key: 'llm', width: 60, align: 'center' as const },
   { title: '耗时', key: 'latency', width: 80 },
   { title: 'traceId', dataIndex: 'traceId', key: 'traceId', width: 250, ellipsis: true },
@@ -104,7 +107,7 @@ const columns = useResizableColumns([
       <div class="page-header-text">
         <span class="eyebrow">Agent Trace</span>
         <h1 class="page-title">Agent 轨迹分析</h1>
-        <p class="page-desc">线上 chat 的 agent 思考流程（thought/action）落库于此——看多步决策规律（如 react 拼写纠错/关键词重组），反哺 naive</p>
+        <p class="page-desc">线上 chat 的 agent 执行轨迹（图节点逐步落库：抽槽/问齐/思考/工具/裁决/收尾）——看多步决策规律与各阶段耗时分布</p>
       </div>
     </div>
 

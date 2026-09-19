@@ -1,156 +1,292 @@
 package com.jjx.customer.platform.business;
-import com.jjx.customer.platform.config.llm.JsonProtocolModelPort;
 
-import com.jjx.customer.platform.agent.framework.agent.Agent;
-import com.jjx.customer.platform.agent.framework.prompt.PromptSnapshotSource;
-import com.jjx.customer.platform.agent.framework.tool.AgentTool;
-import com.jjx.customer.platform.agent.framework.workflow.Workflow;
-import com.jjx.customer.platform.agent.framework.workflow.WorkflowCatalog;
-import com.jjx.customer.platform.agent.framework.agent.ExecutionPlanner;
-import com.jjx.customer.platform.agent.framework.agent.WorkflowEngine;
-import com.jjx.customer.platform.agent.framework.agent.AgentWorkflowBindingResolver;
-import com.jjx.customer.platform.agent.framework.workflow.DefaultWorkflowDriver;
-import com.jjx.customer.platform.agent.framework.model.ModelPort;
-import com.jjx.customer.platform.agent.framework.node.AgentCallNodeExecutor;
-import com.jjx.customer.platform.agent.framework.node.DeterministicNodeExecutor;
-import com.jjx.customer.platform.agent.framework.node.LoopNodeExecutor;
-import com.jjx.customer.platform.agent.framework.node.NodeExecutorRegistry;
-import com.jjx.customer.platform.agent.framework.agent.AgentRegistry;
-import com.jjx.customer.platform.agent.framework.workflow.InMemoryWorkflowCatalog;
-import com.jjx.customer.platform.agent.framework.route.RouteStrategy;
-import com.jjx.customer.platform.agent.framework.route.RouteTable;
-import com.jjx.customer.platform.agent.framework.session.SessionRecordingListener;
-import com.jjx.customer.platform.agent.framework.session.SessionStore;
-import com.jjx.customer.platform.agent.framework.spi.ExecutionListener;
-import com.jjx.customer.platform.agent.framework.tool.ToolRegistry;
-import com.jjx.customer.platform.mcp.McpExtensionToolSource;
+import com.agentframework.crosscutting.interceptor.TaskPropagation;
+import com.agentframework.definition.agent.AgentDefinition;
+import com.agentframework.definition.policy.QuotaPolicy;
+import com.agentframework.definition.policy.ToolPolicy;
+import com.agentframework.definition.workflow.WorkflowDefinition;
+import com.agentframework.engine.core.Engine;
+import com.agentframework.engine.core.EngineBuilder;
+import com.agentframework.engine.toolexecutor.DefaultToolExecutor;
+import com.agentframework.engine.toolexecutor.DefaultToolRegistry;
+import com.agentframework.infra.modelgateway.DefaultModelGateway;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jjx.customer.platform.business.engine.AgentCatalog;
+import com.jjx.customer.platform.business.engine.GatewayModelAdapter;
+import com.jjx.customer.platform.business.engine.PgEngineSessionStore;
+import com.jjx.customer.platform.business.engine.PgEngineSlotStore;
+import com.jjx.customer.platform.business.knowledge.KbFinishExecutor;
+import com.jjx.customer.platform.business.knowledge.KbPrompts;
+import com.jjx.customer.platform.business.knowledge.KnowledgeQaGraphFactory;
+import com.jjx.customer.platform.business.knowledge.KnowledgeReactGraphFactory;
+import com.jjx.customer.platform.business.knowledge.executor.KbClassifyExecutor;
+import com.jjx.customer.platform.business.knowledge.executor.KbCritiqueExecutor;
+import com.jjx.customer.platform.business.knowledge.executor.KbNormalizeExecutor;
+import com.jjx.customer.platform.business.knowledge.executor.KbRewriteExecutor;
+import com.jjx.customer.platform.business.knowledge.executor.KbRouteExecutor;
+import com.jjx.customer.platform.business.knowledge.executor.KbShortCircuitExecutor;
+import com.jjx.customer.platform.business.orchestration.intent.IntentClassifier;
+import com.jjx.customer.platform.business.orchestration.normalize.QueryRewriter;
+import com.jjx.customer.platform.routing.RouteRegistry;
+import com.jjx.customer.platform.business.ops.OpsDiagnoseWorkflowFactory;
+import com.jjx.customer.platform.business.ops.OpsPrompts;
+import com.jjx.customer.platform.business.ops.OpsProperties;
+import com.jjx.customer.platform.business.ops.executor.ActExecutor;
+import com.jjx.customer.platform.business.ops.openobserve.OpenObserveClient;
+import com.jjx.customer.platform.business.ops.stages.SharedDeps;
+import com.jjx.customer.platform.business.ops.stages.StageModule;
+import com.jjx.customer.platform.business.ops.tool.CurrentTimeTool;
+import com.jjx.customer.platform.business.ops.tool.QueryLogsTool;
+import com.jjx.customer.platform.business.ops.tool.ValidateRequestTool;
+import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
+import com.jjx.customer.platform.config.llm.SpringAiModelProvider;
+import com.jjx.customer.platform.config.prompt.PromptStore;
+import com.jjx.customer.platform.config.properties.AgentProperties;
+import com.jjx.customer.platform.config.properties.ChatProperties;
+import com.jjx.customer.platform.knowledge.retrieval.RetrievalEngine;
+import com.jjx.customer.platform.knowledge.tools.RetrievalTool;
+import com.jjx.customer.platform.prompt.mapper.*;
+import com.jjx.customer.platform.prompt.service.PromptBindingService;
+import com.jjx.customer.platform.prompt.snapshot.PromptStorePromptProvider;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.SmartLifecycle;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import javax.sql.DataSource;
+import java.time.Clock;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * Agent 框架装配（业务侧直配，无 starter）：引擎与其 SPI 实现全部在本类显式组装。
+ * 新内核引擎装配（业务侧直配，无 starter）：{@link Engine} 与全部桥接组件在本类显式组装。
  *
- * <p>注入的都是框架契约类型（{@code com.jjx.customer.agent.*}）——业务实现的 Agent /
- * Workflow / ExtensionTool / RouteStrategy 由 Spring 自动收集后交给框架。
- * 新增一个能力域 = 新增业务 Agent + Workflow + 工具 + 一条 RouteStrategy，本类不改。</p>
+ * <p>单引擎三 Agent（ops_diagnose / knowledge / react_loop）：会话状态与恢复管理都是
+ * 引擎级，双引擎会让追问恢复断链。装配即键控——ops 图的执行器 / Prompt / 守卫由
+ * {@code StageModule} 自带并经 {@link OpsDiagnoseWorkflowFactory#reconcile} 对账
+ * （图是唯一事实源）；knowledge 双图在引擎上直接注册。</p>
+ *
+ * <p>Prompt 资产管道：{@link PromptStorePromptProvider}（绑定包覆盖优先，回退 classpath）
+ * + 装配期组合模板（think 正文 + 工具协议块，stages wireRuntime 注册）；
+ * 引擎会话持久化走 {@code ops_engine_session/slots}（挂起恢复），澄清会话仍由
+ * {@code AgentSessionServiceImpl}（sa_agent_session）承担。</p>
  */
 @Configuration
+@EnableConfigurationProperties(OpsProperties.class)
 public class FrameworkAgentConfiguration {
 
     /**
-     * 模型端口：按 {@code rag.chat.agent.tool-call-mode} 装配。
-     * <ul>
-     *   <li>native（默认）：原生 function calling——工具 schema → 模型工具定义 →
-     *       结构化回传，工具执行权留在框架（internalToolExecutionEnabled=false 手动驱动）；</li>
-     *   <li>json：JSON 文本协议降级逃生门（模型端 function calling 遵循率差时切换）。</li>
-     * </ul>
+     * 共享模型网关：唯一 provider = spring-ai（宿主 ChatModel，DeepSeek 端点）。
+     * LLM 节点、工具循环 think、抽槽/裁决边角调用同一网关同一横切（指标/超时/重试）。
      */
     @Bean
-    public ModelPort frameworkModelPort(@Qualifier("ingestionChatClient") ChatClient chatClient,
-                                        org.springframework.ai.chat.model.ChatModel chatModel,
-                                        com.jjx.customer.platform.config.properties.AgentProperties agentProperties) {
-        if ("json".equalsIgnoreCase(agentProperties.getToolCallMode())) {
-            return new JsonProtocolModelPort((system, user) -> chatClient.prompt()
-                    .system(system)
-                    .user(user)
-                    .call()
-                    .content());
-        }
-        return new com.jjx.customer.platform.config.llm.NativeToolModelPort(chatModel);
-    }
-
-    @Bean
-    public ToolRegistry frameworkToolRegistry(List<AgentTool> tools, McpExtensionToolSource mcpSource) {
-        List<AgentTool> all = new java.util.ArrayList<>(tools);
-        all.addAll(mcpSource.tools());
-        return new ToolRegistry(all);
-    }
-
-    @Bean
-    public NodeExecutorRegistry frameworkNodeExecutors(ToolRegistry toolRegistry, ModelPort modelPort) {
-        return new NodeExecutorRegistry(List.of(
-                new DeterministicNodeExecutor(toolRegistry),
-                new LoopNodeExecutor(modelPort, toolRegistry),
-                new AgentCallNodeExecutor()));
-    }
-
-    @Bean
-    public WorkflowCatalog frameworkWorkflowCatalog(List<Workflow> workflows) {
-        return new InMemoryWorkflowCatalog(workflows);
-    }
-
-    @Bean
-    public RouteTable frameworkRouteTable(List<RouteStrategy> strategies) {
-        return new RouteTable(strategies);
-    }
-
-    @Bean
-    public AgentRegistry frameworkAgentRegistry(List<Agent> agents) {
-        return new AgentRegistry(agents);
-    }
-
-    /** 绑定解析（桥）：默认实现 = 用 Agent 自身声明的 Workflow；业务可另注册实现覆盖换绑。 */
-    @Bean
-    public AgentWorkflowBindingResolver frameworkAgentWorkflowBindingResolver() {
-        return AgentWorkflowBindingResolver.DEFAULT;
-    }
-
-    @Bean
-    public ExecutionPlanner frameworkExecutionPlanner(RouteTable routeTable,
-                                                     WorkflowCatalog workflowCatalog,
-                                                     AgentWorkflowBindingResolver bindingResolver,
-                                                     PromptSnapshotSource promptSnapshotSource,
-                                                     CacheAwareCapabilityConfig capabilityConfig) {
-        // 能力开关：缓存层关闭即收窄 ANSWER_CACHE/SEMANTIC_CACHE（三方模型驱动管线行为）
-        return new ExecutionPlanner(routeTable, workflowCatalog,
-                bindingResolver, capabilityConfig, promptSnapshotSource);
-    }
-
-    @Bean
-    public WorkflowEngine frameworkWorkflowEngine(ExecutionPlanner planner,
-                                                 NodeExecutorRegistry nodeExecutors,
-                                                 AgentRegistry agentRegistry,
-                                                 ModelPort modelPort,
-                                                 SessionStore sessionStore) {
-        // 骨架装配：监听器（会话落库：CLARIFY → AWAITING_USER，终态 → DONE）+ 拦截器（批次 E 接入）
-        // 驱动注入 ModelPort（槽位 LLM 抽槽与 replan 裁决经端口调用）
-        List<ExecutionListener> listeners = List.of(new SessionRecordingListener(sessionStore));
-        return new WorkflowEngine(planner,
-                new DefaultWorkflowDriver(nodeExecutors, modelPort, List.of()),
-                agentRegistry, List.of(), 3, listeners);
+    public DefaultModelGateway agentModelGateway(ChatModel chatModel) {
+        DefaultModelGateway gateway = new DefaultModelGateway(SpringAiModelProvider.PROVIDER_ID, null);
+        gateway.register(new SpringAiModelProvider(chatModel));
+        return gateway;
     }
 
     /**
-     * 框架生命周期接入 Spring 容器生命周期（Adapter，Spring {@link SmartLifecycle} 范式）：
-     * 容器 refresh 完成后调 {@code engine.start()}（监听器 onEngineStart：冻结注册表/预热端口），
-     * 容器关闭时调 {@code engine.stop()}（监听器 onEngineStop：冲刷/释放）。
+     * Prompt 绑定解析服务：requiredKeys 清单由 {@link AgentCatalog} 推导注入
+     * （platform-prompt 不反向依赖 business）。
      */
     @Bean
-    public SmartLifecycle frameworkWorkflowEngineLifecycle(WorkflowEngine engine) {
-        return new SmartLifecycle() {
-            private volatile boolean running;
+    public PromptBindingService promptBindingService(
+            PromptBindingMapper bindingMapper,
+            PromptBundleMapper bundleMapper,
+            PromptBundleReleaseMapper releaseMapper,
+            PromptMapper promptMapper,
+            PromptVersionMapper versionMapper,
+            PromptStore promptStore, ObjectMapper objectMapper) {
+        Map<String, List<String>> requiredKeys = new LinkedHashMap<>();
+        for (AgentCatalog.Entry entry : AgentCatalog.all()) {
+            requiredKeys.put(entry.id(), entry.allPromptKeys());
+        }
+        return new PromptBindingService(bindingMapper, bundleMapper, releaseMapper,
+                promptMapper, versionMapper, promptStore, objectMapper, requiredKeys);
+    }
 
-            @Override
-            public void start() {
-                engine.start();
-                running = true;
+    /**
+     * Prompt 资产来源：key → agent 归属由 {@link AgentCatalog} 推导；
+     * 解析顺序 = 装配期组合模板 → 绑定包覆盖 → classpath 基线。
+     */
+    @Bean
+    public PromptStorePromptProvider agentPromptProvider(PromptStore promptStore,
+                                                         PromptBindingService bindingService) {
+        Map<String, String> keyOwner = new LinkedHashMap<>();
+        for (AgentCatalog.Entry entry : AgentCatalog.all()) {
+            // 人格层 / 任务层 key 不允许跨 agent 重复（命名空间红线，拼错即装配期失败）
+            for (String key : entry.agentPromptKeys()) {
+                putStrict(keyOwner, key, entry.id());
             }
-
-            @Override
-            public void stop() {
-                engine.stop();
-                running = false;
+            for (String key : entry.workflowPromptKeys()) {
+                putStrict(keyOwner, key, entry.id());
             }
+            // answerPromptKey 允许共享（react_loop 复用 knowledge 的生成段 key，旧架构同语义）：
+            // 归属首个声明者；该 key 生成段在引擎外，绑定覆盖按各自 agent 的指纹路径独立解析
+            if (entry.answerPromptKey() != null) {
+                keyOwner.putIfAbsent(entry.answerPromptKey(), entry.id());
+            }
+        }
+        // ops think 的 workflow 层资产（组合模板的正文来源）也归属 ops agent
+        for (String asset : List.of(OpsDiagnoseWorkflowFactory.INVESTIGATE_PROMPT,
+                OpsDiagnoseWorkflowFactory.RESOLVE_PROMPT, OpsDiagnoseWorkflowFactory.VERIFY_PROMPT)) {
+            keyOwner.putIfAbsent(asset, AgentCatalog.OPS.id());
+        }
+        return new PromptStorePromptProvider(promptStore, bindingService, keyOwner);
+    }
 
-            @Override
-            public boolean isRunning() {
-                return running;
+    /** 命名空间红线：同 key 被两个 agent 的人格/任务层声明即装配期失败。 */
+    private static void putStrict(Map<String, String> keyOwner, String key, String agentId) {
+        String previous = keyOwner.putIfAbsent(key, agentId);
+        if (previous != null && !previous.equals(agentId)) {
+            throw new IllegalStateException("Prompt key 跨 agent 重复: " + key
+                    + "（" + previous + " 与 " + agentId + "）——人格/任务层 key 须各归各的命名空间");
+        }
+    }
+
+    /**
+     * 引擎本体（destroyMethod=close 释放内部资源）。
+     */
+    /**
+     * 把调用方线程的遥测上下文搬进引擎的执行线程。
+     *
+     * <p>引擎的超时拦截器会把节点执行丢到新开的虚拟线程上跑，而新线程不继承线程本地变量——
+     * 链路追踪上下文（以及会话环境 HOLDER）会原地丢失，节点里产生的 span 只能各自成为根 trace，
+     * 一次问答在 OpenObserve 里断成互不相干的好几截。装配期注入这个包装器即可修复，
+     * 内核侧对应的扩展点是 {@code TaskPropagation}。</p>
+     *
+     * <p>放在 {@code @PostConstruct} 而不是某个 bean 方法里：这是进程级的静态装配，
+     * 必须在任何一次 {@code engine.run} 之前完成，不能依赖"某个 bean 恰好先被创建"。</p>
+     */
+    @jakarta.annotation.PostConstruct
+    void installTelemetryTaskPropagation() {
+        TaskPropagation.install(ContextPropagator::wrap);
+    }
+
+    @Bean(destroyMethod = "close")
+    public Engine agentEngine(ChatModel chatModel,
+                              PromptStore promptStore,
+                              PromptBindingService bindingService,
+                              RetrievalEngine retrievalEngine,
+                              DataSource dataSource,
+                              ObjectMapper objectMapper,
+                              AgentProperties agentProperties,
+                              ChatProperties chatProperties,
+                              OpsProperties opsProperties,
+                              com.jjx.customer.platform.mcp.McpExtensionToolSource mcpToolSource,
+                              IntentClassifier intentClassifier,
+                              RouteRegistry routeRegistry,
+                              QueryRewriter queryRewriter,
+                              @org.springframework.beans.factory.annotation.Value(
+                                      "${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
+        PromptStorePromptProvider promptProvider = agentPromptProvider(promptStore, bindingService);
+
+        // ---- 工具面（共享注册表：RAG 检索 + ops 诊断 + 时间）----
+        DefaultToolRegistry sharedRegistry = new DefaultToolRegistry();
+        RetrievalTool retrievalTool = new RetrievalTool(retrievalEngine,
+                chatProperties.getTopK(), chatProperties.getSimilarityThreshold(),
+                chatProperties.getRecallBudget(), chatProperties.getCandidateLimit(),
+                chatProperties.getContextTopK(), minRelevanceScore);
+        ValidateRequestTool validateTool = new ValidateRequestTool(objectMapper);
+        CurrentTimeTool currentTimeTool = new CurrentTimeTool();
+        OpenObserveClient ooClient = new OpenObserveClient(opsProperties.openobserveOrDefault(), objectMapper);
+        QueryLogsTool queryLogsTool = new QueryLogsTool(ooClient, opsProperties.logsCacheOrDefault(),
+                opsProperties.openobserveOrDefault());
+        sharedRegistry.register(retrievalTool);
+        sharedRegistry.register(validateTool);
+        sharedRegistry.register(currentTimeTool);
+        sharedRegistry.register(queryLogsTool);
+        // MCP 外部工具（默认关闭；启用时与本地工具同权进共享注册表）
+        mcpToolSource.tools().forEach(sharedRegistry::register);
+
+        DefaultToolExecutor toolExecutor = new DefaultToolExecutor(sharedRegistry, null, null, null);
+        DefaultModelGateway gateway = agentModelGateway(chatModel);
+        GatewayModelAdapter sideModel = new GatewayModelAdapter(gateway);
+        int maxLlmCalls = agentProperties.getWorkflow().getMaxLlmCalls();
+
+        // Prompt 协议块描述（think 模板组合用）
+        Map<String, String> schemaText = Map.of(
+                RetrievalTool.TOOL_ID, OpsPrompts.describeTool(retrievalTool.schema()),
+                ValidateRequestTool.TOOL_ID, OpsPrompts.describeTool(validateTool.schema()),
+                CurrentTimeTool.TOOL_ID, OpsPrompts.describeTool(currentTimeTool.schema()),
+                QueryLogsTool.TOOL_ID, OpsPrompts.describeTool(queryLogsTool.schema()));
+        java.util.function.Function<String, String> promptBody = key -> {
+            try {
+                return promptProvider.get(key, "latest").template();
+            } catch (Exception e) {
+                return null;
             }
         };
+        SharedDeps deps = new SharedDeps(sharedRegistry, toolExecutor, objectMapper, sideModel,
+                Clock.systemDefaultZone(), maxLlmCalls, schemaText, validateTool,
+                promptBody, promptProvider::registerRuntimeTemplate);
+
+        // ---- 引擎装配 ----
+        EngineBuilder builder = EngineBuilder.create()
+                .toolRegistry(sharedRegistry)
+                .modelGateway(gateway)
+                .promptProvider(promptProvider)
+                .sessionStore(new PgEngineSessionStore(new JdbcTemplate(dataSource), objectMapper))
+                .slotStore(new PgEngineSlotStore(new JdbcTemplate(dataSource), objectMapper));
+
+        // ops 线：图 ↔ 模块对账（图是唯一事实源）→ 逐模块 wireRuntime → 注册图与 Agent
+        WorkflowDefinition opsWorkflow = OpsDiagnoseWorkflowFactory.create();
+        Map<String, StageModule> modules = OpsDiagnoseWorkflowFactory.modules();
+        OpsDiagnoseWorkflowFactory.reconcile(opsWorkflow, modules.values());
+        modules.values().forEach(module -> module.wireRuntime(builder, deps));
+        builder.workflow(opsWorkflow)
+                .agent(AgentDefinition.builder(AgentCatalog.OPS.id())
+                        .workflow(OpsDiagnoseWorkflowFactory.WORKFLOW_ID)
+                        .model(SpringAiModelProvider.PROVIDER_ID, "chat")
+                        .toolPolicy(ToolPolicy.only(QueryLogsTool.TOOL_ID, RetrievalTool.TOOL_ID,
+                                ValidateRequestTool.TOOL_ID, CurrentTimeTool.TOOL_ID))
+                        .quota(QuotaPolicy.of(2_000_000, agentProperties.getWorkflow().getTimeoutSeconds(), 60))
+                        .build());
+
+        // knowledge 线：双图（查询理解链 + 检索反思环 / 查询理解链 + think→act→decide 工具循环）+ 两 Agent
+        // 查询理解链的执行器由两图共用（同一个 bean 实例注册一次，两图都能解析到）
+        builder.workflow(KnowledgeQaGraphFactory.create(agentProperties.getMaxRewriteRounds(),
+                        agentProperties.getShortCircuitDomains()))
+                .workflow(KnowledgeReactGraphFactory.create(agentProperties.getReactMaxSteps(),
+                        agentProperties.getShortCircuitDomains()))
+                .nodeExecutor(KbFinishExecutor.EXECUTOR_REF, new KbFinishExecutor())
+                .nodeExecutor(KnowledgeQaGraphFactory.NORMALIZE_EXECUTOR, new KbNormalizeExecutor())
+                .nodeExecutor(KnowledgeQaGraphFactory.CLASSIFY_EXECUTOR,
+                        new KbClassifyExecutor(intentClassifier))
+                .nodeExecutor(KnowledgeQaGraphFactory.ROUTE_EXECUTOR, new KbRouteExecutor(routeRegistry))
+                .nodeExecutor(KnowledgeQaGraphFactory.SHORTCIRCUIT_EXECUTOR, new KbShortCircuitExecutor())
+                .nodeExecutor(KnowledgeQaGraphFactory.REWRITE_EXECUTOR, new KbRewriteExecutor(queryRewriter))
+                .nodeExecutor(KnowledgeQaGraphFactory.CRITIQUE_EXECUTOR,
+                        // 判据从配置来：条数下限是**语料相关**的（单跳 1 / HotpotQA 2.4 /
+                        // 2Wiki 4.9），硬编码会让换语料变成改代码。见 AgentProperties.Critique
+                        new KbCritiqueExecutor(agentProperties.getCritique().getRequiredHits(),
+                                agentProperties.getCritique().getMinTopScore()))
+                .nodeExecutor(KnowledgeReactGraphFactory.ACT_EXECUTOR,
+                        new ActExecutor(KnowledgeReactGraphFactory.PREFIX, "工具循环检索",
+                                Set.of(RetrievalTool.TOOL_ID), sharedRegistry, toolExecutor,
+                                objectMapper, maxLlmCalls))
+                .loopGuard(KnowledgeReactGraphFactory.LOOP_GUARD, agentProperties.getReactMaxSteps())
+                .loopGuard(KnowledgeQaGraphFactory.ITERATION_GUARD, agentProperties.getMaxRewriteRounds())
+                .agent(AgentDefinition.builder(AgentCatalog.KNOWLEDGE.id())
+                        .workflow(KnowledgeQaGraphFactory.WORKFLOW_ID)
+                        .model(SpringAiModelProvider.PROVIDER_ID, "chat")
+                        .toolPolicy(ToolPolicy.only(RetrievalTool.TOOL_ID))
+                        .build())
+                .agent(AgentDefinition.builder(AgentCatalog.REACT.id())
+                        .workflow(KnowledgeReactGraphFactory.WORKFLOW_ID)
+                        .model(SpringAiModelProvider.PROVIDER_ID, "chat")
+                        .toolPolicy(ToolPolicy.only(RetrievalTool.TOOL_ID))
+                        .build());
+
+        // react think 组合模板（正文资产优先，协议块附后）
+        promptProvider.registerRuntimeTemplate(KbPrompts.REACT_THINK_ASSET,
+                KbPrompts.composeReactThink(promptBody.apply(KbPrompts.REACT_THINK_ASSET),
+                        List.of(schemaText.get(RetrievalTool.TOOL_ID))));
+
+        return builder.build();
     }
 }

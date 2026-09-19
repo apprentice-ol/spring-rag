@@ -1,0 +1,8 @@
+# web-test 覆盖：宿主机端口 5080（已有 OpenObserve）/9000（已有 rustfs）/4318（已有 collector）被别的容器占用时，
+# 去掉这些服务的宿主机端口映射——容器间仍按服务名互通，app:9081 与浏览器测试不受影响。
+# 用法：docker compose -f docker-compose.yml -f docker-compose.webtest.yml up -d --build
+services:
+  rustfs:
+    ports: !reset []
+  openobserve:
+    ports: !reset []

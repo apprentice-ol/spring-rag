@@ -44,6 +44,17 @@ class MetricScorerTest {
     }
 
     @Test
+    void ndcgPenalizesUnderRetrieval() {
+        // 期望 2 篇、只召回 1 篇（且命中首位）：IDCG 必须按 min(|expected|, k)=2 算，不能随实际召回条数缩水。
+        // 修复前 limit=1 → IDCG=1 → nDCG=1.0，漏掉一篇反而满分（run82 实测：期望2/召回1 的用例
+        // nDCG@5 均值 0.833 = 命中率，与召回率 0.417 完全背离）。
+        // DCG = 1/log2(2) = 1.0；IDCG = 1/log2(2) + 1/log2(3) = 1.6309 → 0.6131
+        assertEquals(0.6131, new NdcgScorer(5).score(List.of("d1"), expected), DELTA);
+        // 期望 1 篇、召回 1 篇且命中：这时才该是满分（分母同样只有 1 位）
+        assertEquals(1.0, new NdcgScorer(5).score(List.of("d1"), List.of("d1")), DELTA);
+    }
+
+    @Test
     void expectedEmpty() {
         // expected 为空：recall 视为平凡满足（1.0）；mrr 无定义（0.0）
         assertEquals(1.0, new RecallAtKScorer(3).score(retrieved, List.of()), DELTA);

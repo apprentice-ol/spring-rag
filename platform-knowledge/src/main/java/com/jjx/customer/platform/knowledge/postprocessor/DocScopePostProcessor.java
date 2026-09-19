@@ -37,9 +37,20 @@ public class DocScopePostProcessor implements SearchResultPostProcessor {
         return 2; // dedup(1) → doc-scope(2) → fusion(5) → rerank(10)
     }
 
+    /**
+     * 【2026-09-18 禁用】对齐 agent-framework（无此机制，检索效果反而更好）。
+     *
+     * <p>禁用原因：关键词通道（bm25 模式）用 2 字滑窗 OR 语义召回，命中本来就宽而噪。
+     * 把它当白名单意味着<b>只要 BM25 捞到一篇边缘文档，向量通道召回的那几篇正确文档
+     * 就会被整片丢掉</b>——多通道融合退化成"只在 BM25 命中的文档里挑"，
+     * 而 BM25 恰恰是两路里更不可信的一路。跨文档的取舍应当交给 RRF 与 Rerank 按分数决定，
+     * 而不是由一个二值白名单提前砍掉。</p>
+     *
+     * <p>保留实现以备需要时恢复（改回 {@code return true;}）。</p>
+     */
     @Override
     public boolean isEnabled(SearchContext context) {
-        return true;
+        return false;
     }
 
     @Override

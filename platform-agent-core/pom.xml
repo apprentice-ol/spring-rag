@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.jjx.customer</groupId>
+        <artifactId>customer-platform</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <groupId>com.jjx.customer</groupId>
+    <artifactId>platform-agent-core</artifactId>
+    <packaging>jar</packaging>
+    <name>platform-agent-core</name>
+        <description>
+        agent 内核（自 D:_projectsgent-framework 仓源码 fork 并入）：
+        definition / runtime / crosscutting / extension / infra / engine / sdk，
+        零第三方运行时依赖；Java 包名保留 com.agentframework，Maven 坐标与仓内统一。
+    </description>
+
+    <!-- 刻意不声明任何运行时依赖：测试期 JUnit 由父 pom 的 spring-boot-starter-test(test) 提供 -->
+</project>

@@ -6,15 +6,13 @@ import com.jjx.ai.llmobservability.observation.logging.TelemetryLogger;
 import com.jjx.customer.platform.business.FrameworkKnowledgeRunner;
 import com.jjx.customer.platform.business.FrameworkOpsRunner;
 import com.jjx.customer.platform.business.PromptFingerprintResolver;
-import com.jjx.customer.platform.business.agents.KnowledgeFrameworkAgent;
-import com.jjx.customer.platform.business.agents.OpsDiagnoseFrameworkAgent;
-import com.jjx.customer.platform.business.orchestration.intent.IntentClassifier;
-import com.jjx.customer.platform.business.orchestration.normalize.QueryRewriter;
+import com.jjx.customer.platform.business.engine.AgentCatalog;
+import com.jjx.customer.platform.business.knowledge.RewritePolicy;
 import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
 import com.jjx.customer.platform.business.runtime.DegradeGuard;
-import com.jjx.customer.platform.agent.framework.session.AgentSessionState;
-import com.jjx.customer.platform.agent.framework.session.SessionStore;
-import com.jjx.customer.platform.business.tools.ops.OpsSlotSpecs;
+import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
+import com.jjx.customer.platform.business.session.AgentSessionState;
+import com.jjx.customer.platform.business.session.AgentSessionServiceImpl;
 import com.jjx.customer.platform.business.trace.AgentTraceService;
 import com.jjx.customer.platform.business.trace.model.TraceView;
 import com.jjx.customer.platform.cache.CacheFrequencyPolicy;
@@ -30,7 +28,6 @@ import com.jjx.customer.platform.conversation.ConversationStore;
 import com.jjx.customer.platform.delivery.DeliveryPort;
 import com.jjx.customer.platform.delivery.DeliveryPortFactory;
 import com.jjx.customer.platform.document.DocumentCatalog;
-import com.jjx.customer.platform.intent.IntentResult;
 import com.jjx.customer.platform.knowledge.answer.KnowledgeAnswerService;
 import com.jjx.customer.platform.knowledge.retrieval.CacheKeys;
 import com.jjx.customer.platform.knowledge.retrieval.DocumentVersionStamp;
@@ -86,7 +83,6 @@ public class ChatOrchestrator<S> {
 
     private final DeliveryPortFactory<S> deliveryPortFactory;
     private final ConversationStore conversationStore;
-    private final IntentClassifier intentClassifier;
     private final FrameworkKnowledgeRunner frameworkKnowledgeRunner;
     private final FrameworkOpsRunner frameworkOpsRunner;
     private final PromptFingerprintResolver promptFingerprintResolver;
@@ -94,8 +90,7 @@ public class ChatOrchestrator<S> {
     private final AgentProperties agentProperties;
     private final ChatProperties chatProperties;
     private final PromptStore promptStore;
-    private final QueryRewriter queryRewriter;
-    private final SessionStore sessionStore;
+    private final AgentSessionServiceImpl sessionStore;
     private final AgentTraceService agentTraceService;
     private final KnowledgeAnswerService knowledgeAnswerService;
     private final TelemetryTemplate obsTemplate;
@@ -182,9 +177,9 @@ public class ChatOrchestrator<S> {
         // 选了 workflow 型范式（如运维诊断）→ 直接进该 agent，跳过意图分类——否则「帮我看看这个问题」
         // 类短句可能被误判成闲聊短路，用户的显式选择被意图识别覆盖；
         // 检索型范式（knowledge/react_loop）仍走下方 RAG 链的 agent 编排（产物是 chunks+流式答案）。
-        if (OpsDiagnoseFrameworkAgent.ID.equalsIgnoreCase(agentChoice)) {
+        if (AgentCatalog.OPS.id().equalsIgnoreCase(agentChoice)) {
             log.info("[对话编排] 用户显式选择 {}，跳过意图分类直接进该 agent", agentChoice);
-            runAgentBranch(OpsDiagnoseFrameworkAgent.ID, question, conversationId, sink, otelTraceId, Map.of(), null);
+            runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink, otelTraceId, Map.of(), null);
             return;
         }
 
@@ -196,42 +191,12 @@ public class ChatOrchestrator<S> {
             return;
         }
 
-        // ========== 3. 意图分类（吃规则归一化结果；对改写不敏感）==========
-        IntentResult intent = intentClassifier.classify(ruleNormalized);
-        log.info("[对话编排] 意图分类结果: domain={}, confidence={}, needsRetrieval={}, reason={}",
-                intent.getDomain(), intent.getConfidence(), intent.needsRetrieval(), intent.getReason());
-
-        // ========== 3.5 路由规则表第二次求值（intent 就绪：意图域规则按 domain+置信度判断，
-        // 低置信度不命中落回知识检索；显式选择 knowledge 的压制逻辑在 ops 域规则内）==========
-        Optional<RouteDecision> byIntent = routeRegistry.evaluate(new RouteContext(
-                question, ruleNormalized, intent, traceId, activeSession == null ? null : activeSession.agentId(), agentChoice));
-        if (byIntent.isPresent()) {
-            RouteDecision d = byIntent.get();
-            log.info("[对话编排] 意图路由命中 {} 分支（domain={}, conf={}）",
-                    d.agentType(), intent.getDomain(), intent.getConfidence());
-            runAgentBranch(d.agentType(),
-                    question, conversationId, sink, otelTraceId, d.prefillSlots(), null);
-            return;
-        }
-
-        // ========== 4. 非查询类短路由（闲聊短路，不做 LLM 改写）==========
-        if (!intent.needsRetrieval()) {
-            log.info("[对话编排] 非查询意图，走闲聊回复");
-            handleNonQuery(question, conversationId, sink, otelTraceId);
-            return;
-        }
-
-        // ========== 5. 需要检索：才做历史加载 + LLM 改写 ==========
-        String historyForRewrite = conversationStore.historyContext(conversationId);
-        String query = queryRewriter.rewrite(ruleNormalized, historyForRewrite);
-        log.info("[对话编排] 会话ID={}, 原始={}, 规则归一化={}, LLM改写={}",
-                conversationId, question, ruleNormalized, query);
-
-        // ========== 6. Agent 编排检索（可插拔，默认 naive = 单次检索）==========
-        long tRetrieve = System.currentTimeMillis();
+        // ========== 3. 检索参数 ==========
+        // 查询本身不在这里定：它由图内的 kb_rewrite 节点产出（知识轴是首轮透传/反思轮扩词，
+        // 工具参数 ${slots.rewritten_query} 直接取该槽位）。先前这里预置 LLM 改写结果，
+        // 结果是图内的重写节点无从回灌——检索永远只吃到第一版查询。
         SearchContext searchCtx = SearchContext.builder()
                 .query(question)
-                .rewrittenQuery(query)
                 .topK(chatProperties.getTopK())
                 .threshold(chatProperties.getSimilarityThreshold())
                 .budget(RetrievalBudget.builder()
@@ -239,9 +204,6 @@ public class ChatOrchestrator<S> {
                         .candidateLimit(chatProperties.getCandidateLimit())
                         .contextTopK(chatProperties.getContextTopK())
                         .build())
-                .metadata(Map.of(
-                        "intent", intent.getDomain(),
-                        "needsWebSearch", intent.isNeedsWebSearch()))
                 .build();
 
         log.info("[对话编排] 开始检索(agent={}): topK={}, 阈值={}, recallBudget={}, candidateLimit={}, contextTopK={}",
@@ -251,11 +213,11 @@ public class ChatOrchestrator<S> {
 
         // ===== 检索主线：知识问答 = 框架 Agent + Workflow（检索=extension tool，执行权在框架引擎）=====
         // ?agent= 指定范式轴（knowledge / react_loop）；ops 型在更早分支已进 agent 支路。
-        if (OpsDiagnoseFrameworkAgent.ID.equalsIgnoreCase(agent)) {
-            runAgentBranch(OpsDiagnoseFrameworkAgent.ID, question, conversationId, sink, otelTraceId, Map.of(), null);
+        if (AgentCatalog.OPS.id().equalsIgnoreCase(agent)) {
+            runAgentBranch(AgentCatalog.OPS.id(), question, conversationId, sink, otelTraceId, Map.of(), null);
             return;
         }
-        String paradigm = StringUtils.hasText(agent) ? agent : KnowledgeFrameworkAgent.ID;
+        String paradigm = StringUtils.hasText(agent) ? agent : AgentCatalog.KNOWLEDGE.id();
 
         // ========== 6.5 答案缓存两级查询（exact → 语义）：同问题或同义问题直接重放，省检索+生成整链。
         // 到达此处的前置条件（needsRetrieval && !needsDiagnose && !resumed && traceId==null）由前面各 return 保证。
@@ -294,19 +256,48 @@ public class ChatOrchestrator<S> {
             }
         }
 
-        // ===== 执行：框架主线（knowledge / react_loop 都是框架流程，差异只在节点形态）=====
-        FrameworkKnowledgeRunner.KnowledgeAnswer knowledgeAnswer =
-                frameworkKnowledgeRunner.retrieve(question, searchCtx, paradigm);
+        // ========== 7. 图执行：查询理解链 + 检索（含反思环）==========
+        // 归一化 → 意图识别 → 路由 →（闸门）→ 问题重写 → 检索 → 充分性判定 →（不足）重写重查
+        // 整条链在图里，所以它进得了执行轨迹；编排层只负责把外部事实（历史、补充、路由上下文）
+        // 作为初始槽位喂进去，再从产物槽位把该接手的活读回来。
+        String historyForRewrite = conversationStore.historyContext(conversationId);
+        long tRetrieve = System.currentTimeMillis();
+        FrameworkKnowledgeRunner.KnowledgeAnswer knowledgeAnswer = frameworkKnowledgeRunner.retrieve(
+                question, searchCtx, paradigm,
+                new FrameworkKnowledgeRunner.RunContext(historyForRewrite, null, traceId,
+                        agentChoice, activeSession == null ? null : activeSession.agentId(),
+                        RewritePolicy.AUTO, false));
         List<RetrievedChunk> chunks = knowledgeAnswer.chunks();
         TraceView trace = knowledgeAnswer.trace();
-        log.info("[对话编排] 框架主线({}) 完成: 最终块={}条, 检索耗时={}ms, llm调用={}次",
-                paradigm, chunks.size(), System.currentTimeMillis() - tRetrieve, trace.getLlmCallCount());
+        log.info("[对话编排] 框架主线({}) 完成: 最终块={}条, 检索耗时={}ms, 意图={}, 路由={}, llm调用={}次",
+                paradigm, chunks.size(), System.currentTimeMillis() - tRetrieve,
+                knowledgeAnswer.intent(), knowledgeAnswer.routeTarget(), trace.getLlmCallCount());
 
-        // 发送执行轨迹（SSE trace 事件，前端对照面板用；一次性，在流式回答前发出）
+        // ========== 8. 分派：按图的判定结果决定这一轮怎么交付 ==========
+
+        // 8.1 图内路由转出（运维诊断等）：本图只做了查询理解，执行权交给目标 agent。
+        //     不在这里下发本图的轨迹——目标 agent 会下发自己那条完整轨迹，两发只会互相覆盖。
+        if (knowledgeAnswer.isRoutedElsewhere()) {
+            log.info("[对话编排] 图内路由转 {}（domain={}），转交该 agent",
+                    knowledgeAnswer.routeTarget(), knowledgeAnswer.intent());
+            runAgentBranch(knowledgeAnswer.routeTarget(), question, conversationId, sink, otelTraceId,
+                    knowledgeAnswer.prefillSlots(), null);
+            return;
+        }
+
+        // 8.2 发送执行轨迹（SSE trace 事件，前端对照面板用；一次性，在流式回答前发出）
         deliveryPortFactory.begin(sink, conversationId, question, otelTraceId, paradigm, trace)
                 .emitTrace(conversationId, trace);
 
-        // ========== 7. 空检索处理 ==========
+        // 8.3 非检索意图（问候/闲聊）：短路直答，不做检索。轨迹已下发——「为什么这轮没查文档」
+        //     的答案就在那几步里（意图识别判定为非检索域）
+        if (!knowledgeAnswer.needsRetrieval()) {
+            log.info("[对话编排] 非检索意图 {}，走闲聊回复", knowledgeAnswer.intent());
+            handleNonQuery(question, conversationId, sink, otelTraceId);
+            return;
+        }
+
+        // ========== 9. 空检索处理 ==========
         if (chunks.isEmpty()) {
             log.warn("[对话编排] 检索结果为空，返回降级提示");
             Long emptyMsgId = handleRetrievalEmpty(question, conversationId, sink, otelTraceId);
@@ -314,7 +305,7 @@ public class ChatOrchestrator<S> {
             return;
         }
 
-        // ========== 8. 构建上下文 + 流式回答 ==========
+        // ========== 10. 构建上下文 + 流式回答 ==========
         log.info("[对话编排] 开始流式回答, 上下文共 {} 条", chunks.size());
         streamRagResponse(question, conversationId, chunks, sink, startTime,
                 paradigm, trace, otelTraceId, answerCacheKey, ruleNormalized);
@@ -392,7 +383,7 @@ public class ChatOrchestrator<S> {
     /** 会话恢复的目标 agent：按会话归属路由；agentId 空白/未知回 ops（存量会话全是 ops 的旧数据兼容）。 */
     private String requireResumeTarget(AgentSessionState state) {
         return StringUtils.hasText(state.agentId())
-                ? state.agentId() : OpsDiagnoseFrameworkAgent.ID;
+                ? state.agentId() : AgentCatalog.OPS.id();
     }
 
     /**
@@ -413,7 +404,7 @@ public class ChatOrchestrator<S> {
         if (resumedSlots != null) {
             mergedSlots.putAll(resumedSlots);
         }
-        mergedSlots.putAll(OpsSlotSpecs.sanitized(prefillSlots));
+        mergedSlots.putAll(OpsSlotCatalog.sanitized(prefillSlots));
 
         // 降级闸：Redis 断路器 OPEN 期间收紧 ops 诊断并发（缓存保护消失时给下游留活口）
         DegradeGuard.Lease opsLease = degradeGuard.tryAcquire().orElse(null);
@@ -665,6 +656,8 @@ public class ChatOrchestrator<S> {
                 });
             }
         };
+        // 生成段的起始时刻：收尾时据此算出「生成答案」那一步的耗时（见 appendAnswerStep）
+        long tAnswer = System.currentTimeMillis();
         // 流式交付交给交付层：逐 token 送达 + 完成/失败收口；落库与缓存写回仍由编排层提供回调（行为不变）
         DeliveryPort.StreamSpec spec = new DeliveryPort.StreamSpec(conversationId, question, paradigm, otelTraceId,
                 trace, fullAnswer, outputSink,
@@ -675,11 +668,20 @@ public class ChatOrchestrator<S> {
                     try {
                         return CompletableFuture.supplyAsync(
                                         () -> {
+                                            // 生成段的收尾步：答案正文就是气泡本身，轨迹里只留一行读数
+                                            // （与 agent-framework 的 answer 节点同口径）。它只能在这里补——
+                                            // 「生成」要等流结束才成立，而轨迹事件在流开始前就发过一版了，
+                                            // 所以补完要连完整轨迹再发一次（前端覆盖式接收）。
+                                            appendAnswerStep(trace, chunks, question, answer, tAnswer);
                                             Long msgId = deliveryPortFactory
                                                     .begin(sink, conversationId, question, otelTraceId,
                                                             paradigm, trace)
                                                     .persistAnswer(conversationId, question, paradigm, answer,
                                                             citationsJson, trace, otelTraceId);
+                                            deliveryPortFactory
+                                                    .begin(sink, conversationId, question, otelTraceId,
+                                                            paradigm, trace)
+                                                    .emitTrace(conversationId, trace);
                                             log.info("========== [对话编排] 完成 ========== 会话ID={}, 耗时={}ms",
                                                     conversationId, System.currentTimeMillis() - t0);
                                             if (answerCacheKey != null && StringUtils.hasText(answer)) {
@@ -709,6 +711,29 @@ public class ChatOrchestrator<S> {
                 lease::close);
         // systemPrompt=null：P2 快照装配未接线，服务侧回退 classpath 基线
         port.emitStream(conversationId, knowledgeAnswerService.answer(question, ragContext.text(), null), spec);
+    }
+
+    /**
+     * 把「生成答案」补成轨迹的最后一步。
+     *
+     * <p>它和前面那些步不是同一种东西：检索链的每一步都在流开始前就跑完了，而「生成」要等
+     * 流结束才成立。所以这一步只能在落库前追加，并随完整轨迹重发一次——早发的那一版
+     * 到检索为止，用户中途点开也有得看，收尾这一版才是完整的一轮。</p>
+     *
+     * <p>产物只写一行读数：答案全文就是气泡正文，在轨迹里再铺一遍是重复。</p>
+     */
+    private static void appendAnswerStep(TraceView trace, List<RetrievedChunk> chunks, String question,
+                                         String answer, long startedAt) {
+        if (trace == null) {
+            return;
+        }
+        String asked = question == null ? "" : question;
+        if (asked.length() > 40) {
+            asked = asked.substring(0, 40) + "…";
+        }
+        String input = String.format("提问「%s」 + 资料 %d 条", asked, chunks == null ? 0 : chunks.size());
+        String output = String.format("答案 %d 字", answer == null ? 0 : answer.length());
+        trace.step("answer", null, input, output, startedAt);
     }
 
     /** 降级闸拒绝：礼貌提示 + 落库 + meta + complete（不跑 LLM，宁可拒绝不排队）。 */

@@ -108,7 +108,25 @@ export interface RerankDetail {
   before: number[]
   after: RerankRowDetail[]
 }
-export type AgentStepDetail = RetrieveDetail | GradeDetail | RerankDetail
+export type AgentStepDetail = RetrieveDetail | GradeDetail | RerankDetail | StepMeta
+
+/**
+ * 新内核轨迹步的结构化元数据（FrameworkTraceMapper 经 detail 通道下发）：
+ * 前端轨迹树据此按「动作」范式渲染（think+act 合并工具条目 / 槽位芯片 / token 读数）。
+ */
+export interface StepMeta {
+  nodeType?: string
+  slotWrites?: Record<string, unknown>
+  toolCall?: { name?: string; arguments?: Record<string, unknown>; ok?: boolean; error?: string }
+  promptTokens?: number
+  completionTokens?: number
+  model?: string
+  routeKind?: string
+  routeTo?: string
+  routeDetail?: string
+  status?: string
+  error?: string
+}
 
 export interface AgentStep {
   stepIndex: number

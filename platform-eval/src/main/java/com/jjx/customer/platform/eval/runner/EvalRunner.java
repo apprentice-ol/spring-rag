@@ -11,7 +11,7 @@ import com.jjx.ai.llmobservability.observation.TelemetryTemplate;
 import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import com.jjx.ai.llmobservability.observation.span.TelemetrySpan;
 import com.jjx.customer.platform.business.FrameworkKnowledgeRunner;
-import com.jjx.customer.platform.business.orchestration.normalize.QueryRewriter;
+import com.jjx.customer.platform.business.knowledge.RewritePolicy;
 import com.jjx.customer.platform.business.orchestration.rag.RagContextAssembler;
 import com.jjx.customer.platform.common.exception.ClientException;
 import com.jjx.customer.platform.config.properties.AgentProperties;
@@ -74,7 +74,6 @@ public class EvalRunner {
     private final ChatProperties chatProperties;
     private final ObjectMapper objectMapper;
     private final EvalProperties evalProperties;
-    private final QueryRewriter queryRewriter;
     /** 答案质量评测（answerEval）用：生成答案 + LLM-as-judge 都走裸 client（不带查询链 Advisor）。
      *  字段注入 + @Qualifier：ChatClient 有两个实现 bean，lombok 构造器注入无法带限定符 */
     @Autowired
@@ -190,7 +189,12 @@ public class EvalRunner {
             // 不随并行 run 数线性放大；并发度由 rag.eval.concurrency 配置（默认 8）
             Semaphore semaphore = itemLimiter;
 
-            try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            // 固定并发 worker，而非「每条 item 一个虚拟线程」：真实并发度本就由 itemLimiter 限死在
+            // rag.eval.concurrency，线程数没必要跟着 item 数涨——895 条各起一个虚拟线程，等于把
+            // 895 份任务上下文（含各自未结束的 root span）同时挂在堆上。worker 数与信号量同源。
+            int workers = Math.max(1, evalProperties.getConcurrency());
+            try (ExecutorService executor = Executors.newFixedThreadPool(
+                    workers, Thread.ofVirtual().name("eval-item-", 0).factory())) {
                 List<Future<?>> futures = new ArrayList<>(evalItemEntityList.size());
                 for (EvalItemEntity item : evalItemEntityList) {
                     futures.add(executor.submit(() -> runItemWithOwnTrace(runCtx, item, params,
@@ -331,14 +335,23 @@ public class EvalRunner {
                                      Map<String, List<Double>> scoreAggregate, AtomicInteger retrievedCount,
                                      Map<String, String> expectedNameMap, Map<String, Long> docCollectionMap,
                                      Semaphore semaphore) {
-        // 开 item 独立的 root trace（无父）：metric.trace_id 记 item 自己的 traceId（前端/OO 跳转一致），
-        // 子 span 由 ContextPropagation 传播挂到 item root 下。startRoot 已把 traceId 写 MDC。
-        try (TelemetrySpan root = ragTelemetry.openTrace("eval.item")) {
-            root.tag("eval.item_id", item.getId());
-            root.tag("eval.run_id", runCtx.runId());
-            root.traceInput(item.getQuestion());
-            try {
-                semaphore.acquire();
+        // 先抢并发许可再开 trace：此前是先开 root trace 再 acquire，被限流的 item 会带着一个
+        // 未结束的 root span 在信号量上排队——排队时长记进 span.duration（把实际耗时的统计口径也带歪了），
+        // 且全量 run 会同时挂起 item 数个空 trace。现在只有真正在跑的 item 才有 root span。
+        try {
+            semaphore.acquire();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            log.warn("[Eval] item {} 等待并发许可时中断: {}", item.getId(), ex.getMessage());
+            return;
+        }
+        try {
+            // 开 item 独立的 root trace（无父）：metric.trace_id 记 item 自己的 traceId（前端/OO 跳转一致），
+            // 子 span 由 ContextPropagation 传播挂到 item root 下。startRoot 已把 traceId 写 MDC。
+            try (TelemetrySpan root = ragTelemetry.openTrace("eval.item")) {
+                root.tag("eval.item_id", item.getId());
+                root.tag("eval.run_id", runCtx.runId());
+                root.traceInput(item.getQuestion());
                 try {
                     EvalSample sample = runOneItem(runCtx, item, params, doneCount,
                             scoreAggregate, retrievedCount, expectedNameMap, docCollectionMap);
@@ -346,15 +359,11 @@ public class EvalRunner {
                             ? "error: " + sample.error()
                             : "retrieved=" + sample.retrievedDocIds());
                 } finally {
-                    semaphore.release();
+                    MDC.clear();
                 }
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                root.traceOutput("interrupted");
-                log.warn("[Eval] item {} 中断: {}", item.getId(), ex.getMessage());
-            } finally {
-                MDC.clear();
             }
+        } finally {
+            semaphore.release();
         }
     }
 
@@ -442,11 +451,13 @@ public class EvalRunner {
         long latencyMillis = 0;
         try {
             String question = item.getQuestion();
-            // rewrite 开 → LLM 改写后塞进 rewrittenQuery；关 → 原始 question
-            String rewrittenQuery = params.rewrite() ? queryRewriter.rewrite(question) : question;
+            // 改写交给图内的 kb_rewrite 节点：rewrite 开关映射成改写策略随运行上下文注入。
+            // 先前这里自己算好 rewrittenQuery 塞进 SearchContext——图化之后那个字段已经
+            // 不参与检索（查询由节点产出），等于开关接在了一根断线上：开关怎么拨，
+            // 送进检索的查询都一模一样，于是"改写有没有用"永远测不出来。
+            RewritePolicy rewritePolicy = params.rewrite() ? RewritePolicy.FORCE : RewritePolicy.OFF;
             SearchContext searchContext = SearchContext.builder()
                     .query(question)
-                    .rewrittenQuery(rewrittenQuery)
                     .topK(params.topK())
                     .threshold(params.threshold())
                     // 检索范围隔离：期望文档同属一个集合时限定该集合（LiveRAG 题只查 cid=2，不再捞到自传 PDF）。
@@ -469,8 +480,15 @@ public class EvalRunner {
             // knowledge 轴走框架主线（Agent + Workflow，检索为 extension tool）；
             // 其余范式（react_loop 等）仍走旧链，供对拍期对照。
             // 全轴走框架主线：knowledge（确定性检索节点）/ react_loop（工具循环节点）
-            FrameworkKnowledgeRunner.KnowledgeAnswer answer =
-                    frameworkKnowledgeRunner.retrieve(question, searchContext, params.effectiveParadigm());
+            // forEval：改写按开关走，并把本轮钉死在知识检索上——分类器把题认成运维故障
+            // 就会被转走，这里拿到空 chunks 静默记 0 分，掉的是分类器的域覆盖不是检索质量
+            FrameworkKnowledgeRunner.KnowledgeAnswer answer = frameworkKnowledgeRunner.retrieve(
+                    question, searchContext, params.effectiveParadigm(),
+                    FrameworkKnowledgeRunner.RunContext.forEval(rewritePolicy));
+            if (answer.isRoutedElsewhere()) {
+                log.warn("[Eval] run={} item={} 被路由到 {}（强制检索未生效），该题按 0 召回计",
+                        runCtx.runId(), item.getId(), answer.routeTarget());
+            }
             retrievedChunks = answer.chunks();
             builder.agentTrace(toJson(answer.trace()));
             latencyMillis = System.currentTimeMillis() - startTimeMillis;

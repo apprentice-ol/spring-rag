@@ -19,7 +19,8 @@
     <description>基于 Spring AI 1.1 的 RAG 文档入库与问答（ragent 的 Spring AI 重写版）</description>
 
     <modules>
-        <module>platform-agent-framework</module>
+        <!-- 新 agent 内核（零依赖底座，放在最前表达 reactor 顺序；自 agent-framework 仓库源码并入） -->
+        <module>platform-agent-core</module>
         <module>platform-shared</module>
         <module>platform-observe</module>
         <module>platform-cache</module>
@@ -111,9 +112,10 @@
                 <version>${project.version}</version>
             </dependency>
 
+            <!-- 新 agent 内核（源码并入本仓；包名保留 com.agentframework，Maven 坐标与仓内统一） -->
             <dependency>
                 <groupId>com.jjx.customer</groupId>
-                <artifactId>platform-agent-framework</artifactId>
+                <artifactId>platform-agent-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

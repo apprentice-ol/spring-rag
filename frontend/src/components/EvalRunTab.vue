@@ -111,7 +111,8 @@ const columns = useResizableColumns([
   { title: '运行', dataIndex: 'id', key: 'id', width: 80 },
   { title: '状态', dataIndex: 'status', key: 'status', width: 90 },
   { title: '数据集', dataIndex: 'datasetName', key: 'datasetName', width: 150, ellipsis: true },
-  { title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 110 },
+  // 130：范式标签最长是「运维诊断」/「ReAct Loop」，110 的框宽会把标签挤到与相邻列贴边
+  { title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 130, ellipsis: true },
   { title: '进度', dataIndex: 'done', key: 'done', width: 90 },
   { title: '关键指标', dataIndex: 'keyMetrics', key: 'keyMetrics', ellipsis: true },
   { title: '时间', dataIndex: 'finishedAt', key: 'finishedAt', width: 160 },

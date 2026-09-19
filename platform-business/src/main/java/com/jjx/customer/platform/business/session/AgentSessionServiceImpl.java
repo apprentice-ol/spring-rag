@@ -1,7 +1,5 @@
 package com.jjx.customer.platform.business.session;
 
-import com.jjx.customer.platform.agent.framework.session.AgentSessionState;
-import com.jjx.customer.platform.agent.framework.session.SessionStore;
 import com.jjx.customer.platform.business.session.entity.AgentSessionEntity;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -17,21 +15,24 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * 会话存储实现（sa_agent_session）：框架 {@link SessionStore} 契约在本仓的落地。
+ * 澄清会话存储（sa_agent_session）：读写侧方法签名与旧内核 {@code SessionStore}
+ * 契约一致，改为业务自持（写入侧由 {@code FrameworkOpsRunner} 在引擎出口调用——
+ * 挂起/升级写 AWAITING_USER，终态写 DONE，替代旧 {@code SessionRecordingListener}）。
  *
- * <p>读取侧由编排层调用（会话恢复先于路由 + 占位）；写入侧由引擎的会话监听器调用（出口落库）。
- * 失败一律 warn + 降级（empty / false / 忽略）——会话状态丢失只影响"恢复追问"体验，不阻断对话主链路。</p>
+ * <p>失败一律 warn + 降级（empty / false / 忽略）——会话状态丢失只影响"恢复追问"体验，不阻断对话主链路。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class AgentSessionServiceImpl implements SessionStore {
+public class AgentSessionServiceImpl {
 
     private final AgentSessionMapper sessionMapper;
     private final ObjectMapper objectMapper;
     private final com.jjx.customer.platform.config.properties.AgentProperties agentProperties;
 
-    @Override
+    /**
+     * 查询活动（AWAITING_USER）会话；TTL 过期即清除并按无状态处理。
+     */
     public Optional<AgentSessionState> findActive(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return Optional.empty();
@@ -57,7 +58,7 @@ public class AgentSessionServiceImpl implements SessionStore {
         }
     }
 
-    @Override
+
     public boolean claim(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return false;
@@ -70,7 +71,7 @@ public class AgentSessionServiceImpl implements SessionStore {
         }
     }
 
-    @Override
+
     public void saveAwaitingUser(AgentSessionState state) {
         if (state == null || state.sessionId() == null || state.sessionId().isBlank()) {
             return;
@@ -102,7 +103,7 @@ public class AgentSessionServiceImpl implements SessionStore {
         }
     }
 
-    @Override
+
     public void complete(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             return;

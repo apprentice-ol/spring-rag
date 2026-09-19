@@ -1,6 +1,6 @@
 package com.jjx.customer.platform.business.routing;
-import com.jjx.customer.platform.business.agents.KnowledgeFrameworkAgent;
-import com.jjx.customer.platform.business.agents.OpsDiagnoseFrameworkAgent;
+import com.jjx.customer.platform.business.engine.AgentCatalog;
+
 
 import com.jjx.customer.platform.routing.RouteContext;
 import com.jjx.customer.platform.routing.RouteDecision;
@@ -21,7 +21,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class OpsIntentRouteRule implements RouteRule {
 
-    public static final String DOMAIN = OpsDiagnoseFrameworkAgent.INTENT_DOMAIN;
+    public static final String DOMAIN = AgentCatalog.OPS.intentDomain();
 
     private final ChatProperties chatProperties;
 
@@ -35,13 +35,13 @@ public class OpsIntentRouteRule implements RouteRule {
         if (ctx.intent() == null || !DOMAIN.equals(ctx.intent().getDomain())) {
             return Optional.empty();
         }
-        if (KnowledgeFrameworkAgent.ID.equals(ctx.agentChoice())) {
+        if (AgentCatalog.KNOWLEDGE.id().equals(ctx.agentChoice())) {
             return Optional.empty();
         }
         if (ctx.intent().getConfidence() < chatProperties.getDiagnoseMinConfidence()) {
             return Optional.empty();
         }
-        return Optional.of(RouteDecision.to(OpsDiagnoseFrameworkAgent.ID));
+        return Optional.of(RouteDecision.to(AgentCatalog.OPS.id()));
     }
 
     @Override

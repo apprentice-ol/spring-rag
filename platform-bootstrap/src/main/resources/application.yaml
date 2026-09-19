@@ -123,8 +123,20 @@ rag:
   chat:
     top-k: 10           # 兜底召回条数（预算未配置时用）；三段预算已在下方显式配置
     context-top-k: 10   # ③ Rerank 后最终给 LLM 的条数（对齐 ragent default-top-k:10；8 会让代码块与概念块抢名额，个别代码块只给路径引用）
-    recall-budget: 20   # ① 每通道召回基数（对齐 ragent；100 全库概述噪声淹没步骤块，20 噪声少）
-    candidate-limit: 40 # ② RRF 融合后送 Rerank 的候选池上限（对标 ragent rag.search.fusion.rerank-candidate-limit:40）
+    recall-budget: 60   # ① 每通道召回基数。2026-09-18 由 20 上调：小块化后语料从 5122 父块 → 20099 子块，
+                        # 20 条的覆盖比例被稀释 4 倍（实测期望文档落到 BM25 第 49 名、装不进池子）。
+                        # 原注释"100 噪声淹没步骤块"是父块时代的结论；子块语义集中，且下游有分批 rerank 兜底
+    candidate-limit: 40 # ② RRF 融合后送 Rerank 的候选池上限。2026-09-18 晚由 120 降回 40——**候选池直接
+                        # 决定 rerank 的串行批数**（batch-size=12 → ceil(池/12) 次 HTTP）：120 是 10 批、
+                        # 单条检索实测 avg 3747ms；40 是 4 批、实测 avg 2034ms（run 83）。这是全流程耗时
+                        # 最敏感的旋钮，比调 batch-size 直接。
+                        # 降回 40 不掉召回：小块检索的对照实验（plan/2026-09-18-small-to-big-retrieval.md）
+                        # 本就是在 40 候选下做的，5/5 题期望分全部 ≥0.485 越过 0.3 阈值；且 40 个子块
+                        # ≈16k 字符，仍在 rerank 的"瘦请求"区间内（避开长请求的分数衰减带）。
+                        # 不建议再降到 20：精排 topN=context-top-k(10)×overfetch(3)=30，池子只有 20 则
+                        # 精排最多出 20 个子块，按实测 4:1 的父块折叠率进 LLM 的父块不足 10 条，上下文腰斩。
+                        # 注：recall-budget 保持 60 不动——通道召回是毫秒级 HNSW/BM25，成本可忽略，
+                        # 素材多则 RRF 融合质量更好；耗时花在 rerank 上，不在这。
     similarity-threshold: 0.0   # 不过滤（0.35 会把具体操作步骤块误过滤——步骤和"流程"查询语义距离较远）（阈值过滤向后推到精排环节）
     degrade-limit: 8            # Redis 断路器降级期间，昂贵路径（LLM 流式/ops 诊断）并发上限（DegradeGuard）
     diagnose-min-confidence: 0.6 # 意图路由进诊断的置信度门槛：自动档低于此值不劫持，落回知识检索（显式选择不受限）
@@ -132,16 +144,17 @@ rag:
     # 如需运维覆盖，可在此设置 system-prompt: xxx
     agent:                       # 多范式可插拔 agent 框架（rag.chat.agent.* → AgentProperties）
       paradigm: knowledge        # 默认 agent 范式：knowledge / ops_diagnose / react_loop（旧 naive/react 自动映射）
-      grade-threshold: 0.5       # grade 相关性阈值（chunk score >= 该值视为 relevant）
       react-max-steps: 6         # ReAct 最大循环步数（防死循环硬上限）
-      tool-call-mode: native     # 工具循环协议：native=原生 function calling；json=JSON 决策降级逃生门
-      default-max-steps: 4       # 阶段默认循环步数
-      max-invalid-tool-calls: 2  # 连续非法工具调用（幻觉工具名/参数损坏）上限，超出强制出环
-      loop-call-timeout-seconds: 60  # 单次 LLM 调用超时（秒）
+      # （内核替换 2026-09）tool-call-mode/default-max-steps/max-invalid-tool-calls/loop-call-timeout-seconds
+      # 已随旧内核移除：工具循环固定 think→act→decide 图范式（JSON 意图协议由 Act 执行器解析）
       session-ttl-minutes: 60    # 追问会话状态 TTL（所有 workflow agent 通用；未配置回退 ops.session-ttl-minutes）
-      ops:                       # 运维诊断 agent（ops_diagnose）专属配置
-        prod-confirm-required: true  # 生产环境写操作需用户确认
-        stages: []               # 阶段骨架覆盖（空=代码默认：investigate_logs→resolve_request→verify）
+      critique:                  # 检索反思环的充分性判据（决定"查到什么程度算够、不用再重查"）
+        required-hits: 1         # ⚠️ 语料相关：单跳语料取 1（每题平均只需 1 篇支撑文档）；
+                                 #    多跳语料要调高——HotpotQA 均值 2.4 / MuSiQue 2.6 / 2Wiki 4.9。
+                                 #    Adaptive-RAG 实测：SQuAD 单步检索胜出（27.80 vs 24.40 EM，省 9 倍成本），
+                                 #    MuSiQue 排序完全反转（13.80 vs 23.00）——没有通用常数，换语料先重估。
+                                 #    依据见笔记《RAG多轮检索触发时机解析》§五、§六
+        min-top-score: 0.3       # 首条命中相关度下限（精排后）；条数放宽到 1 后，这条是主要精度防线
       mcp:                       # MCP server 接入（rag.chat.agent.mcp.* → agent/mcp/McpToolProvider）
         enabled: false           # true 时把 MCP server 工具桥接进 ToolRegistry（需先配 spring.ai.mcp.client.servers）
         tool-prefix: mcp_        # MCP 工具名前缀（防与本地工具重名——注册表重名启动失败）
@@ -169,8 +182,16 @@ rag:
         enabled: false         # 联网检索通道（需配置 API key）
     fusion:
       rrf-k: 20                # RRF 融合平滑常数（对齐 ragent 20；调小→头部排名权重更突出、多通道更容易出头）
+    parent:                   # 父块聚合（小块检索、大块生成；rerank 后按 parent_key 折叠子块、取父块原文）
+      enabled: true           # 无 parent_key 的存量块自动直通（新旧混合灰度安全）
+      rerank-overfetch: 3     # 子块模式 rerank 超采倍数（同父多子折叠吃席位，×3 保证父块数≈topK）
+      max-children-cited: 3   # 父块 metadata 携带的命中小块数上限（轨迹明细）
   rerank:
     enabled: true               # Rerank 精排（百炼 qwen3-rerank；gte-rerank 已于 2026-05 下线）
+    batch-size: 12              # 分批精排：候选超此值按批调用再合并（瘦请求，防长请求压低全池分数）
+                                # 实测 1954：109 候选一次喂 47k 字符 → 期望文档 0.2822 被砍、全池仅 6 条过阈值；
+                                # 分 12 条一批 → 期望文档 0.3857 过阈值、全池 60 条过阈值。
+                                # 与小块检索配套：候选池放大后必须分批，否则分数标定失真
     min-relevance-score: 0.3    # Rerank 相关度下限：低于此分的块不进 LLM 上下文（0=关闭）
                                 # 大块时代适配：块合并到 600-1600 字符后"部分相关"块（含表格/代码的混合块）
                                 # rerank 打分被稀释（0.3~0.45 区间），0.4 会砍掉表格类查询的一半上下文
@@ -185,6 +206,12 @@ rag:
   ingestion:
     chunk-size: 512       # 单块目标字符数（对齐 ragent 512；结构感知分块合并上限）
     chunk-overlap: 200    # 相邻块重叠字符数：跨块边界的答案需在上下块都完整出现，零重叠会直接损失召回
+    child-chunk:          # 小块检索、大块生成（2026-09-18；plan/2026-09-18-small-to-big-retrieval.md）
+      enabled: true       # 父块切子块进向量表（子块打分排序），父块原文存 sa_chunk_parent
+      target-chars: 400   # 子块目标字符（对照实验：期望内容分数平均 +0.10，全库 cosine 区分度恢复）
+      max-chars: 500      # 子块硬上限
+      min-chars: 120      # 过小尾块并入前片
+      overlap-chars: 60   # 相邻子块重叠（跨子块边界的答案在相邻块都完整出现）
   eval:
     ks: [5, 10]           # Recall/Precision/nDCG 计算的 k 值（产出 recall_at_5 / recall_at_10 ...）
     concurrency: 8        # 跑批并发数（虚拟线程 + Semaphore 限流，单实例）
@@ -240,3 +267,27 @@ logging:
     # 注意：这些日志同时经 OPEN_TELEMETRY appender 进 OpenObserve，关闭后 OO 内对应的
     # step 输入/输出明文展示会缺失（span 本身仍在）。跑批时可设 TELEMETRY_STEP_LOG_LEVEL=OFF。
     telemetry.telemetry: ${TELEMETRY_STEP_LOG_LEVEL:INFO}
+
+# ops 诊断引擎直查 OpenObserve（query_logs 数据面；OpsProperties prefix=ops）
+# 字段名默认取 OTel 语义约定（body/severity/trace_id/service_name）——agent-framework server 真实联调验证的口径
+ops:
+  openobserve:
+    url: ${OPENOBSERVE_URL:http://localhost:5080/api/default}
+    username: ${OO_USERNAME:admin@dev.local}
+    password: ${OO_PASSWORD:DevOnly@Local}
+    stream: springai_rag_logs
+    trace-stream: default
+    lookback-days: 7
+    max-logs: 10
+    query-enabled: true
+    timeout-seconds: 30
+    message-field: body
+    level-field: severity
+    trace-id-field: trace_id
+    service-field: service_name
+  logs-cache:                # 日志查询缓存（trace 精查 24h / 时间窗 60s）
+    enabled: true
+    window-ttl-seconds: 60
+    trace-ttl-minutes: 1440
+  session-ttl-minutes: 60    # 追问会话 TTL（与 rag.chat.agent.session-ttl-minutes 同语义，AgentProperties 优先）
+  max-llm-calls: 24          # 流程级 LLM 调用上限（O9；与 rag.chat.agent.workflow.max-llm-calls 同值）

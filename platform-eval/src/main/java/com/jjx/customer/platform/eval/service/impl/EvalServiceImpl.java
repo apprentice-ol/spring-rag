@@ -11,10 +11,12 @@ import com.jjx.customer.platform.config.properties.ChatProperties;
 import com.jjx.customer.platform.eval.config.EvalConcurrencyGuard;
 import com.jjx.customer.platform.eval.dao.entity.EvalDatasetEntity;
 import com.jjx.customer.platform.eval.dao.entity.EvalItemEntity;
+import com.jjx.customer.platform.eval.dao.entity.EvalItemTraceEntity;
 import com.jjx.customer.platform.eval.dao.entity.EvalMetricEntity;
 import com.jjx.customer.platform.eval.dao.entity.EvalRunEntity;
 import com.jjx.customer.platform.eval.dao.mapper.EvalDatasetMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalItemMapper;
+import com.jjx.customer.platform.eval.dao.mapper.EvalItemTraceMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalMetricMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalRunMapper;
 import com.jjx.customer.platform.eval.domain.EvalItemRequest;
@@ -49,6 +51,8 @@ public class EvalServiceImpl implements EvalService {
     private final EvalItemMapper itemMapper;
     private final EvalRunMapper runMapper;
     private final EvalMetricMapper metricMapper;
+    /** agent 轨迹表（2026-09-18 从 sa_eval_metric 拆出，删除 run/数据集时须一并级联） */
+    private final EvalItemTraceMapper itemTraceMapper;
     private final ChatProperties chatProperties;
     private final EvalRunner evalRunner;
     private final ObjectMapper objectMapper;
@@ -271,6 +275,8 @@ public class EvalServiceImpl implements EvalService {
             }
             metricMapper.delete(new LambdaQueryWrapper<EvalMetricEntity>()
                     .in(EvalMetricEntity::getRunId, runIds));
+            itemTraceMapper.delete(new LambdaQueryWrapper<EvalItemTraceEntity>()
+                    .in(EvalItemTraceEntity::getRunId, runIds));
             runMapper.deleteByIds(runIds);
         }
         itemMapper.delete(new LambdaQueryWrapper<EvalItemEntity>()
@@ -329,8 +335,10 @@ public class EvalServiceImpl implements EvalService {
         }
         metricMapper.delete(new LambdaQueryWrapper<EvalMetricEntity>()
                 .eq(EvalMetricEntity::getRunId, runId));
+        itemTraceMapper.delete(new LambdaQueryWrapper<EvalItemTraceEntity>()
+                .eq(EvalItemTraceEntity::getRunId, runId));
         runMapper.deleteById(runId);
-        log.info("[Eval] 删除运行及指标: runId={}", runId);
+        log.info("[Eval] 删除运行及指标/轨迹: runId={}", runId);
     }
 
     @Override

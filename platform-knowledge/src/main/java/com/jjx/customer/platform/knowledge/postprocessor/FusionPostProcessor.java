@@ -1,6 +1,6 @@
 package com.jjx.customer.platform.knowledge.postprocessor;
 
-import cn.hutool.crypto.digest.DigestUtil;
+import com.jjx.customer.platform.knowledge.retrieval.ChunkIdentity;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievedChunk;
 import com.jjx.customer.platform.knowledge.retrieval.SearchChannelResult;
 import com.jjx.customer.platform.knowledge.retrieval.SearchChannelType;
@@ -70,8 +70,9 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
         // merged 列表与各通道结果里的 chunk 是同一对象引用，缓存全程命中。
         Map<RetrievedChunk, String> keyCache = new IdentityHashMap<>();
 
-        // 1. 建立内容 -> 原始 chunk 的映射（去重键使用全文 SHA-256，与 DeduplicationPostProcessor 一致）；
-        //    同内容多通道命中时，保留原始相似度(originalScore)最高的那个，便于后续展示真实相关度
+        // 1. 建立 分片标识 -> 原始 chunk 的映射（去重键 = doc_id + 全文 SHA-256，与 DeduplicationPostProcessor 一致）；
+        //    同内容多通道命中时，保留原始相似度(originalScore)最高的那个，便于后续展示真实相关度。
+        //    键含 doc_id：同一段文本挂在不同文档下时各自保留，避免把期望文档与孪生副本合并掉
         Map<String, RetrievedChunk> contentMap = new LinkedHashMap<>();
         Map<String, Double> bestOriginal = new HashMap<>();
         for (RetrievedChunk chunk : chunks) {
@@ -146,10 +147,15 @@ public class FusionPostProcessor implements SearchResultPostProcessor {
         return fused;
     }
 
-    /** chunk 全文 SHA-256 去重键（按对象身份缓存，同一 chunk 只算一次） */
+    /**
+     * 分片去重键（{@code doc_id} + 全文 SHA-256；按对象身份缓存，同一 chunk 只算一次）。
+     *
+     * <p>必须带 doc_id：同一段文本可能挂在多个 doc_id 下（LiveRAG 语料如此），
+     * 纯内容哈希会把期望文档与其孪生副本合并，留哪份取决于通道顺序——评测按 doc_id
+     * 打分，合并掉期望那份即 0 分。见 {@link ChunkIdentity}。</p>
+     */
     private String keyOf(RetrievedChunk chunk, Map<RetrievedChunk, String> keyCache) {
-        return keyCache.computeIfAbsent(chunk,
-                c -> DigestUtil.sha256Hex(c.getContent() == null ? "" : c.getContent()));
+        return keyCache.computeIfAbsent(chunk, ChunkIdentity::of);
     }
 
     /**

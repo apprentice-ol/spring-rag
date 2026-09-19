@@ -22,7 +22,18 @@ import lombok.Data;
 @Builder
 public class IngestionContext {
 
+    /** 入库任务标识：一次 pipeline 执行一个（节点日志、幂等重投按它归集）。 */
     private String taskId;
+
+    /**
+     * 文档标识（内容身份），与 {@link #taskId} 是两件事：任务是一次执行，文档是一份内容。
+     *
+     * <p>调用方可指定（如 LiveRAG 导入器传源 urn），未指定时由引擎置为 taskId。
+     * <b>索引器写进 {@code metadata.doc_id} 的必须是这个</b>——那是检索命中与评测
+     * {@code expected_doc_ids} 比对的身份。</p>
+     */
+    private String docId;
+
     private String pipelineId;
     private DocumentSource source;
 

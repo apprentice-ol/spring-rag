@@ -21,6 +21,7 @@ import {
   categoryLabel,
 } from './evalShared'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import MetricHelp from './MetricHelp.vue'
 
 /** 运行详情独立页（hash 子路由 #/admin/eval/runs/{id}）。 */
 const props = defineProps<{ runId: number; datasets?: { id: number; name: string }[] }>()
@@ -81,11 +82,26 @@ onUnmounted(() => {
 })
 watch(() => props.runId, () => load(true))
 
+/**
+ * 低分筛选可选的指标名。
+ *
+ * 取自**聚合**（整轮全量指标的键），不是当前页的行：低分筛选到 0 条时行集为空，
+ * 选项也跟着空，下拉变成个空壳——既看不出当前筛的是哪个指标，也改不回去，
+ * 筛选条件就此"消失"。聚合结果不受筛选影响，才是稳定的选项来源。
+ */
 const metricNames = computed(() => {
+  const fromAggregate = Object.keys(aggregate.value ?? {}).filter((n) => n !== 'error')
+  if (fromAggregate.length) {
+    return fromAggregate
+  }
+  // 聚合缺失（老数据/异常）时退回行集，行为与改前一致
   const names = new Set<string>()
   for (const m of metrics.value) if (m.metricName !== 'error') names.add(m.metricName)
   return Array.from(names)
 })
+
+/** 聚合指标卡折叠态：9 个指标铺开占满一屏，而多数时候只看一两个，默认收起。 */
+const aggCollapsed = ref(true)
 
 /** 期望召回文档名：优先用 metric 平级字段 expectedDocNames，旧数据（无该列）从 detail 兜底 */
 function expectedNamesOf(m: EvalMetric, det: ReturnType<typeof parseDetail>): string[] {
@@ -223,7 +239,9 @@ const tableColumns = computed(() => {
     fixed?: 'left' | 'right'
     sorter?: (a: PivotRow, b: PivotRow) => number
   }[] = [{ title: '问题', dataIndex: 'question', key: 'question', width: 280, ellipsis: true, fixed: 'left' }]
-  cols.push({ title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 100 })
+  // 130 + ellipsis：标签是 a-tag（white-space: nowrap），100 的框装不下「运维诊断」/「ReAct Loop」，
+  // 会直接溢出到相邻列上
+  cols.push({ title: '范式', dataIndex: 'paradigm', key: 'paradigm', width: 130, ellipsis: true })
   if (hasCategory.value) {
     cols.push({ title: '分类', dataIndex: 'category', key: 'category', width: 110 })
   }
@@ -477,23 +495,42 @@ function durMin(): string {
         </span>
       </div>
 
-      <!-- 聚合指标卡（与概览页 KPI 卡同风格：白卡 + 阶段徽标 + 分档色数字） -->
-      <div v-if="aggregate" class="agg-grid">
-        <div
-          v-for="(m, name) in aggregate"
-          :key="name"
-          class="agg-card"
-          :class="'tone-' + scoreTone(m.mean)"
-        >
-          <div class="agg-head">
-            <span class="agg-name">{{ metricLabel(String(name)) }}</span>
-            <span class="agg-stage" :class="metricStage(String(name)).cls">
-              {{ metricStage(String(name)).label }}
+      <!-- 聚合指标卡（与概览页 KPI 卡同风格：白卡 + 阶段徽标 + 分档色数字）；可折叠 -->
+      <div v-if="aggregate" class="agg-section">
+        <div class="agg-section-head">
+          <span class="param-title">聚合指标</span>
+          <!-- 收起时把读数压成一行芯片：折叠是为了省地方，不是为了把结论也藏起来 -->
+          <div v-if="aggCollapsed" class="agg-summary">
+            <span v-for="(m, name) in aggregate" :key="name" class="agg-chip">
+              {{ metricLabel(String(name)) }}
+              <b class="agg-chip-val" :class="'tone-' + scoreTone(m.mean)">{{ fmtScore(m.mean) }}</b>
+              <MetricHelp :name="String(name)" :mean="m.mean" />
             </span>
           </div>
-          <div class="agg-mean">{{ fmtScore(m.mean) }}</div>
-          <div class="agg-bar"><span :style="{ width: Math.max(0, Math.min(1, m.mean)) * 100 + '%' }"></span></div>
-          <div class="agg-detail">中位 {{ fmtScore(m.median) }} · min {{ fmtScore(m.min) }} · max {{ fmtScore(m.max) }}</div>
+          <button type="button" class="agg-toggle" @click="aggCollapsed = !aggCollapsed">
+            {{ aggCollapsed ? '展开明细' : '折叠' }}
+          </button>
+        </div>
+        <div v-show="!aggCollapsed" class="agg-grid">
+          <div
+            v-for="(m, name) in aggregate"
+            :key="name"
+            class="agg-card"
+            :class="'tone-' + scoreTone(m.mean)"
+          >
+            <div class="agg-head">
+              <span class="agg-name">
+                {{ metricLabel(String(name)) }}
+                <MetricHelp :name="String(name)" :mean="m.mean" />
+              </span>
+              <span class="agg-stage" :class="metricStage(String(name)).cls">
+                {{ metricStage(String(name)).label }}
+              </span>
+            </div>
+            <div class="agg-mean">{{ fmtScore(m.mean) }}</div>
+            <div class="agg-bar"><span :style="{ width: Math.max(0, Math.min(1, m.mean)) * 100 + '%' }"></span></div>
+            <div class="agg-detail">中位 {{ fmtScore(m.median) }} · min {{ fmtScore(m.min) }} · max {{ fmtScore(m.max) }}</div>
+          </div>
         </div>
       </div>
       <div v-else-if="run && run.status === 'DONE'" class="empty">无聚合指标数据</div>
@@ -748,7 +785,9 @@ function durMin(): string {
   gap: 14px;
 }
 /* 参数卡 / 聚合卡固定不压缩；表格卡（全局类）吃剩余空间，表体在 table-wrap 内滚 */
+/* 容器的 overflow 是 hidden、高度写死 100%：不锁住 flex-shrink 的块会被压扁（表格卡要伸展，故不在列） */
 .run-detail .param-card,
+.run-detail .agg-section,
 .run-detail .agg-grid,
 .run-detail .empty {
   flex-shrink: 0;
@@ -801,6 +840,57 @@ function durMin(): string {
 }
 
 /* ── 聚合指标卡（对齐概览页 kpi-card：白卡 + 阶段徽标 + 分档色数字 + 细进度条） ── */
+/* 左右各留 16px：与「检索参数」卡的内边距对齐，两行数据从同一个 x 起。
+   卡片的内边距把内容推进去 16px，这一行不补上就会比它靠左一截。
+   内边距挂在 section 而不是 head 上——展开后的卡片网格是 head 的兄弟节点，
+   挂在 head 上会让"收起的标题对齐、展开的卡片又错位"。
+   下边距不写：.ant-spin-container 的 gap: 14px 已经管了，再写一份就是双倍间距。 */
+.agg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px;
+}
+.agg-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+/* 折叠态的一行读数：换行而不是横向滚动——9 个指标一行放不下，滚动条会藏起后半截 */
+.agg-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.agg-chip {
+  font-size: 12px;
+  color: var(--color-ink-secondary);
+  white-space: nowrap;
+}
+.agg-chip .agg-chip-val {
+  margin-left: 4px;
+  font-family: var(--font-display, monospace);
+  font-size: 13px;
+}
+/* 分档色：卡片里的 .tone-* 是挂在 .agg-card 上的后代选择器，芯片不是卡片，得自己写一份 */
+.agg-chip-val.tone-good { color: var(--color-success); }
+.agg-chip-val.tone-mid { color: var(--color-signal); }
+.agg-chip-val.tone-bad { color: var(--color-danger); }
+.agg-toggle {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+}
+.agg-toggle:hover { text-decoration: underline; }
+
 .agg-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

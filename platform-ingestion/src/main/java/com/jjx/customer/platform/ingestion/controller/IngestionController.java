@@ -354,6 +354,12 @@ public class IngestionController {
             // 尽力删：向量清除失败不阻断业务表清理（异常已捕获，不影响事务提交）
             log.warn("[删除] 向量清除异常: {}", e.getMessage());
         }
+        // 4.1 父块存档同批清理（小块检索：sa_chunk_parent 与向量表同生命周期）
+        try {
+            jdbcTemplate.update("DELETE FROM sa_chunk_parent WHERE doc_id = ?", docId);
+        } catch (Exception e) {
+            log.warn("[删除] 父块存档清除异常: {}", e.getMessage());
+        }
 
         // 5. 删除文档记录
         documentMapper.deleteById(doc.getId());

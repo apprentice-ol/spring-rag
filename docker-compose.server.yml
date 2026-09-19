@@ -1,4 +1,4 @@
-# springai-rag 服务器部署版 compose（与本地版 docker-compose.yml 区别见注释）。
+# customer-platform 服务器部署版 compose（与本地版 docker-compose.yml 区别见注释）。
 # 用法：
 #   docker compose -f docker-compose.server.yml up -d --build
 #
@@ -33,7 +33,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rag-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "volatile-lru"]
     # 宿主端口映射已移除（容器间通信用服务名 redis:6379）；服务器已有 Redis 占 6379 时不冲突。
     volumes:
       - redis-data:/data
@@ -75,10 +75,10 @@ services:
       - oo-data:/data
 
   app:
-    image: springai-rag-app:latest
+    image: customer-platform-app:latest
     build:
       context: .
-      dockerfile: docker/app/Dockerfile
+      dockerfile: Dockerfile
     container_name: rag-app
     logging:
       driver: json-file
@@ -108,7 +108,7 @@ services:
       RAG_STORAGE_TYPE: s3
       RAG_STORAGE_S3_ENDPOINT: http://rustfs:9000
       # ⭐ 浏览器可访问的图片基址：本机 Nginx /storage/ 反代到 RustFS 根，
-      #    图片 URL = http://<SERVER_IP>/storage/springai-rag-assets/{key}
+      #    图片 URL = http://<SERVER_IP>/storage/customer-platform-assets/{key}
       #    SERVER_IP 从 .env 读取；换服务器/Nginx 路径时改 .env 的 SERVER_IP 或此处
       RAG_STORAGE_S3_PUBLIC_URL: http://${SERVER_IP:?请在 .env 配置 SERVER_IP}/storage
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
@@ -127,6 +127,13 @@ services:
       # trace 直连 = OPENOBSERVE_URL + /v1/traces、日志 = + /v1/logs（无需再设 OBSERVE_OTLP_ENDPOINT）
       TELEMETRY_CONFIG: application-telemetry-server.yaml
       OPENOBSERVE_URL: http://openobserve:5080/api/default
+      # ---- OpenObserve 展示账号（前端「链路追踪」页）----
+      # 不设 OO_VIEWER_* 时回退 ZO_ROOT_USER_*（.env 里的 OO 管理员，与 openobserve 服务共用）；
+      # 空串由后端 firstNonBlank 级联容错，不会遮蔽下一级
+      OO_VIEWER_EMAIL: ${OO_VIEWER_EMAIL:-}
+      OO_VIEWER_PASSWORD: ${OO_VIEWER_PASSWORD:-}
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-}
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-}
       # OTLP 日志/指标/链路写入与读取认证（必须与 OO 实际账号一致，否则日志导出 401）
       OO_USERNAME: ${OO_USERNAME:?请在 .env 配置 OO_USERNAME}
       OO_PASSWORD: ${OO_PASSWORD:?请在 .env 配置 OO_PASSWORD}

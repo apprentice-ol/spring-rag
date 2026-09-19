@@ -2,7 +2,9 @@ package com.jjx.customer.platform.eval.sink;
 
 import com.baomidou.mybatisplus.extension.toolkit.Db;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jjx.customer.platform.eval.dao.entity.EvalItemTraceEntity;
 import com.jjx.customer.platform.eval.dao.entity.EvalMetricEntity;
+import com.jjx.customer.platform.eval.dao.mapper.EvalItemTraceMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalMetricMapper;
 import com.jjx.customer.platform.eval.framework.EvalResultSink;
 import com.jjx.customer.platform.eval.framework.EvalSample;
@@ -24,6 +26,10 @@ import java.util.Set;
  * 落库 sink（从 EvalRunner.persistMetrics 平移，落库口径逐字段不变）：
  * error 样本写一条 {@code metric_name="error", score=-1} 行；正常样本每指标一行批量插入。
  * EvalScore.comment 不落库（comment 是 Langfuse 展示增强，保持 sa_eval_metric 结构与口径不变）。
+ *
+ * <p><b>agent 轨迹拆表（2026-09-18）</b>：轨迹原先跟着每个指标行各写一份（每条 item 9 个指标 =
+ * 9 份 22KB 副本，实测把 sa_eval_metric 撑到 395MB / 352MB 是冗余轨迹），改由
+ * {@link #persistTrace} 单独写 {@code sa_eval_item_trace}（每 run+item+attempt 一行）。</p>
  */
 @Slf4j
 @Component
@@ -31,10 +37,13 @@ import java.util.Set;
 public class DbMetricSink implements EvalResultSink {
 
     private final EvalMetricMapper evalMetricMapper;
+    private final EvalItemTraceMapper evalItemTraceMapper;
     private final ObjectMapper objectMapper;
 
     @Override
     public void onItemResult(EvalSample sample, List<EvalScore> scores) {
+        // 轨迹独立落库：先写且独立吞异常——轨迹写失败不该拖累指标，反之亦然
+        persistTrace(sample);
         try {
             String expectedIdsJson = toJson(sample.expectedDocIds());
             String expectedNamesJson = toJson(sample.expectedDocNames());
@@ -69,7 +78,6 @@ public class DbMetricSink implements EvalResultSink {
                 metricEntity.setPerQuestion(sample.perQuestion());
                 metricEntity.setParadigm(sample.paradigm());
                 metricEntity.setCategory(sample.category());
-                metricEntity.setAgentTrace(sample.agentTrace());
                 metricEntity.setTraceId(sample.traceId());
                 metricRows.add(metricEntity);
             }
@@ -98,9 +106,31 @@ public class DbMetricSink implements EvalResultSink {
         metricEntity.setPerQuestion(sample.perQuestion());
         metricEntity.setParadigm(sample.paradigm());
         metricEntity.setCategory(sample.category());
-        metricEntity.setAgentTrace(sample.agentTrace());
         metricEntity.setTraceId(sample.traceId());
         return metricEntity;
+    }
+
+    /**
+     * 落库该条的 agent 执行轨迹（每 run + item + attempt 一行）。
+     * <p>轨迹为空（检索前就失败）时跳过；写失败只记日志——指标行是评测的主产物，轨迹是旁证，
+     * 不能因为轨迹写失败丢指标。</p>
+     */
+    private void persistTrace(EvalSample sample) {
+        if (sample.agentTrace() == null) {
+            return;
+        }
+        try {
+            EvalItemTraceEntity trace = new EvalItemTraceEntity();
+            trace.setRunId(sample.runId());
+            trace.setItemId(sample.itemId());
+            trace.setAttempt(sample.attempt());
+            trace.setTraceId(sample.traceId());
+            trace.setAgentTrace(sample.agentTrace());
+            evalItemTraceMapper.insert(trace);
+        } catch (Exception ex) {
+            log.warn("[EvalSink] agent 轨迹落库失败 run={}, item={}: {}",
+                    sample.runId(), sample.itemId(), ex.getMessage());
+        }
     }
 
     /** 命中详情（metric.detail）：期望/实际计数 + 命中数 + 期望文档 id+名（前端「期望 vs 实际」对照）。 */

@@ -23,6 +23,7 @@ import {
   type EvalItem,
 } from '../api/eval'
 import { parseDocIds, SOURCE_LABEL, CATEGORY_DESC, activeParadigms, paradigmLabel } from './evalShared'
+import ParadigmHelp from './ParadigmHelp.vue'
 import { listCollections, type DocCollection } from '../api/collection'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
 
@@ -270,7 +271,7 @@ async function submitImport() {
 const triggerCategory = ref<string | undefined>(undefined)
 const triggerLimit = ref<number | undefined>(undefined)
 const triggerRewrite = ref(false)
-const triggerParadigm = ref('naive')
+const triggerParadigm = ref('knowledge')
 const triggerAnswerEval = ref(false)
 const triggerPerQuestion = ref(false)
 
@@ -396,11 +397,12 @@ interface ErrResp {
         <div class="filter-row">
           <div class="filter-item">
             <span class="filter-label">范式</span>
-            <a-select v-model:value="triggerParadigm" style="width: 180px">
+            <a-select v-model:value="triggerParadigm" style="width: 150px">
               <a-select-option v-for="p in activeParadigms()" :key="p.value" :value="p.value">
-                {{ p.label }} · {{ p.desc }}
+                {{ p.label }}
               </a-select-option>
             </a-select>
+            <ParadigmHelp :options="activeParadigms()" />
           </div>
           <div class="filter-item">
             <span class="filter-label">评测范围</span>
@@ -416,7 +418,12 @@ interface ErrResp {
             <span class="filter-label">抽样</span>
             <a-input-number v-model:value="triggerLimit" :min="1" placeholder="数量" style="width: 110px" />
           </div>
-          <span class="filter-hint">不选 = 全量（{{ items.length }} 题）</span>
+          <!-- 别写"不选 = 全量"：留空走的是随机抽 10%，两次留空的运行跑的根本不是同一批题，
+               分数差多少都说明不了问题（0.89 与 0.83 的差距全在抽样噪声内） -->
+          <span class="filter-hint">
+            留空 = 随机抽 10%（约 {{ Math.max(1, Math.ceil(items.length * 0.1)) }} 题，每次不同）；
+            填 {{ items.length }} 及以上才是全量
+          </span>
           <div class="filter-actions">
             <a-checkbox v-model:checked="triggerRewrite" title="勾选后评测走真实聊天链路（含 LLM 改写，分数更接近线上）">启用查询改写</a-checkbox>
             <a-checkbox v-model:checked="triggerAnswerEval" title="勾选后对每题生成答案，并用 LLM-as-judge 打「答案正确性/忠实度」分（每题多 2 次 LLM 调用）">答案评测</a-checkbox>

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.jjx.customer.platform.common.mybatis.JsonbTypeHandler;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Data;
 
@@ -31,8 +32,23 @@ public class EvalItemEntity {
     /** 可选用例标识 */
     private String itemKey;
 
-    /** 分类：qa / summarization / adversarial 等 */
+    /** 分类：7 类（factoid / definition / explanation / multi-aspect / list / comparison / yes-no） */
     private String category;
+
+    /** 难度档：E / M / D / HD（由 irt_diff 四分位定档；非 LiveRAG 来源的条目为空） */
+    private String difficulty;
+
+    /** IRT 难度参数 b —— **越大越难**（实测与 ACS 相关 -0.97） */
+    private BigDecimal irtDiff;
+
+    /** IRT 区分度参数 a */
+    private BigDecimal irtDisc;
+
+    /** 各参赛系统平均正确率：越大越容易 */
+    private BigDecimal acs;
+
+    /** ACS 标准差 */
+    private BigDecimal acsStd;
 
     /** 用户问题 */
     private String question;

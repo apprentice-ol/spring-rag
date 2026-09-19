@@ -24,11 +24,11 @@
 | 2 | 同步 bean 步骤（首选） | `@TelemetryStep("rag.xxx")` | `QueryRewriter.rewrite` |
 | 3 | 流式 Flux 步骤 | `@TelemetryStep(value, captureOutput=true)` | `RagAnswerStreamService.answer` |
 | 4 | SSE emitter 方法 | `@TelemetryStep`（切面自动挂完成回调） | `ChatController` /chat/stream |
-| 5 | 静态工具 / 同类内部调用（AOP 盲区） | `TelemetryTemplate.getInstance().step(...)` | `StreamChatPipeline` 调 `QueryNormalizer.normalize` |
+| 5 | 静态工具 / 同类内部调用（AOP 盲区） | `TelemetryTemplate.getInstance().step(...)` | `ChatOrchestrator` 调 `QueryNormalizer.normalize` |
 | 6 | 独立后台任务 trace | `@TelemetryStep(kind=ROOT)` 或 `obsTemplate.openTrace(...)` | `EvalRunner`（eval.item） |
 | 7 | 低基数标签（可聚合） | `obsTemplate.tag(...)` / `TelemetrySpan.tag(...)` | `EvalRunner`（eval.run_id） |
 | 8 | 附属事件（不开 span） | `log.event(...)` / `TelemetryStructuredLog.emit(...)` | `BaiLianRerankClient`（rerank.scores） |
-| 9 | 对话级最终回答 | `log.conversationOutput(...)`；流式回调用 `log.conversationSink()` | `StreamChatPipeline` |
+| 9 | 对话级最终回答 | `log.conversationOutput(...)`；流式回调用 `log.conversationSink()` | `ChatOrchestrator` |
 
 ---
 
@@ -80,10 +80,10 @@ public Flux<String> answer(String question, String contextText) { ... }
 
 ### 2.5 AOP 盲区：静态工具 / 同类内部调用 —— `TelemetryTemplate.step`
 
-静态方法（如 rag-common 工具类）、`this.xxx()` 内部调用、private 方法，注解切面够不到——**在调用处手动包一层**：
+静态方法（如 platform-common 工具类）、`this.xxx()` 内部调用、private 方法，注解切面够不到——**在调用处手动包一层**：
 
 ```java
-// StreamChatPipeline（rag-common 的静态工具，注解够不到）
+// ChatOrchestrator（platform-common 的静态工具，注解够不到）
 String ruleNormalized = TelemetryTemplate.getInstance()
         .step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
 ```
@@ -162,7 +162,7 @@ flux.subscribe(
 启动期注册，类字面量 + 方法引用，领域对象重构时编译报错不静默失效）：
 
 ```java
-// rag-core config/telemetry/TelemetryDimensions（唯一知道"哪个类型贡献哪些维度"的地方）
+// app config/telemetry/TelemetryDimensions（唯一知道"哪个类型贡献哪些维度"的地方）
 obsTemplate.dimensionOnOutput(IntentResult.class, r -> Map.of("intent", r.getIntent()));
 obsTemplate.dimensionOnOutput(AgentRetrievalResult.class, r -> Map.of("agent", r.trace().getParadigm()));
 ```

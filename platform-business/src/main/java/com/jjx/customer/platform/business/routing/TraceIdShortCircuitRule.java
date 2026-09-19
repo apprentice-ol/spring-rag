@@ -1,7 +1,8 @@
 package com.jjx.customer.platform.business.routing;
-import com.jjx.customer.platform.business.agents.OpsDiagnoseFrameworkAgent;
+import com.jjx.customer.platform.business.engine.AgentCatalog;
 
-import com.jjx.customer.platform.business.tools.ops.OpsSlotSpecs;
+
+import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
 import com.jjx.customer.platform.routing.RouteContext;
 import com.jjx.customer.platform.routing.RouteDecision;
 import com.jjx.customer.platform.routing.RouteRule;
@@ -28,7 +29,7 @@ public class TraceIdShortCircuitRule implements RouteRule {
         if (!StringUtils.hasText(ctx.extractedTraceId())) {
             return Optional.empty();
         }
-        return Optional.of(new RouteDecision(OpsDiagnoseFrameworkAgent.ID,
-                OpsSlotSpecs.sanitized(Map.of(OpsSlotSpecs.TRACE_ID, ctx.extractedTraceId()))));
+        return Optional.of(new RouteDecision(AgentCatalog.OPS.id(),
+                OpsSlotCatalog.sanitized(Map.of(OpsSlotCatalog.TRACE_ID, ctx.extractedTraceId()))));
     }
 }

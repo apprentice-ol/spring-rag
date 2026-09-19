@@ -3,7 +3,9 @@ package com.jjx.customer.platform.ingestion.engine.indexer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jjx.customer.platform.common.exception.ClientException;
+import com.jjx.customer.platform.config.properties.IngestionProperties;
 import com.jjx.customer.platform.ingestion.engine.chunk.VectorChunk;
+import com.jjx.customer.platform.ingestion.engine.chunk.strategy.BoundaryAwareSplitter;
 import com.jjx.customer.platform.ingestion.engine.IngestionContext;
 import com.jjx.customer.platform.ingestion.engine.enums.IngestionNodeType;
 import com.jjx.customer.platform.ingestion.engine.IngestionNode;
@@ -52,11 +54,16 @@ public class IndexerNode implements IngestionNode {
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingModel embeddingModel;
+    private final BoundaryAwareSplitter splitter;
+    private final IngestionProperties ingestionProperties;
 
-    public IndexerNode(ObjectMapper objectMapper, JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel) {
+    public IndexerNode(ObjectMapper objectMapper, JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel,
+                       BoundaryAwareSplitter splitter, IngestionProperties ingestionProperties) {
         this.objectMapper = objectMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingModel = embeddingModel;
+        this.splitter = splitter;
+        this.ingestionProperties = ingestionProperties;
     }
 
     @Override
@@ -93,19 +100,151 @@ public class IndexerNode implements IngestionNode {
             metas.add(buildMeta(chunk, context, contextMeta, settings));
         }
 
+        // 小块检索展开：父块切子块进向量表，父块原文存 sa_chunk_parent（生成侧由聚合器取回）
+        List<VectorChunk> indexChunks = chunks;
+        if (ingestionProperties.getChildChunk().isEnabled()) {
+            Expanded expand = expandToChildren(chunks, metas);
+            if (expand.parentsWritten() > 0) {
+                indexChunks = expand.children();
+                metas = expand.childMetas();
+                embedSources = expand.childEmbedSources();
+                log.info("[Indexer] 子块展开: {} 父块 → {} 子块（父块存档 {} 条）",
+                        chunks.size(), indexChunks.size(), expand.parentsWritten());
+            }
+        }
+
         // 批量 embedding（一次 API 调用；失败回退逐块，保持单块失败跳过语义）
         float[][] vectors = embedBatch(embedSources);
 
         // 批量 INSERT（multi-row VALUES，每批 INSERT_BATCH_SIZE 条）
-        int inserted = batchInsert(chunks, metas, vectors);
+        int inserted = batchInsert(indexChunks, metas, vectors);
 
         // 只要有块写入成功就返回成功（已写入的 chunk 可被检索）；全部失败才算入库失败
         if (inserted == 0) {
             return NodeResult.fail(new ClientException("向量写入全部失败，成功 0 / " + chunks.size() + " 块"));
         }
-        int failed = chunks.size() - inserted;
-        log.info("[Indexer] 写入完成: 成功 {} 块, 跳过 {} 块（共 {} 块）", inserted, failed, chunks.size());
+        int failed = indexChunks.size() - inserted;
+        log.info("[Indexer] 写入完成: 成功 {} 块, 跳过 {} 块（共 {} 块）", inserted, failed, indexChunks.size());
         return NodeResult.ok("已写入 " + inserted + " 个分块" + (failed > 0 ? "（" + failed + " 块失败已跳过）" : ""));
+    }
+
+    /** 子块展开结果。 */
+    private record Expanded(List<VectorChunk> children, List<Map<String, Object>> childMetas,
+                            List<String> childEmbedSources, int parentsWritten) {
+    }
+
+    /**
+     * 小块检索、大块生成（2026-09-18）：把父块切成子块进向量表，父块原文写 {@code sa_chunk_parent}。
+     *
+     * <p>切分口径：对父块 {@code content} 用 {@link BoundaryAwareSplitter}（句子/段落边界优先，
+     * 字符预算取 {@code rag.ingestion.child-chunk.*}）。<b>单块切不出多片时该块不展开</b>——
+     * 小父块本身就是合格子块，强行挂 parent_key 只会让父块表与向量表双写同样内容。</p>
+     *
+     * <p>子块 metadata = 父块 metadata 全量 + {@code parent_key} + {@code child_index}
+     * （检索命中子块后，聚合器按 parent_key 取回父块原文组装上下文；doc_id/outline_path 等
+     * 父块字段继承，引用与评测口径不变）。子块 embed 源 = 子块 content 片段本身——语义集中
+     * 正是子块化的目的（表格类 embeddingText 的 key-value 优化不适用于片段）。</p>
+     *
+     * @param parents 父块（chunker 产物，与 metas 一一对应；空位为 null）
+     * @param metas   父块 metadata（与 parents 对齐）
+     * @return 展开结果；无任何块可展开时 children == parents（原样返回）
+     */
+    private Expanded expandToChildren(List<VectorChunk> parents, List<Map<String, Object>> metas) {
+        IngestionProperties.ChildChunk cfg = ingestionProperties.getChildChunk();
+        List<VectorChunk> children = new ArrayList<>();
+        List<Map<String, Object>> childMetas = new ArrayList<>();
+        List<String> childEmbedSources = new ArrayList<>();
+        List<Object[]> parentRows = new ArrayList<>();
+
+        for (int i = 0; i < parents.size(); i++) {
+            VectorChunk parent = parents.get(i);
+            Map<String, Object> parentMeta = metas.get(i);
+            if (parent == null || parentMeta == null || !StringUtils.hasText(parent.getContent())) {
+                continue;
+            }
+            List<String> pieces = splitter.split(parent.getContent(),
+                    cfg.getMinChars(), cfg.getTargetChars(), cfg.getMaxChars(), cfg.getOverlapChars());
+            if (pieces.size() <= 1) {
+                continue; // 小父块不展开（它自己就是子块）
+            }
+            String parentKey = parentKeyOf(parentMeta);
+            for (int c = 0; c < pieces.size(); c++) {
+                Map<String, Object> childMeta = new HashMap<>(parentMeta);
+                childMeta.put("parent_key", parentKey);
+                childMeta.put("child_index", c);
+                children.add(VectorChunk.builder()
+                        .chunkId(parent.getChunkId() == null ? null : parent.getChunkId() + "-" + c)
+                        .index(parent.getIndex())
+                        .content(pieces.get(c))
+                        .blockType(parent.getBlockType())
+                        .outlinePath(parent.getOutlinePath())
+                        .sectionContext(parent.getSectionContext())
+                        .assets(parent.getAssets())
+                        .build());
+                childMetas.add(childMeta);
+                childEmbedSources.add(pieces.get(c));
+            }
+            parentRows.add(new Object[]{parentKey,
+                    String.valueOf(parentMeta.get("doc_id")),
+                    parentMeta.get("collection_id") == null ? null : parentMeta.get("collection_id"),
+                    String.valueOf(parentMeta.getOrDefault("doc_name", "")),
+                    String.valueOf(parentMeta.getOrDefault("outline_path", "")),
+                    parent.getContent()});
+        }
+
+        int written = insertParents(parentRows);
+        if (children.isEmpty()) {
+            return new Expanded(parents, metas, childEmbedSources(parents), written);
+        }
+        return new Expanded(children, childMetas, childEmbedSources, written);
+    }
+
+    /**
+     * 父块批量存档（{@code sa_chunk_parent}，ON CONFLICT 幂等）。
+     *
+     * @return 成功写入行数
+     */
+    private int insertParents(List<Object[]> rows) {
+        int written = 0;
+        for (int from = 0; from < rows.size(); from += INSERT_BATCH_SIZE) {
+            int to = Math.min(from + INSERT_BATCH_SIZE, rows.size());
+            StringBuilder values = new StringBuilder();
+            List<Object> params = new ArrayList<>();
+            for (int i = from; i < to; i++) {
+                if (values.length() > 0) {
+                    values.append(",");
+                }
+                values.append("(?, ?, ?::bigint, ?, ?, ?)");
+                for (Object p : rows.get(i)) {
+                    params.add(p);
+                }
+            }
+            try {
+                written += jdbcTemplate.update(
+                        "INSERT INTO sa_chunk_parent (parent_key, doc_id, collection_id, doc_name, outline_path, content) "
+                                + "VALUES " + values + " ON CONFLICT (parent_key) DO NOTHING",
+                        params.toArray());
+            } catch (Exception e) {
+                log.error("[Indexer] 父块存档失败（跳过本批 {} 条）: {}", to - from, e.getMessage());
+            }
+        }
+        return written;
+    }
+
+    /** 父块键：doc_id + 父块序号（确定性；同一 docId 重灌先删后插，键稳定可复现）。 */
+    private static String parentKeyOf(Map<String, Object> parentMeta) {
+        return String.valueOf(parentMeta.get("doc_id")) + ":" + parentMeta.get("chunk_index");
+    }
+
+    /** 展开未发生时，embed 源沿用父块口径（embeddingText 优先）。 */
+    private static List<String> childEmbedSources(List<VectorChunk> parents) {
+        List<String> sources = new ArrayList<>(parents.size());
+        for (VectorChunk parent : parents) {
+            sources.add(parent == null ? null
+                    : (StringUtils.hasText(parent.getEmbeddingText())
+                            ? parent.getEmbeddingText() : parent.getContent()));
+        }
+        return sources;
     }
 
     /**
@@ -114,7 +253,12 @@ public class IndexerNode implements IngestionNode {
     private Map<String, Object> buildMeta(VectorChunk chunk, IngestionContext context,
                                           Map<String, Object> contextMeta, IndexerSettings settings) {
         Map<String, Object> meta = new HashMap<>();
-        meta.put("doc_id", context.getTaskId());
+        // 文档身份用 context.docId（调用方可指定，如 LiveRAG 导入器传源 urn），缺失才回退 taskId。
+        // 早先直接写 taskId：那时调用方都不传 docId、effectiveDocId 恰好等于 taskId，所以看不出问题；
+        // 一旦调用方指定了 docId（文档身份与任务身份分离），写 taskId 就会让 metadata.doc_id
+        // 与评测的 expected_doc_ids 对不上——检索命中了也判不中，整轮评测全 0。
+        meta.put("doc_id", StringUtils.hasText(context.getDocId())
+                ? context.getDocId() : context.getTaskId());
         // 集合归属：检索侧按 collection 过滤的依据（null=独立文件，不写该键）
         if (context.getCollectionId() != null) {
             meta.put("collection_id", context.getCollectionId());

@@ -1,21 +1,19 @@
 package com.jjx.customer.platform.mcp;
 
-import com.jjx.customer.platform.agent.framework.tool.AgentTool;
-import com.jjx.customer.platform.agent.framework.tool.ToolInvocation;
+import com.agentframework.engine.toolexecutor.ToolInput;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.definition.ToolDefinition;
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** MCP 桥接验证：命名前缀、schema 透传、参数序列化、错误回喂。 */
+/** MCP 桥接验证（新内核 Tool 契约）：命名前缀、schema 投影、参数序列化、错误回喂。 */
 class McpExtensionToolTest {
 
     private static ToolCallback callback(AtomicReference<String> captured, boolean fail) {
@@ -23,7 +21,8 @@ class McpExtensionToolTest {
             private final ToolDefinition definition = ToolDefinition.builder()
                     .name("search_logs")
                     .description("外部日志检索")
-                    .inputSchema("{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}")
+                    .inputSchema("{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}},"
+                            + "\"required\":[\"q\"]}")
                     .build();
 
             @Override
@@ -43,28 +42,29 @@ class McpExtensionToolTest {
     }
 
     @Test
-    void 桥接为扩展工具_名字带前缀_元数据透传_参数序列化() {
+    void 桥接为内核工具_名字带前缀_schema投影_参数序列化() {
         AtomicReference<String> captured = new AtomicReference<>();
         McpExtensionTool tool = new McpExtensionTool(callback(captured, false), "mcp_");
 
-        assertEquals("mcp_search_logs", tool.name());
-        assertEquals("外部日志检索", tool.description());
-        assertTrue(tool.inputSchema().contains("\"q\""));
+        assertEquals("mcp_search_logs", tool.id());
+        assertEquals("外部日志检索", tool.schema().description());
+        assertTrue(tool.schema().parameterNames().contains("q"));
+        assertTrue(tool.schema().requiredParameters().contains("q"));
 
-        var result = tool.execute(new ToolInvocation("mcp_search_logs", Map.of("q", "冲红"), null));
+        var result = tool.invoke(ToolInput.of(Map.of("q", "冲红")), null);
 
-        assertTrue(result.ok());
-        assertEquals("外部命中 2 条", result.content());
+        assertTrue(result.success());
+        assertEquals("外部命中 2 条", result.output());
         assertTrue(captured.get().contains("\"q\":\"冲红\""));
     }
 
     @Test
-    void 外部工具抛错_转为错误结果不打断链路() {
+    void 外部工具抛错_转为失败结果不打断链路() {
         McpExtensionTool tool = new McpExtensionTool(callback(new AtomicReference<>(), true), "mcp_");
 
-        var result = tool.execute(new ToolInvocation("mcp_search_logs", Map.of(), null));
+        var result = tool.invoke(ToolInput.of(Map.of()), null);
 
-        assertFalse(result.ok());
+        assertFalse(result.success());
         assertTrue(result.error().contains("MCP 服务不可用"));
     }
 

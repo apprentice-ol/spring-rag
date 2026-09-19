@@ -1,7 +1,7 @@
 package com.jjx.customer.platform.business.rest.controller;
 
 import com.jjx.customer.platform.business.FrameworkOpsRunner;
-import com.jjx.customer.platform.business.tools.ops.OpsSlotSpecs;
+import com.jjx.customer.platform.business.ops.OpsSlotCatalog;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievalBudget;
 import com.jjx.customer.platform.knowledge.retrieval.SearchContext;
 import com.jjx.customer.platform.config.properties.AgentProperties;
@@ -46,7 +46,7 @@ public class DiagnoseController {
     public DiagnoseResponse diagnose(@RequestParam String traceId) {
         // 框架主线：与对话链路同一实现（REST 为单轮：conversationId 为空，不落会话）
         FrameworkOpsRunner.OpsAnswer answer = frameworkOpsRunner.run("按 traceId 诊断：" + traceId,
-                OpsSlotSpecs.sanitized(Map.of(OpsSlotSpecs.TRACE_ID, traceId)), null);
+                OpsSlotCatalog.sanitized(Map.of(OpsSlotCatalog.TRACE_ID, traceId)), null);
         return new DiagnoseResponse(traceId, answer.text(), answer.kind().name(),
                 answer.trace() == null ? 0 : answer.trace().getLlmCallCount());
     }

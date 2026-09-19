@@ -93,9 +93,12 @@ public class IngestionEngineService {
         if (removed > 0) {
             log.info("[INGEST] 幂等清理: docId={} 删除残留向量 {} 条", effectiveDocId, removed);
         }
+        // 父块存档同批清理（小块检索：sa_chunk_parent 与向量表同生命周期）
+        jdbcTemplate.update("DELETE FROM sa_chunk_parent WHERE doc_id = ?", effectiveDocId);
 
         IngestionContext ctx = IngestionContext.builder()
                 .taskId(taskId)
+                .docId(effectiveDocId)
                 .pipelineId(pipelineId)
                 .source(source)
                 .rawBytes(bytes)

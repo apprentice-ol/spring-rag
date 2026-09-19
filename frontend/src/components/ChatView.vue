@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue'
+import { ref, nextTick, watch, computed, onMounted, onUnmounted } from 'vue'
 import {
   SendOutlined, UserOutlined, RobotOutlined,
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
@@ -9,11 +9,12 @@ import { streamChat, cancelChat, type AgentTrace, type Citation } from '../api/c
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
-import { chatParadigmOptions, normalizeParadigm } from './evalShared'
+import { activeParadigms, chatParadigmOptions } from './evalShared'
 import { messages, activeId, currentTitle, hasEarlierMessages, loadEarlierMessages, type Msg } from '../composables/useChatState'
 import { useIsMobile } from '../composables/useSplitter'
 import ConversationList from './ConversationList.vue'
 import AgentTraceTree from './AgentTraceTree.vue'
+import ParadigmHelp from './ParadigmHelp.vue'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 
@@ -97,7 +98,9 @@ const sending = ref(false)
 /**
  * 当前 agent 范式（'' = 自动档：不带 agent 参数，后端意图识别路由）。
  * localStorage 旧值迁移：knowledge 是历史默认值（无法证明用户主动选择过）→ 归一为自动；
- * naive/react 旧值经 normalizeParadigm 映射新范式后保留为显式选择。
+ * 其余非当前范式的旧值（naive/react/crag…）也回落到自动档——旧值→新范式的解析
+ * 由后端 AgentCatalog.ALIASES 负责，前端不再维护那份映射。回落而非原样保留，
+ * 是为了避免选择器里选中的值不在选项列表中（显示空白）。
  */
 const agent = ref(migrateAgentChoice(localStorage.getItem('rag_chat_agent')))
 watch(agent, (v) => {
@@ -107,7 +110,7 @@ watch(agent, (v) => {
 
 function migrateAgentChoice(v: string | null): string {
   if (!v || v === 'knowledge') return '' // 自动档（历史默认值，非显式选择）
-  return normalizeParadigm(v)
+  return activeParadigms().some((p) => p.value === v) ? v : ''
 }
 const logRef = ref<HTMLElement>()
 const inputRef = ref<{ focus: () => void } | null>(null)
@@ -194,9 +197,95 @@ async function stop() {
 const traceDrawerOpen = ref(false)
 const drawerTrace = ref<AgentTrace | null>(null)
 const traceLoading = ref(false)
+/** 轨迹配套上下文：本轮提问（首步输入口径）与回答引用（命中表「被引用」标注） */
+const drawerQuestion = ref<string | undefined>(undefined)
+const drawerCitations = ref<{ ref: number }[] | undefined>(undefined)
+/* ============ 轨迹抽屉宽度（可拖拽，偏好落 localStorage） ============
+   一屏装得下多少轨迹，取决于读者此刻在看什么：扫一眼步骤名 720 够，逐条比对
+   命中表的分数与通道就嫌挤。把宽度交给他自己拖，比替他猜一个固定值更靠谱。
+
+   上限跟着窗口走而不是取常量：一条 1200px 的抽屉在 1280 宽的屏上会把正文整个盖住，
+   而抽屉的用途恰恰是「对着回答看轨迹」——留不下一列正文就没意义了。 */
+const TRACE_W_KEY = 'rag-trace-w'
+/** 默认比 agent-framework 的 720 宽一档：那边命中表 6 列，这边多一列「引用」 */
+const TRACE_W_DEFAULT = 800
+const TRACE_W_MIN = 480
+const TRACE_W_MAX = 1200
+
+function clampTraceWidth(value: number): number {
+  const viewport = typeof window === 'undefined' ? 800 : window.innerWidth
+  const max = Math.max(TRACE_W_MIN, Math.min(TRACE_W_MAX, Math.round(viewport * 0.92)))
+  if (!Number.isFinite(value)) {
+    return Math.min(TRACE_W_DEFAULT, max)
+  }
+  return Math.min(max, Math.max(TRACE_W_MIN, Math.round(value)))
+}
+
+/** 存储里的值可能是在更大的屏上写下的，读回来按当前窗口再钳一次。 */
+function readStoredTraceWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(TRACE_W_KEY)
+    return raw === null ? TRACE_W_DEFAULT : Number(raw)
+  } catch {
+    return TRACE_W_DEFAULT // 隐私模式下 localStorage 不可用
+  }
+}
+
+const traceDrawerWidth = ref(clampTraceWidth(readStoredTraceWidth()))
+
+function persistTraceWidth() {
+  try {
+    window.localStorage.setItem(TRACE_W_KEY, String(traceDrawerWidth.value))
+  } catch {
+    /* 写入失败只影响下次打开的默认宽度，不值得打扰用户 */
+  }
+}
+
+/** 拖动中只改内存值，松手才落盘——每帧写一次 localStorage 是白费。 */
+function startTraceResize(event: PointerEvent) {
+  event.preventDefault()
+  const onMove = (move: PointerEvent) => {
+    // 抽屉贴右边，所以「指针到窗口右缘的距离」才是它该有的宽度
+    traceDrawerWidth.value = clampTraceWidth(window.innerWidth - move.clientX)
+  }
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    persistTraceWidth()
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
+function resetTraceWidth() {
+  traceDrawerWidth.value = clampTraceWidth(TRACE_W_DEFAULT)
+  persistTraceWidth()
+}
+
+/** 键盘微调：手柄可聚焦，方向键各挪 40px。 */
+function nudgeTraceResize(step: number) {
+  traceDrawerWidth.value = clampTraceWidth(traceDrawerWidth.value + step)
+  persistTraceWidth()
+}
+
+/** 窗口变小后原宽度可能盖住整个正文，跟着收一收。 */
+function onViewportResize() {
+  const clamped = clampTraceWidth(traceDrawerWidth.value)
+  if (clamped !== traceDrawerWidth.value) {
+    traceDrawerWidth.value = clamped
+  }
+}
+onMounted(() => window.addEventListener('resize', onViewportResize))
+onUnmounted(() => window.removeEventListener('resize', onViewportResize))
 
 async function openTrace(m: Msg) {
   traceDrawerOpen.value = true
+  // 该回答前最近一条 user 消息即本轮提问；引用来自消息自身（与正文 [N] 角标同源）
+  const idx = messages.value.indexOf(m)
+  drawerQuestion.value = idx > 0
+    ? [...messages.value].slice(0, idx).reverse().find((x) => x.role === 'user')?.content
+    : undefined
+  drawerCitations.value = m.citations
   if (m.trace) { drawerTrace.value = m.trace; return }
   drawerTrace.value = null
   if (!m.id) return
@@ -419,9 +508,10 @@ function fillSuggestion(s: string) {
             <span class="bar-label">范式</span>
             <a-select v-model:value="agent" size="small" class="bar-select" :disabled="sending" :popup-match-select-width="false">
               <a-select-option v-for="p in chatParadigmOptions()" :key="p.value || 'auto'" :value="p.value">
-                {{ p.label }} · {{ p.desc }}
+                {{ p.label }}
               </a-select-option>
             </a-select>
+            <ParadigmHelp :options="chatParadigmOptions()" />
           </div>
           <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
           <!-- 同一按钮：空闲=主色发送，生成中=红色描边停止（实心方块符号；停止态不可带 loading——antd loading 按钮不可点击） -->
@@ -435,15 +525,37 @@ function fillSuggestion(s: string) {
       </div>
     </div>
 
-    <!-- 轨迹回看抽屉（复用 Agent 对照面板的轨迹树） -->
+    <!-- 轨迹回看抽屉（复用 Agent 对照面板的轨迹树；宽度可拖，默认 720）
+         手柄是抽屉左缘上的一条全高抓取带：抽屉贴着右边，所以「指针到窗口右缘的距离」
+         就是宽度。用 fixed 定位跟随宽度而不是塞进抽屉内部——塞进去就得和 antd 的
+         body padding / header 层叠较劲，还要提防被 overflow 裁掉。 -->
+    <div
+      v-if="traceDrawerOpen"
+      class="trace-resize-handle"
+      :style="{ right: `${traceDrawerWidth}px` }"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      aria-label="调整轨迹抽屉宽度，双击恢复默认"
+      @pointerdown="startTraceResize"
+      @dblclick="resetTraceWidth"
+      @keydown.left.prevent="nudgeTraceResize(-40)"
+      @keydown.right.prevent="nudgeTraceResize(40)"
+    />
     <a-drawer
       :open="traceDrawerOpen"
-      :width="560"
+      :width="traceDrawerWidth"
       title="Agent 执行轨迹"
+      :body-style="{ padding: '16px 18px' }"
       @update:open="(v: boolean) => (traceDrawerOpen = v)"
     >
       <a-spin :spinning="traceLoading">
-        <AgentTraceTree v-if="drawerTrace" :trace="drawerTrace" />
+        <AgentTraceTree
+          v-if="drawerTrace"
+          :trace="drawerTrace"
+          :question="drawerQuestion"
+          :citations="drawerCitations"
+        />
         <a-empty v-else-if="!traceLoading" description="该消息无 agent 轨迹（闲聊/诊断分支，或早于本功能的数据）" />
       </a-spin>
     </a-drawer>
@@ -573,6 +685,20 @@ function fillSuggestion(s: string) {
 .typing-indicator span:nth-child(2){animation-delay:.2s}
 .typing-indicator span:nth-child(3){animation-delay:.4s}
 @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+
+/* 轨迹抽屉的拖宽手柄：贴着抽屉左缘的一条透明抓取带，hover/聚焦时才显形——
+   常驻的竖线在每一轮对话旁边都插一根，比它能帮上的忙更吵。 */
+.trace-resize-handle {
+  position: fixed; top: 0; bottom: 0; width: 8px;
+  z-index: 1001; /* antd 抽屉内容层的 z-index 是 1000，手柄要浮在它上面才抓得到 */
+  cursor: col-resize; outline: none;
+}
+.trace-resize-handle::after {
+  content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px;
+  background: transparent; transition: background .12s ease;
+}
+.trace-resize-handle:hover::after,
+.trace-resize-handle:focus-visible::after { background: var(--color-primary, #0064fa); }
 
 /* 气泡操作条（轨迹 / traceId / OO 链路） */
 /* ── 引用溯源 ── */

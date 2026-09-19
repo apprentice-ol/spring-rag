@@ -1,6 +1,6 @@
 package com.jjx.customer.platform.knowledge.postprocessor;
 
-import cn.hutool.crypto.digest.DigestUtil;
+import com.jjx.customer.platform.knowledge.retrieval.ChunkIdentity;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievedChunk;
 import com.jjx.customer.platform.knowledge.retrieval.SearchChannelResult;
 import com.jjx.customer.platform.knowledge.retrieval.SearchContext;
@@ -13,9 +13,14 @@ import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 /**
  * 检索结果去重处理器（责任链第一环）。
  * <p>
- * 按内容全文 SHA-256 去重，保留首次出现的条目（不用前缀截断，避免前缀相同的同章节段被误判重复）。
+ * 按 {@link ChunkIdentity}（{@code doc_id} + 内容全文 SHA-256）去重，保留首次出现的条目
+ * （不用前缀截断，避免前缀相同的同章节段被误判重复）。
  * 多通道检索时同一文档可能被多个通道命中，需要去重后再融合。
  * </p>
+ *
+ * <p><b>键必须带 doc_id</b>：只用内容哈希会把"同一段文本挂在多个 doc_id 下"的孪生副本
+ * 合并掉（LiveRAG 语料即如此：同一篇文章被多道题引用，导入成多个 doc_id），
+ * 期望文档可能被合没、而评测按 doc_id 打分。详见 {@link ChunkIdentity}。</p>
  */
 @Component
 public class DeduplicationPostProcessor implements SearchResultPostProcessor {
@@ -42,11 +47,7 @@ public class DeduplicationPostProcessor implements SearchResultPostProcessor {
                                          SearchContext context) {
         LinkedHashSet<String> seen = new LinkedHashSet<>();
         return chunks.stream()
-                .filter(c -> seen.add(key(c.getContent())))
+                .filter(c -> seen.add(ChunkIdentity.of(c)))
                 .toList();
-    }
-
-    private String key(String content) {
-        return DigestUtil.sha256Hex(content == null ? "" : content);
     }
 }

@@ -22,6 +22,40 @@ export const METRIC_KNOWLEDGE: Record<string, MetricKnow> = {
           ? '当前值良好：少量题漏检，可调大 recallBudget / 降低相似度阈值。'
           : '当前值偏低：存在系统性漏检，优先查分块粒度与多通道召回参数。',
   },
+  context_recall: {
+    label: '上下文召回 Context Recall',
+    stage: '精排环节',
+    dir: '越高越好',
+    desc:
+      '黄金文档里有多少篇**真的进了最后推送给 LLM 的上下文**（文档级去重后计数）。'
+      + '与「召回率@k」的差别在取数口径：召回率@k 看检索引擎返回的前 k 条，'
+      + '本指标看经过 contextTopK 裁剪、分组合并之后真正进上下文的那一批 —— '
+      + '两者之差就是「检索到了、但没进上下文」的损耗，这是调 contextTopK 的直接依据。',
+    judge: (m) =>
+      m >= 0.95
+        ? '当前值优秀：黄金文档基本都进了上下文。'
+        : m >= 0.8
+          ? '当前值良好：个别题的支持文档没进上下文，可调大 contextTopK。'
+          : '当前值偏低：支持文档常被挡在上下文之外，优先查 contextTopK 与精排阈值。',
+  },
+  context_precision: {
+    label: '上下文精确率 Context Precision',
+    stage: '精排环节',
+    dir: '越高越好',
+    desc:
+      '推送给 LLM 的上下文里，有多少篇是黄金文档。'
+      + '**分母是上下文里实际出现的文档数（动态），不是 k** —— 这正是它与「精确率@k」的分水岭。'
+      + '精确率@k 的分母写死为 k，当一道题只有一篇黄金文档时上限就是 1/k（k=5 即 0.2），'
+      + '恒等于天花板、已失去区分度；本指标的分母随上下文里混进几篇文档而变，'
+      + '所以它衡量的是「喂给模型的资料干不干净」——混入的无关文档越多，这一项越低。'
+      + '1.0 表示上下文里只有黄金文档、没有干扰。',
+    judge: (m) =>
+      m >= 0.99
+        ? '当前值优秀：上下文里的文档几乎全是黄金文档，没有干扰。'
+        : m >= 0.8
+          ? '当前值良好：偶有无关文档混入上下文，可收紧 Rerank 阈值或减小 contextTopK。'
+          : '当前值偏低：上下文里混入了较多无关文档，会稀释模型注意力，优先查 Rerank 阈值与上下文条数。',
+  },
   precision_at: {
     label: '精确率 Precision@k',
     stage: '排序环节',
@@ -97,6 +131,8 @@ const METRIC_CN: Record<string, string> = {
   ndcg_at: 'nDCG',
   answer_correctness: '答案正确性',
   answer_faithfulness: '答案忠实度',
+  context_recall: '上下文召回',
+  context_precision: '上下文精确率',
 }
 
 /** 指标名 → 中文标签（带 k），如 recall_at_5 → 召回率@5；mrr → MRR；未知指标原样返回 */
@@ -232,27 +268,55 @@ export function categoryLabel(v: string | null | undefined): string {
 }
 
 /**
- * agent 范式选项（与后端 core.Agent 对齐）。静态默认 + refreshParadigms() 从 GET /agent/registry
- * 拉取覆盖（后端加范式前端零改动）；paradigmLabel 对历史范式（naive/react）原样回退展示。
+ * agent 范式选项（与后端 AgentCatalog 对齐）。静态默认 + refreshParadigms() 从 GET /agent/registry
+ * 拉取覆盖（后端加范式前端零改动）。只列**当前**范式——历史范式见 LEGACY_PARADIGM_LABELS（纯展示）。
+ *
+ * <p>desc 描述的是<b>现在实际跑的那条链</b>，不是设计稿——查过源码再改：
+ * 检索链早已不是"单次检索直出"，react 也不再是"原生 function calling"（那是 JSON 协议的工具循环）。
+ * 说明文字失真的代价是读者拿它当依据做判断，比没有说明更坏。</p>
  */
 export const PARADIGMS: { value: string; label: string; desc: string }[] = [
-  { value: 'knowledge', label: 'Knowledge', desc: '单次多通道检索直出答案，速度最快（eval 基线）' },
-  { value: 'ops_diagnose', label: '运维诊断', desc: '先追问补齐槽位，再按固定排查骨架分阶段调工具，支持 replan' },
-  { value: 'react_loop', label: 'ReAct Loop', desc: '模型自主循环：检索→评分→重排→决定何时停（原生 function calling）' },
-  { value: 'naive', label: 'Naive', desc: '单次检索（历史范式，已由 Knowledge 取代）' },
-  { value: 'react', label: 'ReAct', desc: 'prompt 驱动自主循环（历史范式，已由 ReAct Loop 取代）' },
+  {
+    value: 'knowledge',
+    label: 'Knowledge',
+    desc: '知识问答：归一化 → 意图识别 → 路由 → 问题重写 → 多通道检索（向量 + BM25 → RRF → 精排）'
+      + ' → 充分性判定（命中不足则扩词重查，最多 3 轮）→ 终态。单次检索轴，速度最快，评测基线。',
+  },
+  {
+    value: 'ops_diagnose',
+    label: '运维诊断',
+    desc: '三阶段排查：定位（查日志/查文档）→ 纠正（生成报文/调整）→ 校验。'
+      + '槽位不全时先追问挂起，阶段间可 replan；不进检索链，直答交付。',
+  },
+  {
+    value: 'react_loop',
+    label: 'ReAct Loop',
+    desc: '同一段查询理解链，之后交给模型自主循环：think（产出工具调用 JSON）→ act（执行检索）'
+      + '→ decide（还有调用就继续，否则收尾）。跨轮命中累积，轮次有硬上限。',
+  },
 ]
 
-/** 历史范式值：后端已删（请求经 alias 映射），仅历史 run/轨迹的列展示用，不进用户可选列表 */
-const LEGACY_PARADIGM_VALUES = new Set(['naive', 'react'])
-
-export function isLegacyParadigm(v: string): boolean {
-  return LEGACY_PARADIGM_VALUES.has(v)
+/**
+ * 历史范式的**展示标签**（纯展示，不参与任何逻辑）。
+ *
+ * <p>这些 id 后端 AgentCatalog 已无、能力清单也不返回，但旧 run / 旧轨迹的 paradigm 列
+ * 仍会出现——实测历史数据里 naive 有 37 个 run / 3131 用例，crag、plan_execute、self_rag、
+ * react 各有若干。没有这张表，它们只能显示原始英文 id。</p>
+ *
+ * <p>旧值 → 新范式的**解析不在这里**：那是后端 {@code AgentCatalog.ALIASES} 的职责
+ * （naive→knowledge、react→react_loop），前端不再维护继任关系。</p>
+ */
+const LEGACY_PARADIGM_LABELS: Record<string, string> = {
+  naive: 'Naive',
+  react: 'ReAct',
+  crag: 'CRAG',
+  plan_execute: 'Plan-Execute',
+  self_rag: 'Self-RAG',
 }
 
-/** 用户可选范式（剔除历史项）。在渲染处调用，refreshParadigms 覆盖后仍生效。 */
+/** 用户可选范式。PARADIGMS 只含当前范式，故无需过滤；refreshParadigms 覆盖后仍生效。 */
 export function activeParadigms(): { value: string; label: string; desc: string }[] {
-  return PARADIGMS.filter((p) => !LEGACY_PARADIGM_VALUES.has(p.value))
+  return PARADIGMS
 }
 
 /**
@@ -271,13 +335,6 @@ export function chatParadigmOptions(): { value: string; label: string; desc: str
   return [AUTO_PARADIGM, ...activeParadigms()]
 }
 
-/** 旧范式 → 新范式（与后端 AgentRegistry alias 一致）；新范式原样返回，空值回落默认 knowledge */
-export function normalizeParadigm(v: string | null | undefined): string {
-  if (v === 'naive') return 'knowledge'
-  if (v === 'react') return 'react_loop'
-  return v || 'knowledge'
-}
-
 /** 从后端能力清单刷新范式选项（App 挂载时调用一次；失败保留静态默认） */
 export async function refreshParadigms(): Promise<void> {
   try {
@@ -285,17 +342,15 @@ export async function refreshParadigms(): Promise<void> {
     const agents = data?.agents as { type: string; label: string; description: string }[] | undefined
     if (Array.isArray(agents) && agents.length) {
       const fresh = agents.map((a) => ({ value: a.type, label: a.label || a.type, desc: a.description || '' }))
-      // 历史范式（naive/react）保留在尾部，供旧 run 记录的 paradigm 列展示
-      const legacy = PARADIGMS.filter((p) => p.value === 'naive' || p.value === 'react')
-      PARADIGMS.splice(0, PARADIGMS.length, ...fresh, ...legacy)
+      PARADIGMS.splice(0, PARADIGMS.length, ...fresh)
     }
   } catch {
     /* 后端未就绪时保留静态默认 */
   }
 }
 
-/** 范式 value → 中文标签；未知值原样返回，空值返回 '-' */
+/** 范式 value → 标签；历史范式回退到 LEGACY_PARADIGM_LABELS（纯展示），未知值原样返回 */
 export function paradigmLabel(v: string | null | undefined): string {
   if (!v) return '-'
-  return PARADIGMS.find((p) => p.value === v)?.label ?? v
+  return PARADIGMS.find((p) => p.value === v)?.label ?? LEGACY_PARADIGM_LABELS[v] ?? v
 }

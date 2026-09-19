@@ -5,6 +5,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.jjx.customer.platform.knowledge.retrieval.ChunkIdentity;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievedChunk;
 import com.jjx.customer.platform.knowledge.retrieval.SearchChannelType;
 import com.jjx.ai.llmobservability.observation.logging.TelemetryStructuredLog;
@@ -66,6 +67,15 @@ public class BaiLianRerankClient implements RerankClient {
     @Value("${rag.rerank.timeout-ms:8000}")
     private long rerankTimeoutMs;
 
+    /**
+     * 分批精排的批大小（0 或负数 = 不分批，一次喂全部）。
+     *
+     * <p>12 是实测的瘦请求区间上界（≈12 条 × 440 字 ≈ 5k 字符，远低于分数衰减拐点）；
+     * 候选池 ≤ 该值时退化为单次调用，行为与分批前一致。</p>
+     */
+    @Value("${rag.rerank.batch-size:12}")
+    private int batchSize;
+
     /** 规范化后的最终请求 URL（baseUrl 启动期固定，无需每次调用重算） */
     private String rerankUrl;
 
@@ -123,7 +133,35 @@ public class BaiLianRerankClient implements RerankClient {
         return doRerank(query, deduped, Math.min(topN, deduped.size()));
     }
 
+    /**
+     * 分批精排：候选超过 {@code batchSize} 时按批调用（每批都是瘦请求），跨批按分数合并后取 topN。
+     *
+     * <p><b>为什么必须分批</b>：实测 relevance_score 受请求总长影响——同一文档在 ~12k 字符的
+     * 请求里得 0.349，在 ~55k 字符里掉到 0.208。候选池放大后（小块检索配套的 recallBudget /
+     * candidateLimit 放宽）一次性喂进去会把全池分数压低、正确结果被 min-relevance 误杀。
+     * 分批让每批评分都落在可比区间，合并后排序才有意义。</p>
+     *
+     * <p>实测（1954 燃烧三要素，109 候选）：一次喂 47k 字符 → 期望文档 0.2822（被砍）、全池仅 6 条过阈值；
+     * 分 12 条一批 → 期望文档 0.3857（过阈值）、全池 60 条过阈值。</p>
+     */
     private List<RetrievedChunk> doRerank(String query, List<RetrievedChunk> candidates, int topN) {
+        if (batchSize <= 0 || candidates.size() <= batchSize) {
+            return doRerankBatch(query, candidates, topN);
+        }
+        List<RetrievedChunk> merged = new ArrayList<>(candidates.size());
+        for (int from = 0; from < candidates.size(); from += batchSize) {
+            List<RetrievedChunk> batch = candidates.subList(from,
+                    Math.min(from + batchSize, candidates.size()));
+            merged.addAll(doRerankBatch(query, batch, batch.size()));
+        }
+        merged.sort((a, b) -> Double.compare(
+                b.getScore() == null ? 0.0 : b.getScore(),
+                a.getScore() == null ? 0.0 : a.getScore()));
+        return merged.size() <= topN ? merged : new ArrayList<>(merged.subList(0, topN));
+    }
+
+    /** 单批精排（原 doRerank 逻辑，一批一次 HTTP）。 */
+    private List<RetrievedChunk> doRerankBatch(String query, List<RetrievedChunk> candidates, int topN) {
         JsonObject reqBody = new JsonObject();
         reqBody.addProperty("model", model);
 
@@ -257,12 +295,10 @@ public class BaiLianRerankClient implements RerankClient {
         List<RetrievedChunk> result = new ArrayList<>(chunks.size());
         Set<String> seen = new HashSet<>();
         for (RetrievedChunk c : chunks) {
-            // metadata 落库字段名为 doc_id（见 IndexerNode），此处需一致，否则去重键恒空、去重失效
-            String id = c.getMetadata() != null
-                    ? String.valueOf(c.getMetadata().getOrDefault("doc_id", ""))
-                    : "";
-            // 去重键用 doc_id + 全文：hashCode 有碰撞概率（误去重），且 content 为 null 时直接 NPE
-            if (seen.add(id + ":" + (c.getContent() == null ? "" : c.getContent()))) {
+            // 去重键统一走 ChunkIdentity（doc_id + 全文 SHA-256）：与 DeduplicationPostProcessor /
+            // FusionPostProcessor 同一套定义——三处各写一份正是先前口径分岔的来源。
+            // 不用 hashCode：有碰撞概率（误去重）；content 为 null 时 ChunkIdentity 内部兜底不 NPE。
+            if (seen.add(ChunkIdentity.of(c))) {
                 result.add(c);
             }
         }

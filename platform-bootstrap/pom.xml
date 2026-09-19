@@ -36,10 +36,10 @@
             <groupId>com.jjx.customer</groupId>
             <artifactId>platform-common</artifactId>
         </dependency>
-        <!-- Agent 框架（本仓源码模块 platform-agent-framework；无 starter，装配在本模块 @Configuration 里） -->
+        <!-- 新 agent 内核（源码并入，groupId 保持上游 com.agentframework） -->
         <dependency>
             <groupId>com.jjx.customer</groupId>
-            <artifactId>platform-agent-framework</artifactId>
+            <artifactId>platform-agent-core</artifactId>
         </dependency>
         <!-- 公共可观测组件（@TraceStep/Telemetry/TelemetryLogger/sink链/传播，Starter 自动装配） -->
         <dependency>

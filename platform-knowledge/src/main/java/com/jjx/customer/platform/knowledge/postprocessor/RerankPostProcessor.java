@@ -7,6 +7,7 @@ import com.jjx.customer.platform.knowledge.retrieval.SearchChannelResult;
 import com.jjx.customer.platform.knowledge.retrieval.SearchContext;
 import com.jjx.customer.platform.config.properties.ChatProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.stereotype.Component;
 
@@ -30,6 +31,17 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
 
     private final RerankClient rerankClient;
     private final ChatProperties chatProperties;
+
+    /**
+     * 小块检索超采倍数（父块聚合在后，order 11）：同父多子命中会被折叠成一个席位，
+     * rerank 只出 topK 个子块会让最终父块数 < topK（预算被折叠吃掉）。
+     * 仅当候选里确有子块（带 parent_key）时生效——存量语料行为零变化。
+     */
+    @Value("${rag.search.parent.rerank-overfetch:3}")
+    private int parentOverfetch;
+
+    @Value("${rag.search.parent.enabled:true}")
+    private boolean parentEnabled;
 
     public RerankPostProcessor(List<RerankClient> rerankClients, ChatProperties chatProperties) {
         // 优先使用非 noop 的客户端
@@ -70,6 +82,11 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
         int topK = context.getBudget() != null
                 ? context.getBudget().getContextTopK()
                 : context.getTopK();
+        // 子块模式超采：父块聚合会把同父子块折叠成单席位，进量不放大则最终条数 < topK。
+        // 超采后请求仍瘦（子块短文本，topK×3 ≈ 12k 字符，远低于衰减阈值）。
+        if (parentEnabled && parentOverfetch > 1 && hasChildChunk(chunks)) {
+            topK = topK * parentOverfetch;
+        }
 
         long t0 = System.currentTimeMillis();
         List<RetrievedChunk> reranked = rerankClient.rerank(query, chunks, topK);
@@ -91,5 +108,11 @@ public class RerankPostProcessor implements SearchResultPostProcessor {
                 System.currentTimeMillis() - t0);
 
         return filtered;
+    }
+
+    /** 候选里是否存在子块（带 parent_key 标记）——超采只在子块世界有意义。 */
+    private static boolean hasChildChunk(List<RetrievedChunk> chunks) {
+        return chunks.stream().anyMatch(c -> c.getMetadata() != null
+                && c.getMetadata().get("parent_key") instanceof String key && !key.isBlank());
     }
 }

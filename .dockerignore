@@ -13,7 +13,7 @@ frontend/dist/
 *.tar
 *.tar.gz
 openobserve.tar
-springai-rag.tar.gz
+customer-platform.tar.gz
 app.jar
 
 # ===== IDE / 版本控制 / 本地配置 =====

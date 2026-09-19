@@ -3,9 +3,7 @@ package com.jjx.customer.platform.prompt.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jjx.customer.platform.agent.framework.agent.AgentRegistry;
-import com.jjx.customer.platform.agent.framework.prompt.PromptAssembler;
-import com.jjx.customer.platform.agent.framework.prompt.PromptSnapshot;
+import com.jjx.customer.platform.prompt.snapshot.PromptSnapshot;
 import com.jjx.customer.platform.prompt.entity.PromptBindingEntity;
 import com.jjx.customer.platform.prompt.entity.PromptBundleEntity;
 import com.jjx.customer.platform.prompt.entity.PromptBundleReleaseEntity;
@@ -41,7 +39,7 @@ import java.util.Map;
  * {@link #resolveByReleases} 是会话粘性的实现（release 不可变故可复现；spec 失效回退当前绑定 + warn）。</p>
  */
 @Slf4j
-@Service
+
 @RequiredArgsConstructor
 public class PromptBindingService {
 
@@ -51,8 +49,10 @@ public class PromptBindingService {
     private final PromptMapper promptMapper;
     private final PromptVersionMapper versionMapper;
     private final PromptStore promptStore;
-    private final AgentRegistry agentRegistry;
     private final ObjectMapper objectMapper;
+
+    /** agentType → 绑定必需 key 清单（由装配方从 Agent 目录注入，本模块不反向依赖 business）。 */
+    private final java.util.Map<String, java.util.List<String>> requiredKeysByAgent;
 
     /** 按骨架解析生效快照（pipeline 装配 AgentTask 时调用；agentType 未注册回基线空集语义）。 */
     public PromptSnapshot resolve(String agentType) {
@@ -68,7 +68,7 @@ public class PromptBindingService {
         Map<String, String> contents = resolveContents(m.items());
         requireKeysCovered(agentType, contents);
         return new PromptSnapshot(contents, m.identity(),
-                PromptAssembler.hashOf(contents), m.spec().isEmpty() ? null : m.spec());
+                hashOf(contents), m.spec().isEmpty() ? null : m.spec());
     }
 
     /**
@@ -118,7 +118,7 @@ public class PromptBindingService {
             Map<String, String> contents = resolveContents(merged);
             requireKeysCovered(agentType, contents);
             return new PromptSnapshot(contents, identity.toString(),
-                    PromptAssembler.hashOf(contents), releasesSpec);
+                    hashOf(contents), releasesSpec);
         } catch (Exception e) {
             log.warn("[Prompt绑定] releasesSpec 解析失败({})，回退当前绑定: {}", releasesSpec, e.getMessage());
             return resolve(agentType);
@@ -131,7 +131,7 @@ public class PromptBindingService {
         for (String key : requiredKeys(agentType)) {
             contents.put(key, promptStore.raw(key));
         }
-        return new PromptSnapshot(contents, "基线包", PromptAssembler.hashOf(contents), null);
+        return new PromptSnapshot(contents, "基线包", hashOf(contents), null);
     }
 
     /** 绑定管理：设置/更新绑定（切换即生效——下一请求装配新快照；进行中会话不受影响）。 */
@@ -194,14 +194,26 @@ public class PromptBindingService {
     }
 
     private java.util.Set<String> requiredKeys(String agentType) {
-        return agentRegistry.byId(agentType).map(agent -> {
-            java.util.Set<String> keys = new java.util.LinkedHashSet<>(agent.promptKeys());
-            keys.addAll(agent.workflow().promptKeys());
-            if (agent.workflow().answerPromptKey() != null) {
-                keys.add(agent.workflow().answerPromptKey());
+        return new java.util.LinkedHashSet<>(
+                requiredKeysByAgent.getOrDefault(agentType, java.util.List.of()));
+    }
+
+    /** 稳定内容摘要（与旧内核 PromptAssembler.hashOf 逐字一致）：key 排序 + SOH/STX 串联的 SHA-256 截断 24 hex。 */
+    private static String hashOf(java.util.Map<String, String> contents) {
+        java.util.TreeMap<String, String> sorted = new java.util.TreeMap<>(contents == null ? java.util.Map.of() : contents);
+        StringBuilder sb = new StringBuilder();
+        sorted.forEach((key, value) -> sb.append(key).append((char) 1).append(value).append((char) 2));
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(24);
+            for (int i = 0; i < 12; i++) {
+                hex.append(String.format("%02x", digest[i]));
             }
-            return keys;
-        }).orElse(java.util.Set.of());
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** 追加包的当前 release（items merge 进 merged；identity/spec 拼装）。 */
