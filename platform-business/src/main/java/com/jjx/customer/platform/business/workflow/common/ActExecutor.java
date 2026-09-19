@@ -1,5 +1,4 @@
-package com.jjx.customer.platform.business.ops.executor;
-import com.jjx.customer.platform.business.ops.node.AskMissingExecutor;
+package com.jjx.customer.platform.business.workflow.common;
 
 import com.agentframework.crosscutting.interceptor.InterceptorAttributes;
 import com.agentframework.definition.node.NodeDefinition;
@@ -11,8 +10,8 @@ import com.agentframework.engine.policy.PolicyAttributes;
 import com.agentframework.engine.toolexecutor.*;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.agentframework.runtime.session.Message;
-import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
+import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -45,7 +44,7 @@ public class ActExecutor implements NodeExecutor {
     public static final String PENDING_ASK_SLOTS_SLOT = "pending_ask_slots";
 
     /** 用户补充槽位名（与入口问齐共用，恢复输入经 Input.slots 写入）。 */
-    public static final String USER_CLARIFY_SLOT = AskMissingExecutor.USER_CLARIFY_SLOT;
+    public static final String USER_CLARIFY_SLOT = "user_clarify";
 
     private final String prefix;
 
@@ -155,7 +154,7 @@ public class ActExecutor implements NodeExecutor {
         if (maxLlmCalls > 0 && used >= maxLlmCalls) {
             String reason = "执行预算受限中断：LLM 调用数触及上限 " + maxLlmCalls
                     + "（阶段 " + stageName + "），请缩小排查范围或补充信息后重试";
-            return NodeResult.dynamic(node.id(), reason, OpsDiagnoseWorkflowFactory.ESCALATE_NODE)
+            return NodeResult.dynamic(node.id(), reason, EscalateTerminal.NODE_ID)
                     .withSlotWrite("escalate_reason", reason)
                     .withSlotWrite("has_calls", 0);
         }
@@ -237,7 +236,7 @@ public class ActExecutor implements NodeExecutor {
                 }
                 writes.put("escalate_reason", reason);
                 writes.put("has_calls", 0);
-                return NodeResult.dynamic(node.id(), reason, OpsDiagnoseWorkflowFactory.ESCALATE_NODE)
+                return NodeResult.dynamic(node.id(), reason, EscalateTerminal.NODE_ID)
                         .withSlotWrite("escalate_reason", reason)
                         .withSlotWrite("has_calls", 0);
             }
@@ -292,7 +291,7 @@ public class ActExecutor implements NodeExecutor {
         }
         try {
             com.fasterxml.jackson.databind.JsonNode payload = objectMapper.readTree(json);
-            return com.jjx.customer.platform.business.ops.tool.JsonSchemaValidator.validate(schema, payload);
+            return com.jjx.customer.platform.common.util.JsonSchemaValidator.validate(schema, payload);
         } catch (Exception e) {
             return List.of("产出中的 JSON 代码块无法解析：" + e.getMessage());
         }

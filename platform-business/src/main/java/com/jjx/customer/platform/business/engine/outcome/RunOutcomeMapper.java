@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.engine.outcome;
 
+import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
+
 import com.agentframework.engine.core.RunResult;
 import java.util.Map;
 
@@ -20,10 +22,10 @@ import java.util.Map;
 public final class RunOutcomeMapper {
 
     /** 升级终态节点 id（与 ops 图 {@code TerminalStageModule} 的节点名约定一致）。 */
-    public static final String ESCALATE_NODE_ID = "escalate_node";
+    public static final String ESCALATE_NODE_ID = EscalateTerminal.NODE_ID;
 
     /** 升级原因槽位名（escalate 执行器写、SSE/trace 消费）。 */
-    public static final String ESCALATE_REASON_SLOT = "escalate_reason";
+    public static final String ESCALATE_REASON_SLOT = EscalateTerminal.REASON_SLOT;
 
     private RunOutcomeMapper() {
     }

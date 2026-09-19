@@ -1,5 +1,6 @@
 package com.jjx.customer.platform.business.knowledge.workflow;
 import com.jjx.customer.platform.business.knowledge.node.KbFinishExecutor;
+import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
 import com.jjx.customer.platform.business.knowledge.KbPrompts;
 
 import com.agentframework.definition.node.ConditionNodeDefinition;
@@ -13,8 +14,7 @@ import com.agentframework.definition.region.RegionLoop;
 import com.agentframework.definition.workflow.SlotType;
 import com.agentframework.definition.workflow.WorkflowBuilder;
 import com.agentframework.definition.workflow.WorkflowDefinition;
-import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
-import com.jjx.customer.platform.business.ops.executor.ActExecutor;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import java.util.Map;
 
 /**
@@ -91,15 +91,15 @@ public final class KnowledgeReactGraphFactory {
                 .node(new CustomNodeDefinition(KnowledgeQaGraphFactory.DONE_NODE,
                         KbFinishExecutor.EXECUTOR_REF, Map.of(), "final_output",
                         NodeMeta.empty().withAttribute("terminal", true)))
-                .node(new CustomNodeDefinition(OpsDiagnoseWorkflowFactory.ESCALATE_NODE,
-                        OpsDiagnoseWorkflowFactory.ESCALATE_EXECUTOR, Map.of(), "escalate_reason",
+                .node(new CustomNodeDefinition(EscalateTerminal.NODE_ID,
+                        EscalateTerminal.EXECUTOR_ID, Map.of(), "escalate_reason",
                         NodeMeta.empty().withAttribute("terminal", true)))
                 .edge(THINK_NODE, ACT_NODE)
                 .edge(ACT_NODE, DECIDE_NODE)
                 .edge(DECIDE_NODE, THINK_NODE)
                 .edge(DECIDE_NODE, KnowledgeQaGraphFactory.DONE_NODE)
-                .edge(ACT_NODE, OpsDiagnoseWorkflowFactory.ESCALATE_NODE)
-                .dynamic(ACT_NODE, DECIDE_NODE, OpsDiagnoseWorkflowFactory.ESCALATE_NODE)
+                .edge(ACT_NODE, EscalateTerminal.NODE_ID)
+                .dynamic(ACT_NODE, DECIDE_NODE, EscalateTerminal.NODE_ID)
                 .region(RegionDefinition.of(REGION, Paradigm.TOOL_CALL, THINK_NODE, ACT_NODE, DECIDE_NODE)
                         .withSlotPrefix("react")
                         .withLoop(RegionLoop.of(THINK_NODE, DECIDE_NODE, Math.max(1, maxSteps))

@@ -6,7 +6,7 @@ import com.agentframework.definition.workflow.WorkflowBuilder;
 import com.agentframework.engine.core.EngineBuilder;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.node.ConcludeExecutor;
-import com.jjx.customer.platform.business.ops.executor.EscalateExecutor;
+import com.jjx.customer.platform.business.workflow.common.EscalateExecutor;
 import java.util.Map;
 import java.util.Set;
 

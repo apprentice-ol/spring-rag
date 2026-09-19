@@ -1,4 +1,6 @@
 package com.jjx.customer.platform.business.ops.workflow;
+
+import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
 import com.jjx.customer.platform.business.ops.OpsDiagnosisStages;
 
 import com.agentframework.definition.node.CustomNodeDefinition;
@@ -127,7 +129,7 @@ public final class OpsDiagnoseWorkflowFactory {
     /**
      * 升级终态节点 id。
      */
-    public static final String ESCALATE_NODE = "escalate_node";
+    public static final String ESCALATE_NODE = EscalateTerminal.NODE_ID;
     /**
      * 直答收尾节点 id（终态）。
      */
@@ -170,7 +172,7 @@ public final class OpsDiagnoseWorkflowFactory {
     /**
      * 升级终态执行器注册名。
      */
-    public static final String ESCALATE_EXECUTOR = "ops-escalate";
+    public static final String ESCALATE_EXECUTOR = EscalateTerminal.EXECUTOR_ID;
     /**
      * 直答收尾执行器注册名。
      */

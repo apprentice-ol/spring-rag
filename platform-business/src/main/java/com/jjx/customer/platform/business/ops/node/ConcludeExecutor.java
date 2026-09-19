@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.node;
 
+import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
+
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
 import com.agentframework.engine.core.NodeContext;
@@ -14,7 +16,7 @@ import java.util.Map;
 public class ConcludeExecutor implements NodeExecutor {
 
     /** 阶段产出槽位（后覆盖前）。 EscalateExecutor（workflow.common 域外共用）也读取。 */
-    public static final String[] STAGE_OUTPUTS = {"inv_stage_output", "res_stage_output", "ver_stage_output"};
+    public static final String[] STAGE_OUTPUTS = EscalateTerminal.STAGE_OUTPUT_SLOTS;
 
     @Override
     public NodeType type() {

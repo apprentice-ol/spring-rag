@@ -32,7 +32,7 @@ import com.jjx.customer.platform.business.knowledge.node.KbNormalizeExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbRewriteExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbRouteExecutor;
 import com.jjx.customer.platform.business.knowledge.node.KbShortCircuitExecutor;
-import com.jjx.customer.platform.business.ops.executor.ActExecutor;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.business.knowledge.intent.IntentClassifier;
 import com.jjx.customer.platform.business.knowledge.normalize.QueryRewriter;
 import com.jjx.customer.platform.intent.IntentResult;

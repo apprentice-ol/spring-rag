@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops;
 
+import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
+
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
@@ -38,7 +40,7 @@ import org.junit.jupiter.api.Test;
 class OpsGraphSuspendTest {
 
     /** 边角调用（抽槽 / 自主补全 / replan 裁决）的脚本模型：按调用顺序出队。 */
-    private static final class ScriptedAskModel implements OpsSlotExtractor.Model {
+    private static final class ScriptedAskModel implements SingleTurnModel {
         final ArrayDeque<String> replies = new ArrayDeque<>();
 
         ScriptedAskModel enqueue(String... values) {

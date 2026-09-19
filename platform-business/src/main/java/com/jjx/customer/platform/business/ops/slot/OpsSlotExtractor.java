@@ -1,5 +1,6 @@
 package com.jjx.customer.platform.business.ops.slot;
 
+import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
@@ -40,19 +41,7 @@ public class OpsSlotExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(OpsSlotExtractor.class);
 
-    /** 单轮问答的最小模型接口（生产环境由 LlmClient::ask 提供，测试可注入替身）。 */
-    @FunctionalInterface
-    public interface Model {
-
-        /**
-         * @param system 系统提示
-         * @param user   用户提示
-         * @return 模型输出文本
-         */
-        String ask(String system, String user);
-    }
-
-    private final Model model;
+    private final SingleTurnModel model;
 
     private final ObjectMapper objectMapper;
 
@@ -60,7 +49,7 @@ public class OpsSlotExtractor {
      * @param model        模型入口（null 表示不可用，抽取直接跳过）
      * @param objectMapper JSON 解析
      */
-    public OpsSlotExtractor(Model model, ObjectMapper objectMapper) {
+    public OpsSlotExtractor(SingleTurnModel model, ObjectMapper objectMapper) {
         this.model = model;
         this.objectMapper = objectMapper;
     }

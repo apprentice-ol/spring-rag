@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.node;
-import com.jjx.customer.platform.business.ops.executor.RelativeTimeParser;
+
+import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
+import com.jjx.customer.platform.common.util.RelativeTimeParser;
 
 import com.agentframework.crosscutting.interceptor.InterceptorAttributes;
 import com.agentframework.definition.node.NodeDefinition;
@@ -58,7 +60,7 @@ public class AutoResolveExecutor implements NodeExecutor {
     private static final Pattern JSON_BLOCK = Pattern.compile("\\{[^{}]{10,}}");
     private static final Logger log = LoggerFactory.getLogger(AutoResolveExecutor.class);
 
-    private final OpsSlotExtractor.Model inferModel;
+    private final SingleTurnModel inferModel;
     private final DefaultToolExecutor toolExecutor;
     private final ObjectMapper mapper;
     private final Clock clock;
@@ -69,7 +71,7 @@ public class AutoResolveExecutor implements NodeExecutor {
      * @param mapper        JSON 解析
      * @param clock         时钟（时间换算与缺省窗口，测试可注入固定值）
      */
-    public AutoResolveExecutor(OpsSlotExtractor.Model inferModel, DefaultToolExecutor toolExecutor,
+    public AutoResolveExecutor(SingleTurnModel inferModel, DefaultToolExecutor toolExecutor,
             ObjectMapper mapper, Clock clock) {
         this.inferModel = inferModel;
         this.toolExecutor = toolExecutor;

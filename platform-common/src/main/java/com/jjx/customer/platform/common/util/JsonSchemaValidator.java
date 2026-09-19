@@ -1,4 +1,4 @@
-package com.jjx.customer.platform.business.ops.tool;
+package com.jjx.customer.platform.common.util;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;

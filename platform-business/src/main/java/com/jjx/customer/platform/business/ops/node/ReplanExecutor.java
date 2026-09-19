@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.node;
 
+import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
+
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
 import com.agentframework.engine.core.NodeContext;
@@ -44,7 +46,7 @@ public class ReplanExecutor implements NodeExecutor {
 
     private final String continueTarget;
 
-    private final OpsSlotExtractor.Model model;
+    private final SingleTurnModel model;
 
     private final ObjectMapper objectMapper;
 
@@ -58,7 +60,7 @@ public class ReplanExecutor implements NodeExecutor {
      * @param objectMapper  JSON 解析
      */
     public ReplanExecutor(String stagePrefix, String stageLabel, String nextStageLabel,
-            String adjustTarget, String continueTarget, OpsSlotExtractor.Model model,
+            String adjustTarget, String continueTarget, SingleTurnModel model,
             ObjectMapper objectMapper) {
         this.stagePrefix = stagePrefix;
         this.stageLabel = stageLabel;

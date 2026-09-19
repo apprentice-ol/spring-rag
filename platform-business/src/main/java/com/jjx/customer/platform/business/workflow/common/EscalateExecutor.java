@@ -1,5 +1,4 @@
-package com.jjx.customer.platform.business.ops.executor;
-import com.jjx.customer.platform.business.ops.node.ConcludeExecutor;
+package com.jjx.customer.platform.business.workflow.common;
 
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
@@ -24,14 +23,14 @@ public class EscalateExecutor implements NodeExecutor {
 
     @Override
     public NodeResult execute(NodeDefinition node, NodeContext context) {
-        String reason = context.slots().getString("escalate_reason", "");
+        String reason = context.slots().getString(EscalateTerminal.REASON_SLOT, "");
         String note = reason.isBlank() ? "模型判断无法继续，需要人工介入" : reason;
         String findings = lastStageOutput(context);
         String text = findings.isBlank()
                 ? note
                 : findings + "\n\n——\n需人工介入：" + note;
         return NodeResult.completed(node.id(), text,
-                Map.of("escalate_reason", note, "final_output", text));
+                Map.of(EscalateTerminal.REASON_SLOT, note, "final_output", text));
     }
 
     /**
@@ -42,7 +41,7 @@ public class EscalateExecutor implements NodeExecutor {
      */
     private static String lastStageOutput(NodeContext context) {
         String found = "";
-        for (String slot : ConcludeExecutor.STAGE_OUTPUTS) {
+        for (String slot : EscalateTerminal.STAGE_OUTPUT_SLOTS) {
             String value = context.slots().getString(slot, "");
             if (!value.isBlank()) {
                 found = value;

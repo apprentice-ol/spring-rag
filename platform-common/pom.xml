@@ -26,6 +26,12 @@
             <version>2.11.0</version>
         </dependency>
 
+        <!-- JSON Schema 校验（JsonSchemaValidator，自 business ops/tool 下沉） -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
         <!-- 字符串处理（JsonResponseParser） -->
         <dependency>
             <groupId>cn.hutool</groupId>

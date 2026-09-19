@@ -14,7 +14,7 @@ import com.agentframework.engine.core.EngineBuilder;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.OpsDiagnosisStages;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
-import com.jjx.customer.platform.business.ops.executor.ActExecutor;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.business.ops.node.ReplanExecutor;
 import com.jjx.customer.platform.business.ops.tool.OpsSchemaResolver;
 import java.util.LinkedHashSet;

@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.workflow.stages;
 
+import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
+
 import com.agentframework.engine.toolexecutor.DefaultToolExecutor;
 import com.agentframework.engine.toolexecutor.DefaultToolRegistry;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
@@ -26,13 +28,13 @@ import java.util.function.Function;
  * @param promptRegister 装配期组合模板注册（assetId → 正文+协议块组合产物，优先级最高的运行真相）
  */
 public record SharedDeps(DefaultToolRegistry sharedRegistry, DefaultToolExecutor toolExecutor,
-                         ObjectMapper mapper, OpsSlotExtractor.Model model, Clock clock,
+                         ObjectMapper mapper, SingleTurnModel model, Clock clock,
                          int maxLlmCalls, Map<String, String> schemaText, ValidateRequestTool validateTool,
                          Function<String, String> promptBody, BiConsumer<String, String> promptRegister) {
 
     /** 兼容旧构造（无 prompt 管道，prompt 走内置常量注册）。 */
     public SharedDeps(DefaultToolRegistry sharedRegistry, DefaultToolExecutor toolExecutor,
-                      ObjectMapper mapper, OpsSlotExtractor.Model model, Clock clock,
+                      ObjectMapper mapper, SingleTurnModel model, Clock clock,
                       int maxLlmCalls, Map<String, String> schemaText, ValidateRequestTool validateTool) {
         this(sharedRegistry, toolExecutor, mapper, model, clock, maxLlmCalls, schemaText, validateTool,
                 key -> null, (key, template) -> {

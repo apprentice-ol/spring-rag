@@ -1,5 +1,7 @@
 package com.jjx.customer.platform.business.ops.node;
 
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
+
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
 import com.agentframework.engine.core.NodeContext;
@@ -25,7 +27,7 @@ public class AskMissingExecutor implements NodeExecutor {
     /** 问齐文案槽位名（非空即"问过一轮"，是重入判定的标记）。 */
     public static final String CLARIFY_QUESTION_SLOT = "clarify_question";
     /** 用户补充槽位名（恢复输入经 Input.slots 写入）。 */
-    public static final String USER_CLARIFY_SLOT = "user_clarify";
+    public static final String USER_CLARIFY_SLOT = ActExecutor.USER_CLARIFY_SLOT;
 
     private final OpsSlotExtractor extractor;
 

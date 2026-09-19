@@ -1,5 +1,5 @@
 package com.jjx.customer.platform.business.ops.node;
-import com.jjx.customer.platform.business.ops.executor.RelativeTimeParser;
+import com.jjx.customer.platform.common.util.RelativeTimeParser;
 
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;

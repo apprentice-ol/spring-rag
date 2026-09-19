@@ -31,7 +31,7 @@ import com.jjx.customer.platform.routing.RouteRegistry;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.OpsProperties;
-import com.jjx.customer.platform.business.ops.executor.ActExecutor;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.business.ops.openobserve.OpenObserveClient;
 import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
 import com.jjx.customer.platform.business.ops.workflow.stages.StageModule;
