@@ -86,6 +86,12 @@ public class VectorSearchChannel implements SearchChannel {
         // 默认 ef 偏小 + strict_order 会产生"召回悬崖"——漏掉语义稍远但内容命中的步骤块，
         // 剩下 cosine 分高但泛泛的概述块（"分两类"等高频词）。relaxed_order 让 HNSW 填满 LIMIT。
         //
+        // ⚠️ ef_search=200 会翻转规划器：pgvector 0.8 的 HNSW 代价模型按 ef 线性放大索引扫描
+        // 估算，语料过万行后（2026-09-19 重灌至 2 万+ 子块）ef=200 的估算代价超过 Seq Scan，
+        // 规划器弃用索引改走全表余弦——热查询 150~200ms、冷缓存 6.7s，且大表上随语料线性恶化。
+        // 故同一事务内强制 enable_seqscan=off 钉死索引路径（HNSW ef=200 热查询 ~15ms）。
+        // 注意 HNSW 是近似检索而 Seq Scan 是精确检索：钉索引后返回的就是 ef=200 调优针对的形态。
+        //
         // GUC 是会话级：SET 与 SELECT 必须落在同一条连接上（分开 execute 可能各借不同池连接，
         // 既可能 GUC 未生效、又污染归还池后的随机会话），查询结束 finally 复位避免残留。
         // （SET LOCAL 对 iterative_scan 在部分 pgvector 版本不生效，故用 SET + RESET。）
@@ -117,6 +123,8 @@ public class VectorSearchChannel implements SearchChannel {
                 st.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
                 st.execute("SET hnsw.ef_search = 200");
                 st.execute("SET hnsw.iterative_scan = relaxed_order");
+                // 压过 ef_search=200 的代价模型翻转（见上注释），钉死 HNSW 索引路径
+                st.execute("SET enable_seqscan = off");
             }
             try {
                 try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
@@ -137,6 +145,7 @@ public class VectorSearchChannel implements SearchChannel {
                 try (Statement st = conn.createStatement()) {
                     st.execute("RESET hnsw.ef_search");
                     st.execute("RESET hnsw.iterative_scan");
+                    st.execute("RESET enable_seqscan");
                 } catch (SQLException e) {
                     log.debug("[向量检索] RESET hnsw GUC 失败（忽略）: {}", e.getMessage());
                 }
