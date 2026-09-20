@@ -3,17 +3,10 @@ package com.jjx.customer.platform.business.ops.node;
 import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
 import com.jjx.customer.platform.common.util.RelativeTimeParser;
 
-import com.agentframework.crosscutting.interceptor.InterceptorAttributes;
 import com.agentframework.definition.node.NodeDefinition;
 import com.agentframework.definition.node.NodeType;
-import com.agentframework.definition.tool.ToolDefinition;
 import com.agentframework.engine.core.NodeContext;
 import com.agentframework.engine.core.NodeResult;
-import com.agentframework.engine.policy.PolicyAttributes;
-import com.agentframework.engine.toolexecutor.DefaultToolExecutor;
-import com.agentframework.engine.toolexecutor.ToolContext;
-import com.agentframework.engine.toolexecutor.ToolResult;
-import com.agentframework.engine.toolexecutor.ToolInvocation;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.jjx.customer.platform.business.ops.AutonomyLevel;
 import com.jjx.customer.platform.business.ops.AutonomyPolicy;
@@ -63,29 +56,15 @@ public class AutoResolveExecutor implements NodeExecutor {
     public static final String INFERRED_SLOTS_SLOT = "inferred_slots";
 
     private static final Pattern API_PATH = Pattern.compile("/[a-zA-Z][\\w-]*(?:/[\\w.-]+)+");
-    private static final Pattern JSON_BLOCK = Pattern.compile("\\{[^{}]{10,}}");
 
-    /** 遥测/框架内务 JSON（应用自身的 step 日志等）：首键即内务字段，明显不是业务请求报文。 */
-    private static final Pattern TELEMETRY_JSON = Pattern.compile(
-            "\\{\\s*\"(_event|step|step_index|stepIndex|level|logger|thread|timestamp|ts|duration_ms|durationMs)\"");
-
-    /** 报文槽长度上限：超过这个长度的"JSON 块"多半是日志片段而非真实报文。 */
-    private static final int MAX_PAYLOAD_LENGTH = 4000;
-
-    /** 响应提取的准入标记：日志行自己写明是响应/返回才提取（与报文同口径：宁可漏不可错）。 */
-    private static final Pattern RESPONSE_MARKER = Pattern.compile(
-            "响应|返回报文|返回结果|返回体|response|respBody", Pattern.CASE_INSENSITIVE);
-
-    /** 报文提取的准入标记：日志行自己写明是请求报文才提取（业务系统日志的常见写法）。 */
-    private static final Pattern PAYLOAD_MARKER = Pattern.compile(
-            "报文|入参|请求体|请求参数|请求报文|payload|requestBody|request_body|reqBody",
-            Pattern.CASE_INSENSITIVE);
     private static final Logger log = LoggerFactory.getLogger(AutoResolveExecutor.class);
 
     private final SingleTurnModel inferModel;
-    private final DefaultToolExecutor toolExecutor;
     private final ObjectMapper mapper;
     private final Clock clock;
+
+    /** 日志反查（从本类抽出为可复用组件：问齐环挂起恢复时也用同一份实现重跑）。 */
+    private final LogBackfill logBackfill;
 
     /**
      * @param inferModel    推断模型（null = 跳过 LLM 层）
@@ -96,10 +75,17 @@ public class AutoResolveExecutor implements NodeExecutor {
     /** auto-resolve 骨架正文来源（绑定包覆盖优先，classpath 兜底；null 时跳过推断层） */
     private final java.util.function.Function<String, String> promptBody;
 
-    public AutoResolveExecutor(SingleTurnModel inferModel, DefaultToolExecutor toolExecutor,
+    /**
+     * @param inferModel  推断模型（null = 跳过 LLM 层）
+     * @param logBackfill 日志反查组件（null = 跳过反查层；与问齐/确认节点共用同一实现）
+     * @param mapper      JSON 解析
+     * @param clock       时钟
+     * @param promptBody  auto-resolve 骨架正文来源
+     */
+    public AutoResolveExecutor(SingleTurnModel inferModel, LogBackfill logBackfill,
             ObjectMapper mapper, Clock clock, java.util.function.Function<String, String> promptBody) {
         this.inferModel = inferModel;
-        this.toolExecutor = toolExecutor;
+        this.logBackfill = logBackfill;
         this.mapper = mapper;
         this.clock = clock;
         this.promptBody = promptBody;
@@ -128,14 +114,16 @@ public class AutoResolveExecutor implements NodeExecutor {
         confirmed.putAll(asStrings(writes));
 
         // ---- 层 2：日志反查（一手信息源：关键字 + 时间窗 → traceId → 精查挖 接口/请求报文/响应/报错）----
-        if (toolExecutor != null) {
-            toolCalls = resolveFromLogs(node, context, confirmed, writes, provenance, policy);
-            confirmed.putAll(asStrings(writes));
-            // 挖出的证据（报文里的接口路径、报错里的业务叫法）回头喂给规则层——否则会出现
-            // 「日志里明明有线索，卡片还在问接口是哪个」
-            resolveInterfaceByRule(confirmed, question, writes, provenance, policy);
-            confirmed.putAll(asStrings(writes));
-        }
+        // 无反查组件（未接工具管道）时整层跳过，与旧行为一致
+        LogBackfill.Outcome lookup = logBackfill == null
+                ? LogBackfill.Outcome.none()
+                : logBackfill.resolve(node, context, confirmed, writes, provenance, policy);
+        toolCalls = lookup.calls();
+        confirmed.putAll(asStrings(writes));
+        // 挖出的证据（报文里的接口路径、报错里的业务叫法）回头喂给规则层——否则会出现
+        // 「日志里明明有线索，卡片还在问接口是哪个」
+        resolveInterfaceByRule(confirmed, question, writes, provenance, policy);
+        confirmed.putAll(asStrings(writes));
 
         // ---- 层 3：LLM 推断（≤1 次，补日志挖不到的那部分；此时上下文已含日志证据）----
         List<OpsSlotCatalog.Spec> llmTargets = targets(confirmed, policy::allowsInfer);
@@ -151,6 +139,9 @@ public class AutoResolveExecutor implements NodeExecutor {
         writes.put(SlotExtractExecutor.MISSING_COUNT_SLOT, missing.size());
         writes.put(INFERRED_SLOTS_SLOT, toJson(provenance));
         writes.put(AUTO_NOTE_SLOT, renderNote(provenance));
+        // 反查空结果如实透出（空串 = 命中或未执行）：问齐卡片据此向用户反问"信息是否准确"，
+        // 而不是让"已自动补全"整块静默消失
+        writes.put(LogBackfill.LOG_LOOKUP_SLOT, lookup.note() == null ? "" : lookup.note());
         if (llmUsed) {
             Object used = context.slots().get("llm_calls");
             writes.put("llm_calls", (used instanceof Number n ? n.intValue() : 0) + 1);
@@ -277,228 +268,8 @@ public class AutoResolveExecutor implements NodeExecutor {
     }
 
     // -----------------------------------------------------------------------------------------
-    // 层 3：日志反查
-    // -----------------------------------------------------------------------------------------
-
-    /**
-     * @return 实际发生的工具调用次数（L2 ≤2 / L3 ≤3）
-     */
-    private int resolveFromLogs(NodeDefinition node, NodeContext context, Map<String, String> confirmed,
-            Map<String, Object> writes, List<Map<String, String>> provenance, AutonomyPolicy policy) {
-        int calls = 0;
-        // 关键数据槽可能是标准 traceId（全链路精查），也可能是业务键（orderNo/requestId，当关键字模糊查）
-        String traceKey = confirmed.get(OpsSlotCatalog.TRACE_ID);
-        boolean keyIsTraceId = looksLikeTraceId(traceKey);
-        // ① 关键字反查（业务键 > 接口名 > 错误摘要 > 现象）：用户专门给的单号比接口名精准
-        String keyword = firstNonBlank(
-                keyIsTraceId || isBlank(traceKey) ? null : abbreviate(traceKey, 30),
-                confirmed.get(OpsSlotCatalog.INTERFACE),
-                abbreviate(confirmed.get(OpsSlotCatalog.ERROR), 20),
-                abbreviate(confirmed.get(OpsSlotCatalog.SYMPTOMS), 20));
-        boolean anythingResolvable = targets(confirmed, policy::allowsResolve).stream()
-                .anyMatch(spec -> spec.name().equals(OpsSlotCatalog.TRACE_ID)
-                        || isBlank(confirmed.get(spec.name())));
-        // 反查前提（用户口径）：关键字 + 时间窗**都要有**才去翻日志——两者都是用户给的或推断层填的。
-        // 只有关键字没时间窗 = 全时段扫描：慢，而且很容易捞到无关记录（实测把平台自己的日志当业务日志）
-        String window = confirmed.get(OpsSlotCatalog.TIME);
-        if (!keyIsTraceId && !isBlank(keyword) && !isBlank(window) && anythingResolvable) {
-            String traceId = searchByKeyword(keyword, window, node, context);
-            calls++;
-            // 换条件重试：带时间窗查无果 → 去掉窗口再查一次（用户给的时间窗本身可能就是错的）。
-            // 只有预算还留得下后续精查时才做——L2 的两次额度刚好是「关键字 + 精查」，L3 才有余量
-            if (traceId == null && !isBlank(window) && calls + 1 < policy.maxResolveCalls()) {
-                traceId = searchByKeyword(keyword, "", node, context);
-                calls++;
-                if (traceId != null) {
-                    log.info("[ops-auto] 换条件重试命中（去掉时间窗）：keyword={}", keyword);
-                }
-            }
-            if (traceId != null) {
-                writes.put(OpsSlotCatalog.TRACE_ID, traceId);
-                provenance.add(provenance(OpsSlotCatalog.TRACE_ID, traceId, SlotProvenance.SOURCE_LOG,
-                        "日志反查关键字「" + keyword + "」命中"));
-                confirmed.put(OpsSlotCatalog.TRACE_ID, traceId);
-            }
-        }
-        // ② traceId 精查提取 报文/接口/错误（业务键不是 traceId，已在 ① 当关键字查过，不能再走精查）
-        String traceId = firstNonBlank(asString(writes.get(OpsSlotCatalog.TRACE_ID)),
-                keyIsTraceId ? traceKey : null);
-        boolean needsDetail = targets(confirmed, policy::allowsResolve).stream()
-                .anyMatch(spec -> isBlank(confirmed.get(spec.name()))
-                        && isBlank(asString(writes.get(spec.name()))));
-        if (traceId != null && !traceId.isBlank() && needsDetail && calls < policy.maxResolveCalls()) {
-            ToolResult detail = runTool("query_logs", Map.of("trace_id", traceId, "limit", 30), node, context);
-            calls++;
-            extractFromLogLines(detail, confirmed, writes, provenance);
-        }
-        return calls;
-    }
-
-    /**
-     * 关键字模糊查一次，返回命中的 traceId。
-     *
-     * @param keyword 关键字（业务键 / 接口名 / 错误摘要）
-     * @param window  时间窗（{@code start~end}，空 = 不限时段）
-     * @return 命中最多出现的 traceId；无命中返回 null
-     */
-    private String searchByKeyword(String keyword, String window, NodeDefinition node, NodeContext context) {
-        Map<String, Object> args = new LinkedHashMap<>();
-        args.put("keyword", keyword);
-        args.put("limit", 10);
-        if (!isBlank(window)) {
-            String[] range = splitWindow(window);
-            args.put("start", range[0]);
-            args.put("end", range[1]);
-        }
-        return extractTraceId(runTool("query_logs", args, node, context));
-    }
-
-    /**
-     * 取文本里最长的合法 JSON 块（超长/无块返回 null）。
-     *
-     * @param text 候选来源文本（已按行内标记过滤）
-     * @return JSON 文本；无可用块返回 null
-     */
-    private static String bestJsonBlock(String text) {
-        Matcher m = JSON_BLOCK.matcher(text);
-        String best = null;
-        while (m.find()) {
-            String candidate = m.group();
-            if (candidate.length() > MAX_PAYLOAD_LENGTH) {
-                continue;
-            }
-            if (best == null || candidate.length() > best.length()) {
-                best = candidate;
-            }
-        }
-        return best;
-    }
-
-    /** @return 是否标准 traceId 形态（16-64 位 hex）——决定走全链路精查还是关键字模糊查 */
-    private static boolean looksLikeTraceId(String value) {
-        return value != null && value.matches("\\p{XDigit}{16,64}");
-    }
-
-    private void extractFromLogLines(ToolResult result, Map<String, String> confirmed,
-            Map<String, Object> writes, List<Map<String, String>> provenance) {
-        Object logs = result == null ? null : result.data().get("logs");
-        if (!(logs instanceof List<?> lines) || lines.isEmpty()) {
-            return;
-        }
-        // 汇总文本：接口路径 / 错误行 / 报文块 都从这里提取。
-        // 应用自身的遥测行（{"_event":"step.output",...}）整行跳过——里面的 prompt 模板/步骤 JSON
-        // 会被"最长 JSON 块"选中当成报文（实测卡片上摆出 replan 的输出协议模板）
-        StringBuilder all = new StringBuilder();
-        StringBuilder payloadSource = new StringBuilder(); // 只收"自己写明是报文"的行
-        StringBuilder responseSource = new StringBuilder(); // 只收"自己写明是响应"的行
-        String firstError = null;
-        for (Object line : lines) {
-            if (line instanceof Map<?, ?> row) {
-                Object msgRaw = row.get("msg");
-                String msg = msgRaw == null ? "" : String.valueOf(msgRaw);
-                if (msg.isBlank() || TELEMETRY_JSON.matcher(msg).lookingAt()) {
-                    continue;
-                }
-                all.append(msg).append('\n');
-                if (PAYLOAD_MARKER.matcher(msg).find()) {
-                    payloadSource.append(msg).append('\n');
-                }
-                if (RESPONSE_MARKER.matcher(msg).find()) {
-                    responseSource.append(msg).append('\n');
-                }
-                if (firstError == null && "ERROR".equalsIgnoreCase(String.valueOf(row.get("level")))) {
-                    Object exceptionRaw = row.get("exception");
-                    String exception = exceptionRaw == null ? "" : String.valueOf(exceptionRaw);
-                    firstError = !isBlank(exception) ? exception : abbreviate(msg, 120);
-                }
-            }
-        }
-        String text = all.toString();
-        if (isBlank(confirmed.get(OpsSlotCatalog.INTERFACE)) && isBlank(asString(writes.get(OpsSlotCatalog.INTERFACE)))) {
-            Matcher m = API_PATH.matcher(text);
-            if (m.find()) {
-                writes.put(OpsSlotCatalog.INTERFACE, m.group());
-                provenance.add(provenance(OpsSlotCatalog.INTERFACE, m.group(), SlotProvenance.SOURCE_LOG, "traceId 精查日志命中接口路径"));
-            }
-        }
-        if (isBlank(confirmed.get(OpsSlotCatalog.ERROR)) && isBlank(asString(writes.get(OpsSlotCatalog.ERROR)))
-                && firstError != null) {
-            writes.put(OpsSlotCatalog.ERROR, firstError);
-            provenance.add(provenance(OpsSlotCatalog.ERROR, firstError, SlotProvenance.SOURCE_LOG, "traceId 精查命中 ERROR 级日志"));
-        }
-        // 只从"行内明确写了这是请求报文/响应"的行里提取（报文/入参/请求体/payload｜响应/返回/response）。
-        // 两者都是高影响槽：猜错了会毒化第二阶段的生成/纠正，宁可漏（让模型 ask_user 问用户）
-        if (isBlank(confirmed.get(OpsSlotCatalog.PAYLOAD)) && isBlank(asString(writes.get(OpsSlotCatalog.PAYLOAD)))) {
-            String best = bestJsonBlock(payloadSource.toString());
-            if (best != null) {
-                writes.put(OpsSlotCatalog.PAYLOAD, best);
-                provenance.add(provenance(OpsSlotCatalog.PAYLOAD, abbreviate(best, 60) + "…", SlotProvenance.SOURCE_LOG,
-                        "日志行明确标注的请求报文"));
-            }
-        }
-        if (isBlank(confirmed.get(OpsSlotCatalog.RESPONSE)) && isBlank(asString(writes.get(OpsSlotCatalog.RESPONSE)))) {
-            String best = bestJsonBlock(responseSource.toString());
-            if (best != null) {
-                writes.put(OpsSlotCatalog.RESPONSE, best);
-                provenance.add(provenance(OpsSlotCatalog.RESPONSE, abbreviate(best, 60) + "…", SlotProvenance.SOURCE_LOG,
-                        "日志行明确标注的业务响应"));
-            }
-        }
-    }
-
-    private String extractTraceId(ToolResult result) {
-        Object logs = result == null || !result.success() ? null : result.data().get("logs");
-        if (!(logs instanceof List<?> lines)) {
-            return null;
-        }
-        // 取出现次数最多的 traceId（偶发混流时比"第一条"更稳）
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        for (Object line : lines) {
-            if (line instanceof Map<?, ?> row) {
-                Object traceRaw = row.get("trace_id");
-                String traceId = traceRaw == null ? "" : String.valueOf(traceRaw);
-                if (!isBlank(traceId) && !"null".equals(traceId)) {
-                    counts.merge(traceId, 1, Integer::sum);
-                }
-            }
-        }
-        return counts.entrySet().stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse(null);
-    }
-
-    // -----------------------------------------------------------------------------------------
     // 工具与工具方法
     // -----------------------------------------------------------------------------------------
-
-    /** 组装带策略属性的反查调用（属性传递对齐 ActExecutor.run）。 */
-    private ToolResult runTool(String toolId, Map<String, Object> arguments,
-            NodeDefinition node, NodeContext context) {
-        Map<String, Object> attributes = new LinkedHashMap<>();
-        attributes.put("toolId", toolId);
-        attributes.put(InterceptorAttributes.TRACE, context.trace());
-        attributes.put(InterceptorAttributes.TRACE_PARENT, context.parentSpan());
-        if (context.agent() != null) {
-            attributes.put(DefaultToolExecutor.TOOL_POLICY_ATTRIBUTE, context.agent().policies().tool());
-            attributes.put(DefaultToolExecutor.QUOTA_POLICY_ATTRIBUTE, context.agent().policies().quota());
-        }
-        Object resolvedPolicy = context.attributes().get(PolicyAttributes.RESOLVED);
-        if (resolvedPolicy != null) {
-            attributes.put(PolicyAttributes.RESOLVED, resolvedPolicy);
-        }
-        ToolContext toolContext = new ToolContext(context.session().id(), node.id(),
-                context.session().traceId(), context.workspace(), context.slots(), attributes);
-        try {
-            return toolExecutor.execute(
-                    new ToolInvocation(toolId, ToolDefinition.LATEST, arguments,
-                            context.session().id(), node.id()),
-                    toolContext);
-        } catch (Exception e) {
-            log.warn("[ops-auto] 反查工具异常（静默跳过）：{} {}", toolId, e.getMessage());
-            return null;
-        }
-    }
 
     private List<OpsSlotCatalog.Spec> targets(Map<String, String> confirmed,
             java.util.function.Predicate<OpsSlotCatalog.Spec> capability) {
@@ -534,11 +305,8 @@ public class AutoResolveExecutor implements NodeExecutor {
     }
 
     private String toJson(List<Map<String, String>> provenance) {
-        try {
-            return mapper.writeValueAsString(provenance);
-        } catch (Exception e) {
-            return "[]";
-        }
+        // 统一走 SlotProvenance 的序列化入口（与恢复重跑路径同一格式，避免两处写出不同形态）
+        return SlotProvenance.write(provenance);
     }
 
     private String renderNote(List<Map<String, String>> provenance) {
@@ -555,24 +323,6 @@ public class AutoResolveExecutor implements NodeExecutor {
 
     private static Map<String, String> provenance(String slot, String value, String method, String evidence) {
         return SlotProvenance.entry(slot, value, method, evidence);
-    }
-
-    private static String[] splitWindow(String window) {
-        if (window == null) {
-            return new String[] {"", ""};
-        }
-        int idx = window.indexOf('~');
-        return idx < 0 ? new String[] {window, ""}
-                : new String[] {window.substring(0, idx), window.substring(idx + 1)};
-    }
-
-    private static String firstNonBlank(String... values) {
-        for (String value : values) {
-            if (!isBlank(value)) {
-                return value;
-            }
-        }
-        return "";
     }
 
     private static String joinNonBlank(String... values) {

@@ -268,7 +268,7 @@ public class QueryLogsTool implements Tool {
     private OpsProperties.OpenObserve config() {
         return fields == null
                 ? new OpsProperties.OpenObserve(null, null, null, null, null, 0, 0, false, 0,
-                        "body", "severity", "trace_id", "service_name")
+                        "body", "severity", "trace_id", "service_name", null)
                 : fields;
     }
 

@@ -24,7 +24,7 @@ public record OpsProperties(
     public OpenObserve openobserveOrDefault() {
         return openobserve == null
                 ? new OpenObserve(null, null, null, null, "default", 7, 30, true, 10, "body", "severity",
-                        "trace_id", "service_name")
+                        "trace_id", "service_name", null)
                 : openobserve;
     }
 
@@ -68,6 +68,7 @@ public record OpsProperties(
      * @param levelField   级别列名（默认 severity）
      * @param traceIdField 链路列名（默认 trace_id）
      * @param serviceField 服务列名（默认 service_name）
+     * @param excludeServices 日志查询要排除的服务名（逗号分隔；默认排除平台自身，见下）
      */
     public record OpenObserve(
             String url,
@@ -82,7 +83,8 @@ public record OpsProperties(
             String messageField,
             String levelField,
             String traceIdField,
-            String serviceField) implements com.jjx.customer.platform.observe.openobserve.OpenObserveEndpoint {
+            String serviceField,
+            String excludeServices) implements com.jjx.customer.platform.observe.openobserve.OpenObserveEndpoint {
 
         /** @return 正文列名，缺省 body */
         public String messageFieldOrDefault() {

@@ -1,6 +1,7 @@
 package com.agentframework.engine.core;
 
 import com.agentframework.definition.node.NodeType;
+import com.agentframework.definition.node.TerminalKind;
 import com.agentframework.infra.modelgateway.Usage;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,21 +13,26 @@ import java.util.Map;
  * <p>与 {@link RunResult#visitedNodes()} 的裸 id 列表不同，轨迹逐步保留状态、耗时、
  * 槽位写入与路由决策，用于审计、调试与前端回放。</p>
  *
- * @param index       步号，从 1 开始
- * @param nodeId      节点 id
- * @param nodeType    节点类型
- * @param status      执行状态
- * @param arrivedVia  进入该节点的边，形如 {@code a->b}，起点为 null 时为空串
- * @param durationMs  节点执行耗时（毫秒）
- * @param output      节点输出
- * @param slotWrites  本步写回的槽位
- * @param usage       本步消耗的 token
- * @param model       本步调用的模型名；非 LLM 步为 null
- * @param toolCall    本步的工具调用记录（name / arguments / ok / error）；非工具步为 null
- * @param routeKind   离开方式：dynamic / deterministic / static / terminal / suspended / failed / loop_break
- * @param routeTo     路由目标节点 id，结束、挂起或失败时为 null
- * @param routeDetail 路由补充说明（选中的边、被拒原因、中断原因等）
- * @param error       失败原因，成功时为 null
+ * @param index        步号，从 1 开始
+ * @param nodeId       节点 id
+ * @param nodeType     节点类型
+ * @param status       执行状态
+ * @param arrivedVia   进入该节点的边，形如 {@code a->b}，起点为 null 时为空串
+ * @param durationMs   节点执行耗时（毫秒）
+ * @param startedAtMs  节点开始的墙钟时刻（epoch 毫秒）。绝对时间戳是轨迹契约的一部分——
+ *                     只有相对耗时时，消费方只能用「映射时刻倒推」补偿，每一步的时间轴都是错的
+ * @param endedAtMs    节点结束的墙钟时刻（epoch 毫秒）
+ * @param output       节点输出
+ * @param slotWrites   本步写回的槽位
+ * @param usage        本步消耗的 token
+ * @param model        本步调用的模型名；非 LLM 步为 null
+ * @param toolCall     本步的工具调用记录（name / arguments / ok / error）；非工具步为 null
+ * @param routeKind    离开方式：dynamic / deterministic / static / terminal / suspended / failed / loop_break
+ * @param routeTo      路由目标节点 id，结束、挂起或失败时为 null
+ * @param routeDetail  路由补充说明（选中的边、被拒原因、中断原因等）
+ * @param error        失败原因，成功时为 null
+ * @param terminalKind 节点声明的终态语义（见 {@link TerminalKind}）；未声明的节点为 null。
+ *                     出口推导读它而不是靠节点命名约定——约定换个名字就静默失效
  */
 public record ExecutionTraceStep(
         int index,
@@ -35,6 +41,8 @@ public record ExecutionTraceStep(
         NodeStatus status,
         String arrivedVia,
         long durationMs,
+        long startedAtMs,
+        long endedAtMs,
         String output,
         Map<String, Object> slotWrites,
         Usage usage,
@@ -43,7 +51,8 @@ public record ExecutionTraceStep(
         String routeKind,
         String routeTo,
         String routeDetail,
-        String error) {
+        String error,
+        TerminalKind terminalKind) {
 
     /** 动态边被采纳。 */
     public static final String ROUTE_DYNAMIC = "dynamic";
@@ -78,8 +87,9 @@ public record ExecutionTraceStep(
      * @return 覆盖步号后的轨迹步
      */
     public ExecutionTraceStep withIndex(int newIndex) {
-        return new ExecutionTraceStep(newIndex, nodeId, nodeType, status, arrivedVia, durationMs, output, slotWrites,
-                usage, model, toolCall, routeKind, routeTo, routeDetail, error);
+        return new ExecutionTraceStep(newIndex, nodeId, nodeType, status, arrivedVia, durationMs, startedAtMs,
+                endedAtMs, output, slotWrites, usage, model, toolCall, routeKind, routeTo, routeDetail, error,
+                terminalKind);
     }
 
     /**
@@ -95,6 +105,15 @@ public record ExecutionTraceStep(
             document.put("arrivedVia", arrivedVia);
         }
         document.put("durationMs", durationMs);
+        if (startedAtMs > 0) {
+            document.put("startedAtMs", startedAtMs);
+        }
+        if (endedAtMs > 0) {
+            document.put("endedAtMs", endedAtMs);
+        }
+        if (terminalKind != null) {
+            document.put("terminalKind", terminalKind.name());
+        }
         if (!output.isEmpty()) {
             document.put("output", output);
         }

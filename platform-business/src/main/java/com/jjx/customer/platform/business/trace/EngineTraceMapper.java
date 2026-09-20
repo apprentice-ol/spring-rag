@@ -42,18 +42,14 @@ public final class EngineTraceMapper {
         String workflowId = fingerprint == null ? null : fingerprint.workflowId();
         String promptHash = fingerprint == null ? null : fingerprint.promptHash();
         long now = System.currentTimeMillis();
-        // 轨迹起点用引擎的整轮耗时反推，而不是取「此刻」：本方法是在整轮跑完之后才被调用的，
-        // 若把此刻当起点，TraceView.getTotalLatencyMs()（= 读取时刻 - 起点）就只剩「映射 → 落库」
-        // 的间隔，与真实耗时无关——实测它长期小于各步耗时之和（12559 vs 14009、1454 vs 5054），
-        // 一条自相矛盾的读数。RunResult.duration() 由 DefaultEngine 用 nanoTime 记下，是真实整轮耗时。
-        TraceView trace = new TraceView(agentId, workflowId, promptHash, now - engineDurationMsOf(result));
-        // ExecutionTraceStep 只记耗时、没有绝对时间戳，而 TraceView.stepDetail 是按
-        // 「now - stepStartMs」反推单步耗时的——所以要传的是那个能让差值等于真实耗时值的
-        // 时刻（此刻倒推该步自己的耗时），不是它的绝对起始时刻。
-        //
-        // 先前这里传的是逐步累加的游标（anchor + 前序耗时之和），差值于是成了"从该步开始
-        // 到本次映射时刻的全部剩余时间"：第一步恒等于整轮总耗时，LLM 的 1.7s 被记到了
-        // 归一化头上，往下每一格都是错的——一条每个数字都偏的轨迹比没有耗时更坏。
+        // 轨迹起点：优先第一步的绝对时间戳（真实执行开始，见 ExecutionTraceStep.startedAtMs）；
+        // 旧内核产出的轨迹步没有时间戳时退回「此刻 - 整轮耗时」反推——本方法是在整轮跑完之后
+        // 才被调用的，直接取此刻会把总耗时算成「映射 → 落库」的间隔（实测 12559 vs 14009 的
+        // 自相矛盾读数即源于此）。RunResult.duration() 由 DefaultEngine 用 nanoTime 记下，是真实整轮耗时。
+        TraceView trace = new TraceView(agentId, workflowId, promptHash, traceAnchorMs(result, now));
+        // TraceView.stepDetail 按「now - stepStartMs」算单步耗时，所以要传的是能让差值
+        // 等于真实耗时值的时刻（此刻倒推该步自己的耗时）。startedAtMs 只进 detail 通道
+        // 作绝对时间记录，不参与该差值——直接传它会把「该步结束到本次映射」的间隔也算进单步耗时。
         for (ExecutionTraceStep step : result.executionTrace()) {
             trace.stepDetail(step.nodeId(), null, queryOf(step), step.output(),
                     now - Math.max(0, step.durationMs()), stepDetailOf(step));
@@ -72,6 +68,12 @@ public final class EngineTraceMapper {
     private static Map<String, Object> stepDetailOf(ExecutionTraceStep step) {
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("nodeType", step.nodeType() == null ? null : step.nodeType().name());
+        if (step.startedAtMs() > 0) {
+            detail.put("startedAtMs", step.startedAtMs());
+        }
+        if (step.terminalKind() != null) {
+            detail.put("terminalKind", step.terminalKind().name());
+        }
         if (step.slotWrites() != null && !step.slotWrites().isEmpty()) {
             detail.put("slotWrites", step.slotWrites());
         }
@@ -98,6 +100,18 @@ public final class EngineTraceMapper {
             detail.put("error", step.error());
         }
         return detail;
+    }
+
+    /**
+     * 轨迹起点：第一步的绝对时间戳优先（真实执行开始）；无时间戳（旧内核轨迹）时
+     * 用「此刻 − 整轮耗时」反推。
+     */
+    private static long traceAnchorMs(RunResult result, long now) {
+        List<ExecutionTraceStep> steps = result.executionTrace();
+        if (steps != null && !steps.isEmpty() && steps.get(0).startedAtMs() > 0) {
+            return steps.get(0).startedAtMs();
+        }
+        return now - engineDurationMsOf(result);
     }
 
     /**

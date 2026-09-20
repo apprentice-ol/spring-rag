@@ -124,7 +124,7 @@ class AutoResolveLogPayloadTest {
         DefaultToolRegistry registry = new DefaultToolRegistry();
         registry.register(new LogTool(lines));
         AutoResolveExecutor executor = new AutoResolveExecutor(null,
-                new DefaultToolExecutor(registry, null, null, null), MAPPER, CLOCK,
+                new LogBackfill(new DefaultToolExecutor(registry, null, null, null)), MAPPER, CLOCK,
                 key -> "{{now}}\n{{missing}}\n{{confirmed}}\n{{question}}");
 
         Map<String, Object> slots = new LinkedHashMap<>();
@@ -164,7 +164,7 @@ class AutoResolveLogPayloadTest {
         DefaultToolRegistry registry = new DefaultToolRegistry();
         registry.register(new LogTool(lines));
         AutoResolveExecutor executor = new AutoResolveExecutor(null,
-                new DefaultToolExecutor(registry, null, null, null), MAPPER, CLOCK,
+                new LogBackfill(new DefaultToolExecutor(registry, null, null, null)), MAPPER, CLOCK,
                 key -> "{{now}}\n{{missing}}\n{{confirmed}}\n{{question}}");
 
         Map<String, Object> slots = new LinkedHashMap<>();

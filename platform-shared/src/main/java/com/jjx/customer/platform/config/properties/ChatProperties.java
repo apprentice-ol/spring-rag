@@ -44,6 +44,9 @@ public class ChatProperties {
     /** 检索执行参数（通道并行池 / 超时） */
     private Retrieval retrieval = new Retrieval();
 
+    /** 多轮上下文（历史对话）取数规格 */
+    private History history = new History();
+
     /** Redis 断路器降级期间，昂贵路径（LLM 流式 / ops 诊断）的并发上限（DegradeGuard） */
     private int degradeLimit = 8;
 
@@ -52,6 +55,31 @@ public class ChatProperties {
      * 落回知识检索（"识别不到 = 知识检索"的兜底）。显式选择范式不受此门槛影响。
      */
     private double diagnoseMinConfidence = 0.6;
+
+    /**
+     * 多轮上下文（历史对话）取数规格。
+     *
+     * <p>同时喂给<b>查询改写</b>（消解指代去检索）与<b>答案生成</b>（知道"它"指什么）。
+     * 两处用同一个窗口是有意的：窗口不一致时会出现"检索按 3 轮理解、生成按 1 轮理解"的割裂，
+     * 排查起来只能靠猜。真要紧缩，也先紧缩到同一份规格上。</p>
+     */
+    @Data
+    public static class History {
+
+        /** 保留轮数（一轮 = 用户 + 助手各一条）。0 或负数按 1 处理。 */
+        private int rounds = 3;
+
+        /**
+         * 历史<b>总字符预算</b>（不是单条上限）。装不下时从最早的整条丢弃；
+         * 只有最新一条允许截断（并带显式截断标注）。
+         *
+         * <p>曾经是"每条 500 字"——那条规则只适合"历史当线索"的查询改写，而历史同时要喂给
+         * 生成与闲聊（那时它是<b>操作对象</b>：翻译、总结上一轮回复）。按条切会让模型拿到
+         * 半截内容还得照做，实测一条 703 字的回答被砍在第 4 条中间，模型只能回"原文被截断了"。
+         * 默认 4000 是一个够装 5~6 条 700 字回答的量级。</p>
+         */
+        private int totalChars = 4000;
+    }
 
     @Data
     public static class Retrieval {

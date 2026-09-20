@@ -164,7 +164,7 @@ class AutoResolveAutonomyTest {
                 new com.agentframework.engine.toolexecutor.DefaultToolRegistry();
         registry.register(tool);
         AutoResolveExecutor executor = new AutoResolveExecutor(null,
-                new com.agentframework.engine.toolexecutor.DefaultToolExecutor(registry, null, null, null),
+                new LogBackfill(new com.agentframework.engine.toolexecutor.DefaultToolExecutor(registry, null, null, null)),
                 MAPPER, CLOCK, key -> "{{now}}\n{{missing}}\n{{confirmed}}\n{{question}}");
         return executor.execute(node(), logContext(level));
     }

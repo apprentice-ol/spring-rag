@@ -50,10 +50,19 @@ public class RagAnswerStreamer<S> {
     @Qualifier("chatPersistExecutor")
     private final ExecutorService chatPersistExecutor;
 
+    /**
+     * 装配上下文并流式回答（只列本文档新增的参数，其余见调用方 {@code ChatOrchestrator} 决策链）。
+     *
+     * @param history    最近若干轮对话历史（空串 = 首轮）。只用于让模型认出"它/这个"指什么，
+     *                   不构成事实来源——事实仍只来自本次检索资料（见 rag-answer-kb 的「对话历史的使用边界」）
+     * @param cacheable  本轮答案是否可跨会话复用（带历史时 false，见
+     *                   {@link AnswerCacheCoordinator#storeAnswer}）
+     */
     public void streamRagResponse(String question, String conversationId,
                                   List<RetrievedChunk> chunks, S sink, long t0,
                                   String paradigm, TraceView trace, String otelTraceId,
-                                  String answerCacheKey, String normalizedQuestion) {
+                                  String answerCacheKey, String normalizedQuestion,
+                                  String history, boolean cacheable) {
         // 降级闸：Redis 断路器 OPEN 期间收紧 LLM 流式并发（缓存命中/重放路径不经过此处，天然不受限）
         DegradeGuard.Lease lease = degradeGate.tryAcquire(conversationId, sink, otelTraceId);
         if (lease == null) {
@@ -117,7 +126,7 @@ public class RagAnswerStreamer<S> {
                                             log.info("========== [对话编排] 完成 ========== 会话ID={}, 耗时={}ms",
                                                     conversationId, System.currentTimeMillis() - t0);
                                             answerCacheCoordinator.storeAnswer(answerCacheKey, answer,
-                                                    citationsJson, paradigm, normalizedQuestion, msgId);
+                                                    citationsJson, paradigm, normalizedQuestion, msgId, cacheable);
                                             return msgId;
                                         },
                                         chatPersistExecutor)
@@ -132,7 +141,8 @@ public class RagAnswerStreamer<S> {
                 null,
                 lease::close);
         // systemPrompt=null：P2 快照装配未接线，服务侧回退 classpath 基线
-        port.emitStream(conversationId, knowledgeAnswerService.answer(question, ragContext.text(), null), spec);
+        port.emitStream(conversationId,
+                knowledgeAnswerService.answer(question, ragContext.text(), history, null), spec);
     }
 
     /**

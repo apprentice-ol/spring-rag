@@ -148,9 +148,19 @@ public class AnswerCacheCoordinator<S> {
      * 流式回答收尾的缓存写回（RagAnswerStreamer 完成回调调用）：
      * exact 写回（频率准入未过时 key 为 null，跳过）+ 语义层落库。
      * 仅 exact put 有 try/catch 兜底；语义层异常沿调用链走外层统一兜底（与拆分前一致）。
+     *
+     * @param cacheable 本轮答案是否可跨会话复用。false（= 本轮带了对话历史）时<b>两层都不写</b>：
+     *                  答案缓存没有会话维度（key = 问题 + 范式 + docver + prompt 指纹），而带指代的
+     *                  追问句（"它的配置呢"）在不同会话里字面与向量都相同——写进去就会在下个会话
+     *                  被重放成"另一个话题的答案"。
+     *                  <p>别拿 {@code answerCacheKey == null} 兼职表达这件事：exact 因频率准入未过
+     *                  而为 null 时语义层<b>照写不误</b>是刻意设计（字面不同的重复问题正是语义缓存的靶子）。</p>
      */
     public void storeAnswer(String answerCacheKey, String answer, String citationsJson,
-                            String paradigm, String normalizedQuestion, Long messageId) {
+                            String paradigm, String normalizedQuestion, Long messageId, boolean cacheable) {
+        if (!cacheable) {
+            return;
+        }
         if (answerCacheKey != null && StringUtils.hasText(answer)) {
             try {
                 cacheStore.put(answerCacheKey,

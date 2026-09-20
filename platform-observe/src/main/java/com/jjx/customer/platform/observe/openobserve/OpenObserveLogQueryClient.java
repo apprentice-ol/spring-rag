@@ -10,10 +10,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,9 +90,12 @@ public class OpenObserveLogQueryClient {
      */
     public List<Map<String, Object>> searchLogsByTraceId(String traceId, int limit) {
         String stream = streamOf();
+        // 服务排除紧跟主谓词（这里恒有 WHERE，直接 AND 即可）
+        String exclusion = serviceExclusion();
         String sql = "SELECT * FROM \"" + stream + "\" WHERE (trace_id='" + sqlEscape(traceId)
-                + "' OR traceid='" + sqlEscape(traceId) + "') ORDER BY _timestamp DESC LIMIT "
-                + Math.max(1, limit);
+                + "' OR traceid='" + sqlEscape(traceId) + "')"
+                + (exclusion.isEmpty() ? "" : " AND " + exclusion)
+                + " ORDER BY _timestamp DESC LIMIT " + Math.max(1, limit);
         long endMs = System.currentTimeMillis();
         long endMicros = endMs * 1000L;
         long startMicros = endMicros - props.lookbackDays() * 86_400_000_000L;
@@ -111,14 +116,43 @@ public class OpenObserveLogQueryClient {
      */
     public List<Map<String, Object>> searchLogs(long startMs, long endMs, String whereSql, int limit) {
         int effective = Math.max(1, Math.min(limit, MAX_WINDOW_LIMIT));
-        String sql = "SELECT * FROM \"" + streamOf() + "\""
-                + (whereSql == null || whereSql.isBlank() ? "" : " WHERE " + whereSql)
+        String where = whereSql == null || whereSql.isBlank() ? "" : " WHERE " + whereSql;
+        String exclusion = serviceExclusion();
+        if (!exclusion.isEmpty()) {
+            // 调用方没给 WHERE 时排除谓词要自己起一个，否则 "FROM t AND ..." 是非法 SQL
+            where = where.isEmpty() ? " WHERE " + exclusion : where + " AND " + exclusion;
+        }
+        String sql = "SELECT * FROM \"" + streamOf() + "\"" + where
                 + " ORDER BY _timestamp DESC LIMIT " + effective;
         String body = "{\"query\":{\"sql\":" + jsonQuote(sql)
                 + ",\"start_time\":" + startMs * 1000L
                 + ",\"end_time\":" + endMs * 1000L
                 + ",\"size\":" + effective + ",\"from\":0}}";
         return search(body);
+    }
+
+    /**
+     * 服务排除谓词（空 = 不加）。
+     *
+     * <p>把平台自身的日志挡在查询之外——读回来会自我循环，见
+     * {@link OpenObserveEndpoint#excludeServices()}。两条查询路径都得挂：
+     * 报文/响应这类高影响槽是从 traceId 精查里挖出来的，漏挂一条等于没修。</p>
+     */
+    private String serviceExclusion() {
+        return serviceExclusion(props.serviceField(), props.excludeServices());
+    }
+
+    /** 可单测的纯函数：拼 {@code field != 'a' AND field != 'b'}；无排除项返回空串。 */
+    static String serviceExclusion(String field, String rawServices) {
+        if (rawServices == null || rawServices.isBlank()) {
+            return "";
+        }
+        String column = field == null || field.isBlank() ? "service_name" : field;
+        return Arrays.stream(rawServices.split(","))
+                .map(String::trim)
+                .filter(name -> !name.isBlank())
+                .map(name -> column + " != '" + sqlEscape(name) + "'")
+                .collect(Collectors.joining(" AND "));
     }
 
     /**

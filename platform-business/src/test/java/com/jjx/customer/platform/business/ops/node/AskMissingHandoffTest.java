@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
@@ -55,7 +56,7 @@ class AskMissingHandoffTest {
 
     private static AskMissingExecutor executor(SingleTurnModel model) {
         return new AskMissingExecutor(new OpsSlotExtractor(model, MAPPER, PROMPTS),
-                new HumanResponseInterpreter(model, MAPPER, PROMPTS));
+                new HumanResponseInterpreter(model, MAPPER, PROMPTS), null);
     }
 
     private static NodeContext contextOf(Map<String, Object> slots, String inputText) {
@@ -192,8 +193,16 @@ class AskMissingHandoffTest {
         assertTrue(result.isSuspended(), "还缺 interface，应继续追问");
         HumanRequest request = MAPPER.readValue(
                 (String) result.slotWrites().get(HumanRequest.PENDING_SLOT), HumanRequest.class);
-        assertTrue(request.slots().stream().noneMatch(ask -> "time".equals(ask.name()) && ask.hasValue()),
-                "刚被用户纠正的槽不该再以「已自动补全的旧值」出现在待确认列表里");
+        // 刚被用户纠正的槽：要进结构化投影（「我理解的信息」里用户得看得见系统记成了什么，
+        // 否则交付契约的 reviewed 为空、前端掉进纯文本兜底，把 `time = …（用户更正）` 糊在卡片上），
+        // 但绝不能回显那个已被推翻的旧值——旧值回显才是这张卡片真正坑人的地方
+        List<HumanRequest.SlotAsk> timeAsks = request.slots().stream()
+                .filter(ask -> "time".equals(ask.name()) && ask.hasValue()).toList();
+        assertEquals(1, timeAsks.size(), "用户给过的值也应作为「待确认」条目透出");
+        assertEquals(SlotProvenance.SOURCE_OVERRIDDEN, timeAsks.getFirst().provenance(),
+                "来源标成用户更正——前端据此不给「改/清空」入口");
+        assertNotEquals("2026-09-19T10:00~2026-09-19T11:00", timeAsks.getFirst().value(),
+                "不能回显被推翻的旧值");
         String clarifyText = String.valueOf(result.slotWrites().get(AskMissingExecutor.CLARIFY_QUESTION_SLOT));
         assertFalse(clarifyText.contains("最近30分钟"),
                 "旧缺省值不该再出现在补全说明里（写入前读 context 会拿到旧值），实际=" + clarifyText);
@@ -208,7 +217,7 @@ class AskMissingHandoffTest {
         AskMissingExecutor executor = new AskMissingExecutor(
                 new OpsSlotExtractor(new Scripted().enqueue("{\"interface\":\"/api/order/create\"}"),
                         MAPPER, PROMPTS),
-                null);
+                null, null);
         NodeResult result = executor.execute(node(), contextOf(slots, reply));
 
         assertEquals("/api/order/create", result.slotWrites().get("interface"), "抽槽器兜底仍在");

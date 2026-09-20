@@ -142,6 +142,11 @@ rag:
     diagnose-min-confidence: 0.6 # 意图路由进诊断的置信度门槛：自动档低于此值不劫持，落回知识检索（显式选择不受限）
     # system-prompt 已迁至 prompts/rag/pipeline/rag-answer-system.md（单一来源）；
     # 如需运维覆盖，可在此设置 system-prompt: xxx
+    history:                     # 多轮上下文：查询改写（消解指代）与答案生成/闲聊共用同一窗口
+      rounds: 3                  # 保留轮数（一轮 = 用户 + 助手各一条）
+      total-chars: 4000          # 总字符预算（非单条上限）。装不下先从最早的整条丢，
+                                 # 只有最新一条允许截断；别再按"单条 500"切——历史在生成/闲聊
+                                 # 那边是操作对象（翻译/总结上一轮），半截内容会让模型干一半活
     agent:                       # 多范式可插拔 agent 框架（rag.chat.agent.* → AgentProperties）
       paradigm: knowledge        # 默认 agent 范式：knowledge / ops_diagnose / react_loop（旧 naive/react 自动映射）
       react-max-steps: 6         # ReAct 最大循环步数（防死循环硬上限）
@@ -286,6 +291,11 @@ ops:
     message-field: body
     level-field: severity
     trace-id-field: trace_id
+    # 日志反查排除的服务名：**平台自己的日志不是业务证据**。不排除会自我循环——
+    # 平台把发给 LLM 的 prompt 打进日志，而 prompt 模板里写着「请求报文/业务系统响应」，
+    # 下一轮反查就把这些日志当业务报文抓回槽位（实测跑通过：意图分类器 JSON 被当成报文与响应）。
+    # 默认取应用名=本平台的 OTel service.name；指向真实业务日志流时留空即可。
+    exclude-services: ${spring.application.name:customer-platform}
     service-field: service_name
   logs-cache:                # 日志查询缓存（trace 精查 24h / 时间窗 60s）
     enabled: true

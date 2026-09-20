@@ -29,7 +29,7 @@ class ConfirmExecutorTest {
     private static final java.util.function.Function<String, String> PROMPTS = key -> "（测试）prompt 正文";
 
     private static ConfirmExecutor executor(SingleTurnModel model) {
-        return new ConfirmExecutor(new HumanResponseInterpreter(model, MAPPER, PROMPTS));
+        return new ConfirmExecutor(new HumanResponseInterpreter(model, MAPPER, PROMPTS), null);
     }
 
     private static NodeContext contextOf(Map<String, Object> slots, String inputText) {

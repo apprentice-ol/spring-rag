@@ -196,6 +196,7 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
             consumeQuota(execution.agent(), session.id(), resolved);
             checkWallTime(execution.agent(), session.id(), startNanos, resolved);
             long nodeStartNanos = System.nanoTime();
+            long nodeStartWallMs = System.currentTimeMillis();
             NodeResult result = this.invokeNode(node, context);
             long nodeDurationMs = (System.nanoTime() - nodeStartNanos) / 1_000_000L;
             visited.add(node.id());
@@ -222,13 +223,13 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
 
             if (result.isSuspended()) {
                 save(session, cursor, slots);
-                trace.add(traceStep(++index, node, result, arrivedVia, nodeDurationMs, nodeUsage,
+                trace.add(traceStep(++index, node, result, arrivedVia, nodeStartWallMs, nodeDurationMs, nodeUsage,
                         ExecutionTraceStep.ROUTE_SUSPENDED, null, null));
                 return new RunOutcome(SessionState.SUSPENDED, result.output(), cursor, messages, usage, visited,
                         node.id(), null, trace);
             }
             if (result.isFailed()) {
-                trace.add(traceStep(++index, node, result, arrivedVia, nodeDurationMs, nodeUsage,
+                trace.add(traceStep(++index, node, result, arrivedVia, nodeStartWallMs, nodeDurationMs, nodeUsage,
                         ExecutionTraceStep.ROUTE_FAILED, null, null));
                 return new RunOutcome(SessionState.FAILED, "", cursor, messages, usage, visited, null,
                         result.error(), trace);
@@ -236,8 +237,8 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
             Routing routing = resolveNext(result, node, workflow, slots, session, resolved, breakReason);
             String routeDetail = breakReason == null ? routing.detail()
                     : "loop break: " + breakReason + (routing.detail() == null ? "" : "; " + routing.detail());
-            trace.add(traceStep(++index, node, result, arrivedVia, nodeDurationMs, nodeUsage, routing.kind(),
-                    routing.next(), routeDetail));
+            trace.add(traceStep(++index, node, result, arrivedVia, nodeStartWallMs, nodeDurationMs, nodeUsage,
+                    routing.kind(), routing.next(), routeDetail));
             if (routing.next() == null) {
                 save(session, cursor, slots);
                 return new RunOutcome(SessionState.COMPLETED, result.output(), cursor, messages, usage, visited,
@@ -367,6 +368,7 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
      * @param node        节点定义
      * @param result      节点结果
      * @param arrivedVia  进入该节点的边
+     * @param startedAtMs 节点开始的墙钟时刻（epoch 毫秒）
      * @param durationMs  节点耗时（毫秒）
      * @param usage       本步 token 用量
      * @param routeKind   离开方式
@@ -375,10 +377,11 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
      * @return 轨迹步
      */
     private ExecutionTraceStep traceStep(int index, NodeDefinition node, NodeResult result, String arrivedVia,
-            long durationMs, Usage usage, String routeKind, String routeTo, String routeDetail) {
+            long startedAtMs, long durationMs, Usage usage, String routeKind, String routeTo, String routeDetail) {
         return new ExecutionTraceStep(index, node.id(), node.type(), result.status(), arrivedVia, durationMs,
-                result.output(), result.slotWrites(), usage, modelOf(result), toolCallOf(result), routeKind, routeTo,
-                routeDetail, result.error());
+                startedAtMs, startedAtMs + durationMs, result.output(), result.slotWrites(), usage,
+                modelOf(result), toolCallOf(result), routeKind, routeTo, routeDetail, result.error(),
+                node.terminalKind());
     }
 
     /**

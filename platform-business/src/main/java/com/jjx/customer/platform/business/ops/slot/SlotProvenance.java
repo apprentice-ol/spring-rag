@@ -137,6 +137,23 @@ public final class SlotProvenance {
         return current;
     }
 
+    /**
+     * 台账列表 → JSON（与 {@link #entry} 同格式）。
+     *
+     * <p>供"续写后整体回写"用：执行器先把现有台账 {@link #parse} 成列表，追加新条目，
+     * 再用本方法写回槽位——与 {@link #upsert} 的存储形态逐字一致（前端与结论证据链同一口径）。</p>
+     *
+     * @param items 台账条目（{@link #entry} 产出的键值形态）
+     * @return JSON 文本（序列化失败返回 {@code []}）
+     */
+    public static String write(List<Map<String, String>> items) {
+        try {
+            return MAPPER.writeValueAsString(items == null ? List.of() : items);
+        } catch (Exception e) {
+            return "[]";
+        }
+    }
+
     private static String text(Object value) {
         return value == null ? "" : String.valueOf(value);
     }

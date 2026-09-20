@@ -6,6 +6,7 @@ import com.jjx.customer.platform.business.engine.adapter.SingleTurnModel;
 import com.jjx.customer.platform.business.engine.outcome.OutcomeKind;
 import com.jjx.customer.platform.business.task.AgentFinding;
 import com.jjx.customer.platform.business.task.AgentTaskState;
+import com.jjx.customer.platform.business.task.FindingsText;
 import com.jjx.customer.platform.business.trace.model.TraceView;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -64,11 +65,11 @@ public class TaskFollowUpQa {
     /** 结论全文注入上限（结论本身有界，这里只是防长尾把解读上下文撑爆）。 */
     private static final int SUMMARY_MAX = 6000;
 
-    /** 单条主张截断长度（与 OpsRunner.renderFindings 同口径——编号引用必须两边一致）。 */
-    private static final int FINDING_CLAIM_MAX = 400;
+    /** 单条主张截断长度（口径收敛在 {@link FindingsText#CLAIM_MAX_CHARS}——编号引用必须两边一致）。 */
+    private static final int FINDING_CLAIM_MAX = FindingsText.CLAIM_MAX_CHARS;
 
-    /** 注入的主张条数上限（有界是硬要求：组装成本与历史长度解耦）。 */
-    private static final int FINDING_MAX = 10;
+    /** 注入的主张条数上限（有界是硬要求：组装成本与历史长度解耦；口径收敛在 {@link FindingsText#MAX_ITEMS}）。 */
+    private static final int FINDING_MAX = FindingsText.MAX_ITEMS;
 
     /** 分类注入的结论摘要上限：判「用户要的东西是否已在结论里」够用即可。 */
     private static final int CLASSIFY_SUMMARY_MAX = 800;
@@ -276,26 +277,10 @@ public class TaskFollowUpQa {
         return sb.toString();
     }
 
-    /** 主张渲染（QA 口径的引导语；行格式与 OpsRunner.renderFindings 逐字段一致）。 */
+    /** 主张渲染（QA 口径空列表显示「（无）」；行格式与 OpsRunner.renderFindings 同源同序——FindingsText）。 */
     private static String renderClaims(List<AgentFinding> findings) {
-        if (findings == null || findings.isEmpty()) {
-            return "（无）";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < findings.size(); i++) {
-            if (i >= FINDING_MAX) {
-                sb.append("- （其余 ").append(findings.size() - FINDING_MAX).append(" 条已省略，不要引用）\n");
-                break;
-            }
-            AgentFinding f = findings.get(i);
-            String claim = f.claim() == null ? "" : f.claim().replaceAll("\\s+", " ").trim();
-            if (claim.length() > FINDING_CLAIM_MAX) {
-                claim = claim.substring(0, FINDING_CLAIM_MAX) + "…";
-            }
-            sb.append("- [#").append(i + 1).append("] [").append(f.kind()).append("] ")
-                    .append(claim).append('\n');
-        }
-        return sb.toString();
+        String rendered = FindingsText.renderNumbered(findings, FINDING_MAX, FINDING_CLAIM_MAX);
+        return rendered.isEmpty() ? "（无）" : rendered;
     }
 
     /** 关键槽位投影（只挑定位用得上的四项，其余槽位与解读无关）。 */

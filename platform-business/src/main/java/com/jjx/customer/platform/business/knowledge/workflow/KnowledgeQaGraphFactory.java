@@ -5,6 +5,7 @@ import com.agentframework.definition.node.ConditionNodeDefinition;
 import com.agentframework.definition.node.ConditionNodeDefinition.Branch;
 import com.agentframework.definition.node.CustomNodeDefinition;
 import com.agentframework.definition.node.NodeMeta;
+import com.agentframework.definition.node.TerminalKind;
 import com.agentframework.definition.node.ToolNodeDefinition;
 import com.agentframework.definition.region.LoopConvergence;
 import com.agentframework.definition.region.Paradigm;
@@ -208,7 +209,8 @@ public final class KnowledgeQaGraphFactory {
                 .node(new CustomNodeDefinition(CRITIQUE_NODE, CRITIQUE_EXECUTOR, Map.of(),
                         CRITIQUE_REASON_SLOT, NodeMeta.empty().withGuards(ITERATION_GUARD)))
                 .node(new CustomNodeDefinition(DONE_NODE, KbFinishExecutor.EXECUTOR_REF, Map.of(),
-                        FINAL_OUTPUT_SLOT, NodeMeta.empty().withAttribute("terminal", true)))
+                        FINAL_OUTPUT_SLOT, NodeMeta.empty().withAttribute("terminal", true)
+                                .withAttribute(TerminalKind.META_KEY, TerminalKind.FINISH.name())))
                 .edge(REWRITE_NODE, RETRIEVE_NODE)
                 .edge(RETRIEVE_NODE, CRITIQUE_NODE)
                 .edge(CRITIQUE_NODE, DONE_NODE)
@@ -272,7 +274,8 @@ public final class KnowledgeQaGraphFactory {
                 .node(ConditionNodeDefinition.of(ROUTE_GATE_NODE,
                         branches.toArray(new Branch[0])))
                 .node(new CustomNodeDefinition(SHORTCIRCUIT_NODE, SHORTCIRCUIT_EXECUTOR, Map.of(),
-                        FINAL_OUTPUT_SLOT, NodeMeta.empty().withAttribute("terminal", true)))
+                        FINAL_OUTPUT_SLOT, NodeMeta.empty().withAttribute("terminal", true)
+                                .withAttribute(TerminalKind.META_KEY, TerminalKind.FINISH.name())))
                 .edge(NORMALIZE_NODE, CLASSIFY_NODE)
                 .edge(CLASSIFY_NODE, ROUTE_NODE)
                 .edge(ROUTE_NODE, ROUTE_GATE_NODE)

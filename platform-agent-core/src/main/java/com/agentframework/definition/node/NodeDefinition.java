@@ -23,4 +23,13 @@ public sealed interface NodeDefinition
     default boolean isTerminal() {
         return meta().booleanAttribute("terminal", false);
     }
+
+    /**
+     * 终态语义声明（meta 属性 {@code terminalKind}，值见 {@link TerminalKind}）。
+     *
+     * @return 声明的终态语义；未声明 / 未知值返回 null（调用方自行兜底）
+     */
+    default TerminalKind terminalKind() {
+        return TerminalKind.of(meta().stringAttribute(TerminalKind.META_KEY, null));
+    }
 }

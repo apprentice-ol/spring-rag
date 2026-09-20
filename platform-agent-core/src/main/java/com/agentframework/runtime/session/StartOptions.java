@@ -82,6 +82,17 @@ public record StartOptions(
         return new StartOptions(sessionId, tenantId, userId, workspaceId, traceId, slots, attributes, ephemeral);
     }
 
+    /**
+     * @param newTraceId 链路追踪 id（空白则忽略，仍由引擎生成——调用方拿不到业务链 id 时不必判空）
+     * @return 指定链路 id 后的选项。会话 traceId 会流向引擎持久化记录（SessionRecord）、
+     *         引擎事件与根 span，是「引擎会话 ↔ 业务链」对齐的唯一入口
+     */
+    public StartOptions withTraceId(String newTraceId) {
+        return newTraceId == null || newTraceId.isBlank()
+                ? this
+                : new StartOptions(sessionId, tenantId, userId, workspaceId, newTraceId, slots, attributes, ephemeral);
+    }
+
     /** @return 标记为临时会话后的选项（不落库） */
     public StartOptions asEphemeral() {
         return new StartOptions(sessionId, tenantId, userId, workspaceId, traceId, slots, attributes, true);

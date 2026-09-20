@@ -8,6 +8,7 @@ import com.agentframework.engine.core.NodeContext;
 import com.agentframework.engine.core.NodeResult;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.jjx.customer.platform.business.ops.AutonomyLevel;
+import com.jjx.customer.platform.business.ops.AutonomyPolicy;
 import com.jjx.customer.platform.business.ops.HumanResponseInterpreter;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
@@ -47,11 +48,16 @@ public class ConfirmExecutor implements NodeExecutor {
 
     private final HumanResponseInterpreter interpreter;
 
+    /** 日志反查（确认页上改了信息 → 重跑；与问齐环同一份实现，见 {@link LogBackfill}） */
+    private final LogBackfill logBackfill;
+
     /**
      * @param interpreter 回复解释器（识别确认页上的改写/方向指令；null = 只认确认回传）
+     * @param logBackfill 日志反查组件（null = 确认页改动后不重跑反查，行为同旧版）
      */
-    public ConfirmExecutor(HumanResponseInterpreter interpreter) {
+    public ConfirmExecutor(HumanResponseInterpreter interpreter, LogBackfill logBackfill) {
         this.interpreter = interpreter;
+        this.logBackfill = logBackfill;
     }
 
     @Override
@@ -75,11 +81,22 @@ public class ConfirmExecutor implements NodeExecutor {
                         OpsDiagnoseWorkflowFactory.INV_THINK_NODE), writes);
             }
             log.info("[ops-confirm] 未确认为「开始排查」（回复={}），刷新确认单再问一轮", abbreviate(reply));
+            // ①′ 确认门同属 intake 阶段：用户改了槽位（尤其时间窗/单号）→ 反查的输入变了，
+            //     用最新值重跑一次再刷新确认单，免得用户在旧结论上做确认
+            if (!response.mergedFills().isEmpty() && logBackfill != null) {
+                Map<String, String> confirmed = currentSlots(context, writes);
+                logBackfill.rerun(node, context, confirmed, writes,
+                        AutonomyPolicy.of(context.slots().getString(AutonomyLevel.SLOT, "")));
+            }
         }
 
         // ② 出确认单：全部已收集槽位 + 来源 + 依据，用户可逐项改，改完再确认
         List<HumanRequest.SlotAsk> asks = collectedAsks(context, writes);
-        String prompt = "确认这些信息后开始排查（不对的项可以点「改」或「清空」）";
+        // 反查空结果如实透出（与问齐环同口径）：确认单上最需要用户先确认的是"信息本身对不对"
+        String lookupNote = lookupNoteOf(writes, context);
+        String prompt = lookupNote.isBlank()
+                ? "确认这些信息后开始排查（不对的项可以点「改」或「清空」）"
+                : lookupNote + "。请确认这些信息是否准确（不对的项可以点「改」或「清空」）";
         HumanRequest request = new HumanRequest(HumanRequest.Kind.CONFIRM, prompt, asks, null,
                 List.of(new HumanRequest.Choice(CONFIRM_DECISION, "确认，开始排查",
                         "按上面这些信息开始查日志定位问题")), true);
@@ -173,6 +190,39 @@ public class ConfirmExecutor implements NodeExecutor {
         Object pending = writes.get(AutoResolveExecutor.INFERRED_SLOTS_SLOT);
         return pending != null ? String.valueOf(pending)
                 : context.slots().getString(AutoResolveExecutor.INFERRED_SLOTS_SLOT, "");
+    }
+
+    /** 反查空结果说明（writes 优先；空 = 命中或未执行反查）。 */
+    private static String lookupNoteOf(Map<String, Object> writes, NodeContext context) {
+        Object pending = writes.get(LogBackfill.LOG_LOOKUP_SLOT);
+        String note = pending == null
+                ? context.slots().getString(LogBackfill.LOG_LOOKUP_SLOT, "")
+                : String.valueOf(pending);
+        return note == null ? "" : note.trim();
+    }
+
+    /**
+     * 当前生效槽位快照（现状 + 本轮改动），供反查重跑使用。
+     *
+     * @param context 节点上下文
+     * @param writes  本轮写入（覆盖现状）
+     * @return 槽位名 → 值（仅目录槽）
+     */
+    private static Map<String, String> currentSlots(NodeContext context, Map<String, Object> writes) {
+        Map<String, String> current = new LinkedHashMap<>();
+        for (OpsSlotCatalog.Spec spec : OpsSlotCatalog.ALL) {
+            String value = context.slots().getString(spec.name(), "");
+            if (!value.isBlank()) {
+                current.put(spec.name(), value);
+            }
+        }
+        for (OpsSlotCatalog.Spec spec : OpsSlotCatalog.ALL) {
+            Object value = writes.get(spec.name());
+            if (value instanceof String text && !text.isBlank()) {
+                current.put(spec.name(), text);
+            }
+        }
+        return current;
     }
 
     private HumanRequest readRequest(NodeContext context) {

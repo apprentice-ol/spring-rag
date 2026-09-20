@@ -22,6 +22,7 @@ import com.jjx.customer.platform.business.task.AgentFinding;
 import com.jjx.customer.platform.business.task.AgentFindingServiceImpl;
 import com.jjx.customer.platform.business.task.AgentTaskServiceImpl;
 import com.jjx.customer.platform.business.task.AgentTaskState;
+import com.jjx.customer.platform.business.task.FindingsText;
 import com.jjx.customer.platform.business.task.FindingExtractor;
 import com.jjx.customer.platform.business.trace.model.TraceView;
 import java.util.LinkedHashMap;
@@ -61,14 +62,14 @@ public class OpsRunner {
     /** 关联诊断背景的槽位名（由 IntakeStageModule 声明，compose 渲染「关联诊断背景」段）。 */
     public static final String RELATED_FINDINGS_SLOT = "related_findings";
 
-    /** 单条主张截断长度。 */
-    private static final int FINDING_CLAIM_MAX = 400;
+    /** 单条主张截断长度（口径收敛在 {@link FindingsText#CLAIM_MAX_CHARS}）。 */
+    private static final int FINDING_CLAIM_MAX = FindingsText.CLAIM_MAX_CHARS;
 
     /** 关联背景单条截断（比主张的 400 更紧——背景只要能认出「是哪件事」）。 */
     private static final int RELATED_CLAIM_MAX = 200;
 
-    /** 注入的主张条数上限——**有界是硬要求**：组装成本必须与历史长度解耦。 */
-    private static final int FINDING_MAX = 10;
+    /** 注入的主张条数上限——**有界是硬要求**：组装成本必须与历史长度解耦（口径收敛在 {@link FindingsText#MAX_ITEMS}）。 */
+    private static final int FINDING_MAX = FindingsText.MAX_ITEMS;
 
     /**
      * 把主张渲染成注入文本。
@@ -87,23 +88,10 @@ public class OpsRunner {
         if (findings == null || findings.isEmpty()) {
             return "";
         }
-        StringBuilder sb = new StringBuilder(
-                "上一轮已确立的主张（编号供你在「主张变更」段中精确指认；"
-                        + "用户可能正对其中某条提出异议，请据此回应或修正）：\n");
-        for (int i = 0; i < findings.size(); i++) {
-            if (i >= FINDING_MAX) {
-                sb.append("- （其余 ").append(findings.size() - FINDING_MAX).append(" 条已省略，不要引用）\n");
-                break;
-            }
-            AgentFinding f = findings.get(i);
-            String claim = f.claim() == null ? "" : f.claim().replaceAll("\\s+", " ").trim();
-            if (claim.length() > FINDING_CLAIM_MAX) {
-                claim = claim.substring(0, FINDING_CLAIM_MAX) + "…";
-            }
-            sb.append("- [#").append(i + 1).append("] [").append(f.kind()).append("] ")
-                    .append(claim).append('\n');
-        }
-        return sb.toString();
+        // 行格式与常量收敛在 FindingsText（TaskFollowUpQa 同源调用——编号锚点契约靠同一函数锁步）
+        return "上一轮已确立的主张（编号供你在「主张变更」段中精确指认；"
+                + "用户可能正对其中某条提出异议，请据此回应或修正）：\n"
+                + FindingsText.renderNumbered(findings, FINDING_MAX, FINDING_CLAIM_MAX);
     }
 
     /**
@@ -327,7 +315,10 @@ public class OpsRunner {
             }
             Session singleTurn = agentEngine.startSession(
                     agentEngine.loadAgent(AgentCatalog.OPS.id(), "latest"),
-                    StartOptions.defaults().asEphemeral());
+                    StartOptions.defaults().asEphemeral()
+                            // 会话 traceId 对齐调用链（REST 单轮 = 当前请求的 OTel trace）：
+                            // 不传时引擎自生成随机 UUID，会话记录/引擎事件与业务链各说各话
+                            .withTraceId(currentTraceId()));
             return agentEngine.run(singleTurn, new Input(question, Map.of(), prefill));
         }
 
@@ -410,7 +401,10 @@ public class OpsRunner {
         Session session = agentEngine.startSession(
                 agentEngine.loadAgent(AgentCatalog.OPS.id(), "latest"),
                 StartOptions.defaults()
-                        .withSessionId(AgentTaskState.attemptIdOf(task.taskId(), attemptNo)));
+                        .withSessionId(AgentTaskState.attemptIdOf(task.taskId(), attemptNo))
+                        // 一次诊断从追问到结论是一条链：每个 attempt 的引擎会话都挂到 chainTraceId 上
+                        //（首轮缺省时兜当前请求 trace，与 markSuspended 的取值口径一致）
+                        .withTraceId(task.chainTraceId() != null ? task.chainTraceId() : currentTraceId()));
         try {
             return agentEngine.run(session, new Input(question, Map.of(), prefill));
         } catch (RuntimeException e) {
@@ -464,7 +458,8 @@ public class OpsRunner {
      * 当前 OTel traceId（诊断链 id 的取值）。
      *
      * <p>同一诊断任务的追问轮会沿用它（见 ChatOrchestrator），所以一次诊断从追问到结论
-     * 是一条链而不是 N 段孤立的轨迹；落库侧只在首轮写入（{@code AgentSessionServiceImpl}）。</p>
+     * 是一条链而不是 N 段孤立的轨迹；落库侧只在首轮写入
+     * （{@code AgentTaskServiceImpl.markSuspended/markConcluded}，chainTraceId 随任务行持久化）。</p>
      *
      * @return traceId；无有效 span 时 null
      */

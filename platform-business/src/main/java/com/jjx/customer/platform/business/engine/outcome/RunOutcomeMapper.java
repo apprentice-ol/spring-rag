@@ -2,17 +2,20 @@ package com.jjx.customer.platform.business.engine.outcome;
 
 import com.jjx.customer.platform.business.workflow.common.EscalateTerminal;
 
+import com.agentframework.definition.node.TerminalKind;
 import com.agentframework.engine.core.RunResult;
 import java.util.Map;
 
 /**
  * {@link RunResult} → 业务 {@link OutcomeKind} 的等价映射（替代旧内核 {@code ExecutionResult.kind()}）。
  *
- * <p>判定约定（与 ops 诊断图的节点契约对齐，见 {@code business.ops.workflow.OpsDiagnoseWorkflowFactory}）：</p>
+ * <p>判定约定（终态语义优先读节点声明 {@code TerminalKind}，命名/槽位约定仅兜底）：</p>
  * <ul>
  *   <li>挂起（{@code state=SUSPENDED}，任意执行器 {@code NodeResult.suspended()}）→ {@link OutcomeKind#CLARIFY}，
  *       text = 挂起时的追问文案（{@code RunResult.output}）；</li>
- *   <li>到访升级终态节点（{@code escalate_node}）或槽位带 {@code escalate_reason} → {@link OutcomeKind#ESCALATE}；</li>
+ *   <li>轨迹中存在终态声明 {@code ESCALATE} 的步（图声明见 {@code TerminalStageModule} /
+ *       {@code KnowledgeReactGraphFactory}），或到访升级终态节点（{@code escalate_node}），
+ *       或槽位带 {@code escalate_reason} → {@link OutcomeKind#ESCALATE}；</li>
  *   <li>执行失败（{@code state=FAILED}）保守按升级交付（诊断链不允许静默截断）；</li>
  *   <li>其余完成态（{@code conclude} 出口）→ {@link OutcomeKind#DIRECT}。</li>
  * </ul>
@@ -41,11 +44,7 @@ public final class RunOutcomeMapper {
         if (result.suspended() || result.suspendedNode() != null) {
             return OutcomeKind.CLARIFY;
         }
-        if (result.visitedNodes() != null && result.visitedNodes().contains(ESCALATE_NODE_ID)) {
-            return OutcomeKind.ESCALATE;
-        }
-        Map<String, Object> slots = result.slots();
-        if (slots != null && slots.containsKey(ESCALATE_REASON_SLOT)) {
+        if (escalated(result)) {
             return OutcomeKind.ESCALATE;
         }
         if (result.state() == com.agentframework.runtime.session.SessionState.CANCELLED) {
@@ -56,5 +55,21 @@ public final class RunOutcomeMapper {
             return OutcomeKind.ESCALATE;
         }
         return OutcomeKind.DIRECT;
+    }
+
+    /**
+     * 升级判定，按可靠性排序：终态声明（图定义时显式声明，改名不失效）→ 节点 id 约定 →
+     * 升级原因槽位（挂起恢复等路径可能没走完 escalate 节点但已写原因）。
+     */
+    private static boolean escalated(RunResult result) {
+        if (result.executionTrace() != null && result.executionTrace().stream()
+                .anyMatch(step -> step.terminalKind() == TerminalKind.ESCALATE)) {
+            return true;
+        }
+        if (result.visitedNodes() != null && result.visitedNodes().contains(ESCALATE_NODE_ID)) {
+            return true;
+        }
+        Map<String, Object> slots = result.slots();
+        return slots != null && slots.containsKey(ESCALATE_REASON_SLOT);
     }
 }

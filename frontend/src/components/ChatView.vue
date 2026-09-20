@@ -395,6 +395,44 @@ function overridableRows(m: Msg): ClarifySlotQuestion[] {
   return (m.clarify?.reviewed || []).filter(r => !!r.value)
 }
 
+/** 值来自用户自己（user_override）：只展示，不给「改/清空」——那是他刚说的话，再问一遍「要改吗」是噪音。
+ *  后端曾把它整个排除在结构化投影外，结果卡片拿不到 reviewed、掉进纯文本兜底分支糊成开发口径 */
+function isUserProvided(r: ClarifySlotQuestion): boolean {
+  return r.provenance === 'user_override'
+}
+
+/** 真正可改的行数——提示语要不要写「不对可点「改」或「清空」」由它决定：写了却没按钮就是骗人 */
+function editableRowCount(m: Msg): number {
+  return overridableRows(m).filter(r => !isUserProvided(r)).length
+}
+
+/** 「我理解的信息」块标题：全是用户自己给的值时不能说「已自动补全」（根本没自动补过什么） */
+function autoBlockTitle(m: Msg): string {
+  const rows = overridableRows(m)
+  const editable = editableRowCount(m)
+  const head = m.clarify?.kind === 'CONFIRM' || editable === 0 ? '我理解的信息' : '已自动补全'
+  return editable > 0 ? `${head} · 不对可点「改」或「清空」` : head
+}
+
+/** 旧事件兜底行「slot = value（依据）」拆成三段，好在卡片上按用户口径渲染；拆不开就整行透出 */
+function legacyRows(m: Msg): Array<{ label: string; value: string; evidence: string }> {
+  return (m.clarify?.evidence || []).map(line => {
+    // value 用贪婪匹配、依据取最后一个括号组：value 自己带全角括号时不会被截断
+    const parsed = line.match(/^(\S+)\s*=\s*(.*)（([^（）]*)）\s*$/)
+    if (!parsed) return { label: '', value: line, evidence: '' }
+    return { label: slotLabel(parsed[1]), value: parsed[2], evidence: parsed[3] }
+  })
+}
+
+/** 挂起卡片（问齐/确认）已完整表达该消息时，不再重复渲染正文文本版。
+ *  实时路径有守卫（onContent 里 `if (ans.clarify) return`），但刷新/切会话走历史渲染没有，
+ *  同一句「已自动补全：…」会被正文和卡片各说一遍。DECIDE 不在此列——它的正文另有内容 */
+function cardHidesBody(m: Msg): boolean {
+  const kind = m.clarify?.kind
+  if (kind !== 'CLARIFY' && kind !== 'CONFIRM') return false
+  return (m.clarify?.questions?.length || 0) > 0 || overridableRows(m).length > 0
+}
+
 /** 纠正候选：目录候选值去掉当前值（当前值点它没意义），最多展示 4 个防卡片膨胀 */
 function correctOptions(r: ClarifySlotQuestion): string[] {
   return (r.options || []).filter(o => o !== r.value).slice(0, 4)
@@ -720,7 +758,8 @@ function fillSuggestion(s: string) {
         <div class="bubble">
           <div v-if="m.streaming&&!m.content" class="typing-indicator"><span></span><span></span><span></span></div>
           <div v-else-if="m.role==='user'" class="msg-text user-text">{{ m.content }}</div>
-          <div v-else class="markdown-body" v-html="renderWithCitations(m)" @click="onBubbleClick($event, m)"></div>
+          <!-- 有问齐/确认卡片时不渲染正文文本版（历史渲染没有实时路径那个「卡片已接管」守卫，会双发） -->
+          <div v-else-if="!cardHidesBody(m)" class="markdown-body" v-html="renderWithCitations(m)" @click="onBubbleClick($event, m)"></div>
           <!-- 诊断结论的「上下文来源」段：服务端用固定格式追加（—— / 本次诊断的上下文自动补全：/ - slot = value（依据）），
                解析成结构化行渲染，不再当普通正文 -->
           <div v-if="m.role==='assistant' && contextRows(m).length" class="conclusion-context">
@@ -747,16 +786,21 @@ function fillSuggestion(s: string) {
                         :disabled="sending" @click="setPick(i, q.slot, opt)">{{ opt }}</button>
               </div>
             </div>
-            <!-- 已自动补全（P3）：值 + 来源角标 + 依据（回答"这值哪来的"）+ 就地改/清空。
-                 每一行都能改——只给有候选值的行配按钮，提示语就是在骗人（曾实测踩到） -->
+            <!-- 我理解的信息（P3）：值 + 来源角标 + 依据（回答"这值哪来的"）+ 就地改/清空。
+                 两条诚实性约束：① 用户自己给的值不给改动入口——那是他刚说的话，再问「要改吗」是噪音；
+                 ② 没有可改行时标题不承诺「改成 …」按钮（提示语写了却没按钮就是骗人，曾实测踩到） -->
             <div v-if="overridableRows(m).length" class="clarify-auto">
-              <div class="clarify-auto-title">{{ m.clarify.kind === 'CONFIRM'
-                ? '我理解的信息 · 不对可点「改」或「清空」' : '已自动补全 · 不对可点「改」或「清空」' }}</div>
+              <div class="clarify-auto-title">{{ autoBlockTitle(m) }}</div>
               <div v-for="r in overridableRows(m)" :key="r.slot" class="auto-row">
                 <template v-if="editingSlot !== r.slot">
                   <span class="auto-slot">{{ slotLabel(r.slot) }}</span>
+                  <!-- 用户自己刚给的值：只读展示（不进 pickCount，也没有编辑入口） -->
+                  <template v-if="isUserProvided(r)">
+                    <span class="auto-value readonly" :title="r.value || ''">{{ shortValue(r.value) }}</span>
+                    <span class="auto-badge auto-badge-user_override">{{ provenanceLabel(r.provenance) }}</span>
+                  </template>
                   <!-- 值本身即入口：hover 变主色 + 虚线下划线，点一下进就地编辑 -->
-                  <template v-if="hasPick(i, r.slot)">
+                  <template v-else-if="hasPick(i, r.slot)">
                     <span class="auto-value picked" :title="'待提交：' + (pickOf(i, r.slot) || '（清空）')">
                       → {{ pickOf(i, r.slot) ? shortValue(pickOf(i, r.slot)) : '清空' }}
                     </span>
@@ -790,10 +834,16 @@ function fillSuggestion(s: string) {
                 </template>
               </div>
             </div>
-            <!-- 旧事件兼容：没有结构化 reviewed 时按文本透出 autoNote -->
+            <!-- 旧事件兼容：没有结构化 reviewed 时按文本透出 autoNote。
+                 标题不写「不对就点「改成 …」」——这条分支根本没有按钮；行内 `slot = value（依据）`
+                 拆成三段按用户口径渲染（拆不开才整行透出），老消息也不至于糊一脸开发字段 -->
             <div v-else-if="m.clarify.evidence && m.clarify.evidence.length" class="clarify-auto">
-              <div class="clarify-auto-title">已自动补全（不对就点「改成 …」）</div>
-              <div v-for="(e,ei) in m.clarify.evidence" :key="ei" class="clarify-auto-line">{{ e }}</div>
+              <div class="clarify-auto-title">我理解的信息</div>
+              <div v-for="(row,ei) in legacyRows(m)" :key="ei" class="auto-row">
+                <span v-if="row.label" class="auto-slot">{{ row.label }}</span>
+                <span class="auto-value readonly" :title="row.value">{{ row.value }}</span>
+                <span v-if="row.evidence" class="auto-evidence">{{ row.evidence }}</span>
+              </div>
             </div>
             <!-- CONFIRM 确认门：改完点「确认，开始排查」才进诊断 -->
             <div v-if="m.clarify.options?.length" class="decide-options clarify-options-row">
@@ -1161,6 +1211,10 @@ function fillSuggestion(s: string) {
 .auto-badge { flex:0 0 auto; padding:0 6px; font-size:10.5px; line-height:16px; border-radius:99px; border:1px solid var(--color-border-light); color:var(--color-ink-tertiary); background:var(--color-surface); }
 .auto-badge-llm { color:var(--color-warning-ink, var(--color-primary)); border-color:currentColor; }
 .auto-badge-log_query { color:var(--color-primary); border-color:currentColor; }
+.auto-badge-user_override { color:var(--color-ink-secondary); border-color:currentColor; }
+/* 只读值（用户自己给的）：去掉「可点」的视觉暗示——它没有编辑入口 */
+.auto-value.readonly { cursor:default; }
+.auto-value.readonly:hover { color:inherit; border-bottom-color:transparent; }
 .auto-fix { display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; align-items:center; }
 /* 改 = 主色文字动作（低噪，hover 才出边框）；清空 = 危险语汇（平时灰，hover 转警示色） */
 .auto-fix .auto-act { padding:0 7px; font-size:11px; line-height:17px; color:var(--color-primary); border-color:transparent; background:transparent; }

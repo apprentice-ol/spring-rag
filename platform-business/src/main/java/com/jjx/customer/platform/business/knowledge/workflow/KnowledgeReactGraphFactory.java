@@ -8,6 +8,7 @@ import com.agentframework.definition.node.ConditionNodeDefinition.Branch;
 import com.agentframework.definition.node.CustomNodeDefinition;
 import com.agentframework.definition.node.LlmNodeDefinition;
 import com.agentframework.definition.node.NodeMeta;
+import com.agentframework.definition.node.TerminalKind;
 import com.agentframework.definition.region.Paradigm;
 import com.agentframework.definition.region.RegionDefinition;
 import com.agentframework.definition.region.RegionLoop;
@@ -90,10 +91,12 @@ public final class KnowledgeReactGraphFactory {
                         Branch.otherwise(KnowledgeQaGraphFactory.DONE_NODE)))
                 .node(new CustomNodeDefinition(KnowledgeQaGraphFactory.DONE_NODE,
                         KbFinishExecutor.EXECUTOR_REF, Map.of(), "final_output",
-                        NodeMeta.empty().withAttribute("terminal", true)))
+                        NodeMeta.empty().withAttribute("terminal", true)
+                                .withAttribute(TerminalKind.META_KEY, TerminalKind.FINISH.name())))
                 .node(new CustomNodeDefinition(EscalateTerminal.NODE_ID,
                         EscalateTerminal.EXECUTOR_ID, Map.of(), "escalate_reason",
-                        NodeMeta.empty().withAttribute("terminal", true)))
+                        NodeMeta.empty().withAttribute("terminal", true)
+                                .withAttribute(TerminalKind.META_KEY, TerminalKind.ESCALATE.name())))
                 .edge(THINK_NODE, ACT_NODE)
                 .edge(ACT_NODE, DECIDE_NODE)
                 .edge(DECIDE_NODE, THINK_NODE)

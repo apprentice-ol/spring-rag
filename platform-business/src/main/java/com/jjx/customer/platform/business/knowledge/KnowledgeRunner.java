@@ -162,7 +162,10 @@ public class KnowledgeRunner {
         // 这是高频路径（每次提问都走），泄漏速度远高于 ops 的单轮 REST。
         Session singleTurn = agentEngine.startSession(
                 agentEngine.loadAgent(entry.id(), "latest"),
-                StartOptions.defaults().asEphemeral());
+                StartOptions.defaults().asEphemeral()
+                        // 引擎会话/事件/span 根挂到编排链 traceId 上（RunContext 已携带；
+                        // 评测等无链路径为空，引擎自生成——withTraceId 对空白安全）
+                        .withTraceId(ctx.traceId()));
         RunResult result = agentEngine.run(singleTurn, new Input(question, Map.of(), slots));
 
         List<RetrievedChunk> chunks = toChunks(result, agentId);

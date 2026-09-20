@@ -45,6 +45,7 @@ import com.jjx.customer.platform.routing.RouteRegistry;
 import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -65,8 +66,8 @@ import java.util.Set;
  * （图是唯一事实源）；knowledge 双图在引擎上直接注册。</p>
  *
  * <p>Prompt 资产管道见 {@link PromptAssetConfiguration}；引擎会话持久化走
- * {@code ops_engine_session/slots}（挂起恢复），澄清会话仍由
- * {@code AgentSessionServiceImpl}（sa_agent_session）承担。</p>
+ * {@code ops_engine_session/slots}（挂起恢复），任务/挂起状态由
+ * {@code AgentTaskServiceImpl}（sa_agent_task，2026-09-19 起取代 sa_agent_session）承担。</p>
  */
 @Configuration
 @EnableConfigurationProperties(OpsProperties.class)
@@ -144,6 +145,22 @@ public class AgentEngineConfiguration {
         return agentEngine.contexts();
     }
 
+    /**
+     * 内核 span → OTel 桥（2026-09-20 核心收敛 C5）：把引擎 run（{@code agent:<id>}）与
+     * 每个节点（{@code node:<id>}）镜像进现有 OTel 观测链。
+     *
+     * <p>此前内核 Tracer 整装休眠（EngineBuilder 回退 SimpleTracer 且无 exporter 消费），
+     * ops 线引擎内 LLM 调用在 OTel 侧零可见。桥接后所有业务线的引擎 span 自动生效。
+     * OTel 实例优先取容器 bean（micrometer-tracing 桥装配的那个），缺省回退全局——
+     * 未配置导出时 OTel SDK 是 no-op，本桥自然降级。</p>
+     */
+    @Bean
+    public OtelSpanTracer agentOtelSpanTracer(
+            ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry) {
+        return new OtelSpanTracer(
+                openTelemetry.getIfAvailable(io.opentelemetry.api.GlobalOpenTelemetry::get));
+    }
+
     @Bean(destroyMethod = "close")
     public Engine agentEngine(ChatModel chatModel,
                               PromptStorePromptProvider promptProvider,
@@ -157,6 +174,7 @@ public class AgentEngineConfiguration {
                               IntentClassifier intentClassifier,
                               RouteRegistry routeRegistry,
                               QueryRewriter queryRewriter,
+                              OtelSpanTracer otelSpanTracer,
                               @Value("${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
 
         // ---- 工具面（共享注册表：RAG 检索 + ops 诊断 + 时间）----
@@ -198,6 +216,7 @@ public class AgentEngineConfiguration {
                 .toolRegistry(sharedRegistry)
                 .modelGateway(gateway)
                 .promptProvider(promptProvider)
+                .tracer(otelSpanTracer)
                 .sessionStore(new PgEngineSessionStore(new JdbcTemplate(dataSource), objectMapper))
                 .slotStore(new PgEngineSlotStore(new JdbcTemplate(dataSource), objectMapper));
 

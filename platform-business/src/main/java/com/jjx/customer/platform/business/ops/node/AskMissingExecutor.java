@@ -11,6 +11,7 @@ import com.agentframework.engine.core.NodeResult;
 import com.agentframework.engine.workflowruntime.NodeExecutor;
 import com.agentframework.runtime.session.Message;
 import com.jjx.customer.platform.business.ops.AutonomyLevel;
+import com.jjx.customer.platform.business.ops.AutonomyPolicy;
 import com.jjx.customer.platform.business.ops.HumanResponseInterpreter;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
@@ -53,13 +54,19 @@ public class AskMissingExecutor implements NodeExecutor {
     /** 用户回复解释器（人在环中 P2；null = 只走抽槽器，行为同 P1） */
     private final HumanResponseInterpreter interpreter;
 
+    /** 日志反查（挂起恢复重跑：用户这一轮可能改了时间窗/单号，上一轮的反查结论随之作废） */
+    private final LogBackfill logBackfill;
+
     /**
      * @param extractor   槽位抽取器
      * @param interpreter 回复解释器（补缺 / 推翻自动补全 / 方向指令）
+     * @param logBackfill 日志反查组件（null = 恢复时不重跑反查，行为同旧版）
      */
-    public AskMissingExecutor(OpsSlotExtractor extractor, HumanResponseInterpreter interpreter) {
+    public AskMissingExecutor(OpsSlotExtractor extractor, HumanResponseInterpreter interpreter,
+            LogBackfill logBackfill) {
         this.extractor = extractor;
         this.interpreter = interpreter;
+        this.logBackfill = logBackfill;
     }
 
     @Override
@@ -87,6 +94,10 @@ public class AskMissingExecutor implements NodeExecutor {
                 writes.putAll(extracted);
                 confirmed.putAll(extracted);
             }
+            // ① 挂起恢复重跑日志反查：问齐环属于 intake 阶段（挂起语义 = 等信息），用户这轮
+            //    可能改了时间窗/单号——基础信息变了，上一轮"没查到"的结论就不再作数。
+            //    用最新槽位重查一次；命中就补进台账，仍没命中则如实留给卡片反问（②）。
+            rerunLogBackfill(node, context, confirmed, writes);
         }
 
         List<String> missing = SlotExtractExecutor.missingRequired(confirmed, Map.of());
@@ -98,13 +109,20 @@ public class AskMissingExecutor implements NodeExecutor {
             // 读 context.slots() 会拿到写入前的旧值（用户点了「改成 最近1小时」卡片却还显示旧窗口）
             String provenanceJson = effectiveProvenance(writes, context);
             String autoNote = renderNote(provenanceJson);
+            // ② 反查空结果如实说：查了没命中（或信息不全没查成）时把结论摆在问句前面，
+            //    请用户确认/修改所给信息——静默略过会让用户分不清"查了没命中"和"根本没查"
+            String lookupNote = lookupNoteOf(writes, context);
+            if (!lookupNote.isBlank()) {
+                askText = lookupNote + "。请确认你给的信息是否准确，或直接修改后我再查一遍。\n\n" + askText;
+            }
             if (!autoNote.isBlank()) {
                 askText = askText + "\n\n" + autoNote + "\n（以上已自动补全，如有误请直接指出）";
             }
             writes.put(CLARIFY_QUESTION_SLOT, askText);
             // 挂起结果同样要带回全部槽位写入：答复解析出的值必须先落槽位，否则重入会再问一遍
             NodeResult suspended = NodeResult.suspended(node.id(), askText)
-                    .withSlotWrite(HumanRequest.PENDING_SLOT, writeClarifyRequest(missing, provenanceJson));
+                    .withSlotWrite(HumanRequest.PENDING_SLOT,
+                            writeClarifyRequest(missing, provenanceJson, lookupNote));
             for (Map.Entry<String, Object> entry : writes.entrySet()) {
                 suspended = suspended.withSlotWrite(entry.getKey(), entry.getValue());
             }
@@ -221,8 +239,9 @@ public class AskMissingExecutor implements NodeExecutor {
      * （点选回传 {@code #override:}，或直接说话由回复解释器识别为推翻）。
      *
      * @param provenanceJson 「本轮已生效」的来源台账（不是 context 里的旧值）
+     * @param lookupNote     反查空结果说明（非空时作为卡片领读句，请用户确认/修改信息）
      */
-    private String writeClarifyRequest(List<String> missing, String provenanceJson) {
+    private String writeClarifyRequest(List<String> missing, String provenanceJson, String lookupNote) {
         try {
             List<HumanRequest.SlotAsk> asks = new ArrayList<>(missing.size());
             for (String name : missing) {
@@ -232,32 +251,77 @@ public class AskMissingExecutor implements NodeExecutor {
                         : new HumanRequest.SlotAsk(spec.name(), spec.question(), spec.hint(),
                                 null, null, spec.options()));
             }
-            // 已自动补全项：值 + 来源（模型推断 / 日志反查 / 缺省值 / 规则提取）
-            // user_override 不进：那已经是用户确认过的值，不该再挂「如有误请指出」
+            // 已自动补全项：值 + 来源（模型推断 / 日志反查 / 缺省值 / 规则提取 / 用户更正）
             List<String> notes = new ArrayList<>();
             for (SlotProvenance.Entry entry : SlotProvenance.parse(provenanceJson)) {
                 if (entry.value().isBlank()) {
                     continue;
                 }
                 notes.add(entry.slot() + " = " + abbreviate(entry.value()) + "（" + entry.evidence() + "）");
-                // user_override 只进 notes 不进 asks：那已是用户确认过的值，不该再挂「如有误请指出」
-                if (missing.contains(entry.slot()) || SlotProvenance.SOURCE_OVERRIDDEN.equals(entry.source())) {
+                if (missing.contains(entry.slot())) {
                     continue; // 缺失项已在上面的问句里，不重复
                 }
+                // ⚠️ user_override 曾在这里被排除（"已是用户确认过的值，不必再问"），后果是：
+                // 当唯一的"已补全项"就是用户自己刚说的值时，asks 为空 → 交付契约的 reviewed 为空
+                // → 前端掉进纯文本兜底分支，把 time = 最近10分钟（用户更正）这种开发口径直接糊在卡片上。
+                // 正解是**让它进结构化投影**，"不给改动入口"交给前端按 provenance 判——
+                // 排除在投影之外，等于连展示口径一起丢了。
                 OpsSlotCatalog.Spec spec = specOf(entry.slot());
                 asks.add(new HumanRequest.SlotAsk(entry.slot(),
                         spec == null ? entry.slot() : spec.question(),
                         spec == null ? null : spec.hint(), entry.value(), entry.source(),
                         spec == null ? List.of() : spec.options(), false, entry.evidence()));
             }
+            // 领读句：反查空结果优先（那是本轮最需要用户回应的事），否则沿用默认问句。
+            // 前端按"长度 > 24 且非默认问句"判定是否作为卡片领读展示（leadOf），故这里给完整句子
+            String prompt = lookupNote == null || lookupNote.isBlank()
+                    ? "请补充以下信息，我将继续排查"
+                    : lookupNote + "。请确认你给的信息是否准确，或直接修改后我再查一遍";
             HumanRequest request = notes.isEmpty()
-                    ? HumanRequest.clarify("请补充以下信息，我将继续排查", asks)
-                    : HumanRequest.clarify("请补充以下信息，我将继续排查", asks,
+                    ? HumanRequest.clarify(prompt, asks)
+                    : HumanRequest.clarify(prompt, asks,
                             new HumanRequest.DecisionContext("已自动补全（如有误请直接指出）", notes));
             return MAPPER.writeValueAsString(request);
         } catch (Exception e) {
             return ""; // 序列化失败按纯文本挂起（兜底不变）
         }
+    }
+
+    /**
+     * 挂起恢复重跑日志反查（按挂起阶段）：只在本节点（问齐环 = intake）做——
+     * 诊断阶段的挂起（replan 决策 / 环内 ask_user）问的是方向，基础信息已确认，
+     * 在那里重跑反查只会用旧输入覆盖用户确认过的前提。
+     *
+     * <p>台账从现有 {@code inferred_slots} 续写（同槽覆盖），不推倒重来：首轮反查到的
+     * 接口/报文不该因为这一轮换了时间窗就丢失。</p>
+     *
+     * @param node      本节点定义
+     * @param context   节点上下文
+     * @param confirmed 已确认槽位（本轮答复已并入；就地补）
+     * @param writes    待落槽写入（就地追加）
+     */
+    private void rerunLogBackfill(NodeDefinition node, NodeContext context,
+            Map<String, String> confirmed, Map<String, Object> writes) {
+        if (logBackfill == null) {
+            return;
+        }
+        AutonomyPolicy policy = AutonomyPolicy.of(context.slots().getString(AutonomyLevel.SLOT, ""));
+        logBackfill.rerun(node, context, confirmed, writes, policy);
+    }
+
+    /**
+     * 反查空结果说明（本轮 writes 优先，其次节点上下文）。
+     *
+     * @param writes  本轮待落槽写入
+     * @param context 节点上下文
+     * @return 说明文本；空 = 命中或未执行反查
+     */
+    private static String lookupNoteOf(Map<String, Object> writes, NodeContext context) {
+        Object pending = writes.get(LogBackfill.LOG_LOOKUP_SLOT);
+        String note = pending == null
+                ? context.slots().getString(LogBackfill.LOG_LOOKUP_SLOT, "")
+                : String.valueOf(pending);
+        return note == null ? "" : note.trim();
     }
 
     /**

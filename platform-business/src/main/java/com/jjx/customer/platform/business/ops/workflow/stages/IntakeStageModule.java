@@ -16,6 +16,7 @@ import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
 import com.jjx.customer.platform.business.ops.node.AskMissingExecutor;
 import com.jjx.customer.platform.business.ops.node.AutoResolveExecutor;
 import com.jjx.customer.platform.business.ops.node.ConfirmExecutor;
+import com.jjx.customer.platform.business.ops.node.LogBackfill;
 import com.jjx.customer.platform.business.ops.node.SlotExtractExecutor;
 import java.util.Set;
 
@@ -59,6 +60,9 @@ public final class IntakeStageModule implements StageModule {
         OpsSlotCatalog.declareBusinessSlots(workflowBuilder);
         workflowBuilder.slot("missing_count", SlotType.NUMBER)   // 门禁判定
           .slot("inferred_slots", SlotType.STRING)  // 自主补全溯源
+          // 日志反查的空结果说明（非空 = 查了没命中/信息不全，卡片据此反问用户；
+          // 空 = 命中或未执行）。与 inferred_slots 分槽：那是"填了什么值"的台账，这是"没查到"的交代
+          .slot(LogBackfill.LOG_LOOKUP_SLOT, SlotType.STRING)
           .slot("user_clarify", SlotType.STRING)    // 问齐挂起恢复：Input.slots 回灌
           .slot("pending_ask", SlotType.STRING)     // 环内追问幂等 + 交付层表单（ActExecutor ask_user）
           .slot("pending_ask_slots", SlotType.STRING)
@@ -130,16 +134,19 @@ public final class IntakeStageModule implements StageModule {
     @Override
     public void wireRuntime(EngineBuilder eb, SharedDeps deps) {
         OpsSlotExtractor extractor = new OpsSlotExtractor(deps.model(), deps.mapper(), deps.promptBody());
+        // 反查组件三节点共享：首轮（auto_resolve）与挂起恢复（问齐 / 确认门）用同一份实现——
+        // 用户补了信息（改时间窗/换单号）后重跑，口径与首轮逐字一致
+        LogBackfill logBackfill = new LogBackfill(deps.toolExecutor(), deps.clock());
         eb.nodeExecutor(OpsDiagnoseWorkflowFactory.SLOT_EXTRACT_EXECUTOR,
                         new SlotExtractExecutor(extractor, deps.clock()))
                 // 自主补全：推断模型复用抽槽同源（不可用时只走规则与反查）
                 .nodeExecutor(OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_EXECUTOR,
-                        new AutoResolveExecutor(deps.model(), deps.toolExecutor(), deps.mapper(),
+                        new AutoResolveExecutor(deps.model(), logBackfill, deps.mapper(),
                                 deps.clock(), deps.promptBody()))
                 .nodeExecutor(OpsDiagnoseWorkflowFactory.ASK_MISSING_EXECUTOR,
-                        new AskMissingExecutor(extractor, deps.humanResponseInterpreter()))
+                        new AskMissingExecutor(extractor, deps.humanResponseInterpreter(), logBackfill))
                 .nodeExecutor(OpsDiagnoseWorkflowFactory.CONFIRM_EXECUTOR,
-                        new ConfirmExecutor(deps.humanResponseInterpreter()))
+                        new ConfirmExecutor(deps.humanResponseInterpreter(), logBackfill))
                 .loopGuard(OpsDiagnoseWorkflowFactory.INTAKE_ITERATION_GUARD,
                         OpsDiagnoseWorkflowFactory.INTAKE_MAX_ROUNDS);
     }

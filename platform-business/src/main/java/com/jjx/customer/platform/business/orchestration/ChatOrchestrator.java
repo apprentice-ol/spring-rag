@@ -97,7 +97,8 @@ public class ChatOrchestrator<S> {
     private void doExecute(String question, String conversationId, String agent, String agentChoice,
                            String autonomy, S sink) {
         conversationStore.ensureConversation(conversationId, question);
-        conversationStore.appendUserMessage(conversationId, question);
+        // 本轮消息 id 既是落库凭证，也是"历史取到哪为止"的上界（见下方 6.4 会话历史）
+        Long currentMessageId = conversationStore.appendUserMessage(conversationId, question);
         long startTime = System.currentTimeMillis();
 
         // ========== 0. 活动会话恢复（优先级最高，先于归一化/意图分类——否则"prod 环境，接口是 xxx"
@@ -188,11 +189,28 @@ public class ChatOrchestrator<S> {
         }
         String paradigm = StringUtils.hasText(agent) ? agent : AgentCatalog.KNOWLEDGE.id();
 
+        // ========== 6.4 会话历史（改写消解指代 + 生成理解指代，共用同一窗口）==========
+        // 上界必须给本轮消息 id：本轮问题在开头就已落库，不排除它，"最近 3 轮"拿到的就是
+        // "当轮 + 2 轮 + 一条悬空消息"，而且当轮问题还会与改写 prompt 末尾的「当前问题：」重复一遍。
+        String history = conversationStore.historyContext(conversationId,
+                ConversationStore.HistorySpec.of(currentMessageId,
+                        chatProperties.getHistory().getRounds(),
+                        chatProperties.getHistory().getTotalChars()));
+        // 带历史 = 本轮的答案是"这段对话里这个问题的答案"，不是"这个问题的答案" —— 不能进跨会话的答案缓存。
+        // 缓存 key 没有会话维度（问题 + 范式 + docver + prompt 指纹），而带指代的追问句（"它的配置呢"）
+        // 在不同会话里字面与向量都相同：写进去，下个会话拿同一句话问别的事就会重放成本轮的答案。
+        boolean cacheable = !StringUtils.hasText(history);
+        if (!cacheable) {
+            log.info("[对话编排] 多轮追问（带 {} 字历史），本轮不走答案缓存", history.length());
+        }
+
         // ========== 6.5 答案缓存两级查询（exact → 语义）：同问题或同义问题直接重放，省检索+生成整链。
         // 到达此处的前置条件（needsRetrieval && !needsDiagnose && !resumed && traceId==null）由前面各 return 保证。
         // 频率准入：窗口内首次出现的问题不写 exact 缓存（长尾防污染），出现满阈值才写 ==========
         // exact key 用规则归一化问题（读写同源，吃掉空格/标点/全半角变体）
-        String answerCacheKey = answerCacheCoordinator.answerCacheKey(ruleNormalized, searchCtx, paradigm);
+        String answerCacheKey = cacheable
+                ? answerCacheCoordinator.answerCacheKey(ruleNormalized, searchCtx, paradigm)
+                : null;
         if (answerCacheKey != null) {
             long freq = answerCacheCoordinator.observe(answerCacheKey);
             if (answerCacheCoordinator.tryReplayCachedAnswer(answerCacheKey, freq, conversationId, sink,
@@ -204,7 +222,7 @@ public class ChatOrchestrator<S> {
             }
         }
         // 语义层：同义不同字面的问题（exact 的频率计数被变体分散，正是语义缓存的靶子）
-        if (answerCacheCoordinator.replaySemanticIfHit(ruleNormalized, paradigm, answerCacheKey,
+        if (cacheable && answerCacheCoordinator.replaySemanticIfHit(ruleNormalized, paradigm, answerCacheKey,
                 conversationId, sink, otelTraceId)) {
             return;
         }
@@ -213,11 +231,10 @@ public class ChatOrchestrator<S> {
         // 归一化 → 意图识别 → 路由 →（闸门）→ 问题重写 → 检索 → 充分性判定 →（不足）重写重查
         // 整条链在图里，所以它进得了执行轨迹；编排层只负责把外部事实（历史、补充、路由上下文）
         // 作为初始槽位喂进去，再从产物槽位把该接手的活读回来。
-        String historyForRewrite = conversationStore.historyContext(conversationId);
         long tRetrieve = System.currentTimeMillis();
         KnowledgeRunner.KnowledgeAnswer knowledgeAnswer = knowledgeRunner.retrieve(
                 question, searchCtx, paradigm,
-                new KnowledgeRunner.RunContext(historyForRewrite, null, traceId,
+                new KnowledgeRunner.RunContext(history, null, traceId,
                         agentChoice, activeTask == null ? null : activeTask.agentId(),
                         RewritePolicy.AUTO, false));
         List<RetrievedChunk> chunks = knowledgeAnswer.chunks();
@@ -246,7 +263,8 @@ public class ChatOrchestrator<S> {
         //     的答案就在那几步里（意图识别判定为非检索域）
         if (!knowledgeAnswer.needsRetrieval()) {
             log.info("[对话编排] 非检索意图 {}，走闲聊回复", knowledgeAnswer.intent());
-            chitchatResponder.handleNonQuery(question, conversationId, sink, otelTraceId);
+            // 带历史：闲聊是非知识库请求的兜底，「翻译/总结上一轮结果」也落到这条路上
+            chitchatResponder.handleNonQuery(question, conversationId, history, sink, otelTraceId);
             return;
         }
 
@@ -261,7 +279,7 @@ public class ChatOrchestrator<S> {
         // ========== 10. 构建上下文 + 流式回答 ==========
         log.info("[对话编排] 开始流式回答, 上下文共 {} 条", chunks.size());
         ragAnswerStreamer.streamRagResponse(question, conversationId, chunks, sink, startTime,
-                paradigm, trace, otelTraceId, answerCacheKey, ruleNormalized);
+                paradigm, trace, otelTraceId, answerCacheKey, ruleNormalized, history, cacheable);
     }
 
     /**

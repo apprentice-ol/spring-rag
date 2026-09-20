@@ -35,8 +35,12 @@ public class ChitchatResponder<S> {
 
     /**
      * 处理问候/闲聊（不检索，直接回答）。
+     *
+     * @param history 最近若干轮对话历史（空串 = 首轮）。闲聊是非知识库请求的兜底，
+     *                「翻译/总结/改写上一轮结果」也走这里——没有历史就只能反问"你想翻译什么"
      */
-    public void handleNonQuery(String question, String conversationId, S sink, String otelTraceId) {
+    public void handleNonQuery(String question, String conversationId, String history, S sink,
+                               String otelTraceId) {
         log.info("[对话编排] 走闲聊回复: question=\"{}\"", question);
 
         DegradeGuard.Lease lease = degradeGate.tryAcquire(conversationId, sink, otelTraceId);
@@ -83,6 +87,7 @@ public class ChitchatResponder<S> {
                 null,
                 lease::close);
         deliveryPortFactory.beginStream(sink, conversationId, question, otelTraceId, null, null)
-                .emitStream(conversationId, knowledgeAnswerService.chitchat(question, conversationId), spec);
+                .emitStream(conversationId,
+                        knowledgeAnswerService.chitchat(question, history), spec);
     }
 }
