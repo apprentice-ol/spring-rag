@@ -32,6 +32,7 @@ import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.OpsProperties;
+import com.jjx.customer.platform.business.ops.TaskFollowUpQa;
 import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.observe.openobserve.OpenObserveLogQueryClient;
 import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
@@ -87,6 +88,34 @@ public class AgentEngineConfiguration {
     }
 
     /**
+     * 任务内直答（Task QA，2026-09-20）：CONCLUDED 任务上「对结论的提问」的轻路径，不进 workflow 图。
+     * 与 replan 裁决 / 回复解释器共用同一网关同一横切（指标 / 超时 / 重试 / trace）；
+     * retrieve 分支的检索通道与引擎内 retrieve_knowledge 同一工具同一参数（topK/阈值/预算一致）。
+     */
+    @Bean
+    public TaskFollowUpQa taskFollowUpQa(DefaultModelGateway gateway,
+            PromptStorePromptProvider promptProvider, ObjectMapper objectMapper,
+            RetrievalEngine retrievalEngine, ChatProperties chatProperties,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
+        RetrievalTool retrievalTool = new RetrievalTool(retrievalEngine, chatProperties.getTopK(),
+                chatProperties.getSimilarityThreshold(), chatProperties.getRecallBudget(),
+                chatProperties.getCandidateLimit(), chatProperties.getContextTopK(), minRelevanceScore);
+        TaskFollowUpQa.Retriever retriever = query -> {
+            com.agentframework.engine.toolexecutor.ToolResult result = retrievalTool.invoke(
+                    com.agentframework.engine.toolexecutor.ToolInput.of(Map.of("query", query)),
+                    com.agentframework.engine.toolexecutor.ToolContext.of("task-qa", "task_qa_retrieve"));
+            if (!result.success()) {
+                // 抛出走 QA 的统一降级（empty → 重跑），别把失败文本冒充检索命中喂给模型
+                throw new IllegalStateException("知识检索失败: " + result.error());
+            }
+            return result.output();
+        };
+        return new TaskFollowUpQa(new GatewayModelAdapter(gateway), retriever, objectMapper,
+                promptBodyOf(promptProvider));
+    }
+
+    /**
      * 把调用方线程的遥测上下文搬进引擎的执行线程。
      *
      * <p>引擎的超时拦截器会把节点执行丢到新开的虚拟线程上跑，而新线程不继承线程本地变量——
@@ -109,6 +138,17 @@ public class AgentEngineConfiguration {
      * 装配）：组合模板与 runtime 注册均落在该单例上。先前是本类自调用再造一个私有实例
      * （CGLIB 代理不自调用）——该 provider 全仓仅引擎消费，单例化后解析结果逐字节不变。</p>
      */
+    /**
+     * 暴露引擎的上下文管理器，供回收环节释放内存缓存（{@code ContextManager.release}）。
+     *
+     * <p>单独出 bean 是为了让消费方只依赖它需要的那一面：{@code Engine} 有 24 个方法，
+     * 而回收只需要"按会话 id 释放内存"。窄依赖也让回收逻辑可单测。</p>
+     */
+    @Bean
+    public com.agentframework.engine.contextmanager.ContextManager agentContextManager(Engine agentEngine) {
+        return agentEngine.contexts();
+    }
+
     @Bean(destroyMethod = "close")
     public Engine agentEngine(ChatModel chatModel,
                               PromptStorePromptProvider promptProvider,
@@ -154,13 +194,7 @@ public class AgentEngineConfiguration {
                 ValidateRequestTool.TOOL_ID, OpsPrompts.describeTool(validateTool.schema()),
                 CurrentTimeTool.TOOL_ID, OpsPrompts.describeTool(currentTimeTool.schema()),
                 QueryLogsTool.TOOL_ID, OpsPrompts.describeTool(queryLogsTool.schema()));
-        java.util.function.Function<String, String> promptBody = key -> {
-            try {
-                return promptProvider.get(key, "latest").template();
-            } catch (Exception e) {
-                return null;
-            }
-        };
+        java.util.function.Function<String, String> promptBody = promptBodyOf(promptProvider);
         SharedDeps deps = new SharedDeps(sharedRegistry, toolExecutor, objectMapper, sideModel,
                 Clock.systemDefaultZone(), maxLlmCalls, schemaText, validateTool,
                 promptBody, promptProvider::registerRuntimeTemplate);
@@ -229,5 +263,17 @@ public class AgentEngineConfiguration {
                         List.of(schemaText.get(RetrievalTool.TOOL_ID))));
 
         return builder.build();
+    }
+
+    /** prompt 资产正文来源（绑定包覆盖优先，classpath 兜底；缺失 = null 由调用方各自降级）。 */
+    private static java.util.function.Function<String, String> promptBodyOf(
+            PromptStorePromptProvider promptProvider) {
+        return key -> {
+            try {
+                return promptProvider.get(key, "latest").template();
+            } catch (Exception e) {
+                return null;
+            }
+        };
     }
 }

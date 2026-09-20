@@ -1,1 +1,0 @@
-{"took":12,"took_detail":{"total":12,"cache_took":0,"file_list_took":0,"wait_in_queue":0,"idx_took":0,"search_took":11},"hits":[{"c":0}],"total":1,"from":0,"size":1,"cached_ratio":0,"scan_size":0,"idx_scan_size":0,"scan_records":0,"trace_id":"01a0b7db75b676619fc7bb944c53d926","is_partial":false,"result_cache_ratio":0,"is_histogram_eligible":true,"peak_memory_usage":0.0}

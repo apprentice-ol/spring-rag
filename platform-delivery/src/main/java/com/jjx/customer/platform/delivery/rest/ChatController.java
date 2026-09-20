@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryConversation;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
+import com.jjx.customer.platform.business.ops.OpsRunner;
 import com.jjx.customer.platform.business.trace.AgentTraceService;
 import com.jjx.customer.platform.delivery.message.entity.ConversationEntity;
 import com.jjx.customer.platform.delivery.message.entity.MessageEntity;
@@ -36,26 +37,35 @@ public class ChatController {
     private final MessageMapper messageMapper;
     private final AgentTraceService agentTraceService;
     private final ActiveStreamRegistry activeStreamRegistry;
+    private final OpsRunner opsRunner;
 
     public ChatController(ChatService chatService,
                           ConversationMapper conversationMapper,
                           MessageMapper messageMapper,
                           AgentTraceService agentTraceService,
-                          ActiveStreamRegistry activeStreamRegistry) {
+                          ActiveStreamRegistry activeStreamRegistry,
+                          OpsRunner opsRunner) {
         this.chatService = chatService;
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
         this.agentTraceService = agentTraceService;
         this.activeStreamRegistry = activeStreamRegistry;
+        this.opsRunner = opsRunner;
     }
 
     /**
      * 取消会话的活动流（「停止生成」）：dispose LLM 流（停 token 计费）+ 部分回答落库 + 关闭 emitter。
      * 会话无活动流时返回 cancelled=false（可能已自然结束，幂等无害）。
+     *
+     * <p><b>还要通知引擎。</b>上面那套只作用于交付侧（关流/关连接），引擎并不知情——
+     * 它会继续把剩下的节点跑完并把结果落库。所以额外调一次
+     * {@link OpsRunner#cancelDiagnosis}，把引擎会话置为取消态。</p>
      */
     @PostMapping("/cancel")
     public Map<String, Object> cancel(@RequestParam String conversationId) {
-        return Map.of("cancelled", activeStreamRegistry.cancel(conversationId));
+        boolean streamCancelled = activeStreamRegistry.cancel(conversationId);
+        boolean diagnosisCancelled = opsRunner.cancelDiagnosis(conversationId);
+        return Map.of("cancelled", streamCancelled, "diagnosisCancelled", diagnosisCancelled);
     }
 
 

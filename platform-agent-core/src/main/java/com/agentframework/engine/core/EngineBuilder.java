@@ -545,6 +545,9 @@ public final class EngineBuilder {
                 metricsResolved, events, config, quotaEnforcer, persistence::checkpoint, policyResolver,
                 regionMetrics);
         DefaultContextManager contexts = new DefaultContextManager(sessions, slotStoreResolved, snapshots);
+        // 把 ephemeral 判定接到持久化管理器上：否则逐节点 checkpoint 会绕过它直写 store，
+        // 临时会话（单轮 REST / 知识问答）照样在引擎表里无限堆积
+        persistence.ephemeralCheck(contexts::ephemeral);
         templates.forEach(contexts::registerTemplate);
         PluginRuntime plugins = new PluginRuntime(extensions, new PermissionChecker(grantedPermissions));
         RecoveryManager recovery = new RecoveryManager(contexts, schedulerResolved);

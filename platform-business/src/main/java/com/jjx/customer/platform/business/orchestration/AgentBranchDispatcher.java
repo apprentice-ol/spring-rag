@@ -91,6 +91,9 @@ public class AgentBranchDispatcher<S> {
             case DIRECT -> streamDirectAnswer(answer.text(), question, conversationId, sink, otelTraceId, agentType, trace);
             case ESCALATE -> handleEscalate(answer.text(), question, conversationId, sink, otelTraceId, agentType, trace);
             case WITH_CONTEXT -> streamDirectAnswer(answer.text(), question, conversationId, sink, otelTraceId, agentType, trace);
+            // 用户已点「停止生成」：emitter 早在取消路径里关掉了，这里再发只会抛异常刷日志。
+            // 中止轮没有结论可交付，静默结束即可（轨迹已落库，用户仍可从气泡查）。
+            case CANCELLED -> log.info("[对话编排] 本轮已由用户中止，不交付结论: conversationId={}", conversationId);
         }
     }
 

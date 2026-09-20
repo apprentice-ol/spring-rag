@@ -19,5 +19,12 @@ public enum OutcomeKind {
     CLARIFY,
 
     /** 升级人工（预算触顶 / 无法收敛 / 置信不足）。 */
-    ESCALATE
+    ESCALATE,
+    /**
+     * 用户主动中止（「停止生成」）。
+     *
+     * <p>单独立一个值而不是并进 DIRECT：中止**没有结论**。并进去会让调用方把一次中止
+     * 当成正常收尾——落库成 CONCLUDED、抽出一批空主张、甚至交付一句"诊断完成（无结论文本）"。</p>
+     */
+    CANCELLED
 }

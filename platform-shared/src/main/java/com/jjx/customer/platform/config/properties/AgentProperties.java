@@ -49,6 +49,31 @@ public class AgentProperties {
      *  null = 未配置，回退 ops.session-ttl-minutes（旧位置兼容），再回退 60。 */
     private Integer sessionTtlMinutes;
 
+    /**
+     * 终态任务的**引擎执行态**保留时长（小时）：超期后回收其各 attempt 的引擎会话与槽位快照。
+     *
+     * <p>回收的是原始执行态（scratchpad / 阶段产出 / 游标），**不是诊断结论**——
+     * 结论已沉淀在 {@code sa_agent_finding}（结构化主张）+ {@code sa_message}（原文）
+     * + {@code sa_agent_trace}（轨迹），审计链不断。</p>
+     *
+     * <p><b>0 / 未配置 = 不回收</b>：删除是破坏性操作，必须显式开启。关闭时仍会扫描并打印
+     * 可回收条数，便于先观察再决定。</p>
+     */
+    private Integer engineRetentionHours;
+
+    /** 回收扫描间隔（分钟）。 */
+    private Integer reaperIntervalMinutes;
+
+    /** 引擎执行态保留时长生效值（小时）；≤0 = 不回收。 */
+    public int engineRetentionHoursEffective() {
+        return engineRetentionHours == null ? 0 : Math.max(engineRetentionHours, 0);
+    }
+
+    /** 回收扫描间隔生效值（分钟，下限 1）。 */
+    public int reaperIntervalMinutesEffective() {
+        return reaperIntervalMinutes == null || reaperIntervalMinutes <= 0 ? 60 : reaperIntervalMinutes;
+    }
+
     /** workflow 引擎通用配置（所有 WorkflowAgent 共享的横切默认，definition 可按位覆盖） */
     private Workflow workflow = new Workflow();
 

@@ -61,8 +61,19 @@ public final class IntakeStageModule implements StageModule {
           .slot("inferred_slots", SlotType.STRING)  // 自主补全溯源
           .slot("user_clarify", SlotType.STRING)    // 问齐挂起恢复：Input.slots 回灌
           .slot("pending_ask", SlotType.STRING)     // 环内追问幂等 + 交付层表单（ActExecutor ask_user）
-          .slot("pending_ask_slots", SlotType.STRING);
+          .slot("pending_ask_slots", SlotType.STRING)
+          // 上一轮已确立的诊断主张：追问轮由 OpsRunner 从 sa_agent_finding 装入。
+          // 没有它，"你这结论不对"会让模型不知道上一轮断言了什么，只能从零重排。
+          .slot("prior_findings", SlotType.STRING)
+          // 基本信息已确认过（重跑轮由 OpsRunner 预填 1）：同一 Task 的追问轮不再重复确认——
+          // 确认门摊开的是「被推断的前提」，前提没变就不该再问（plan/2026-09-20-task-qa-loop.md §2.4）
+          .slot("intake_confirmed", SlotType.NUMBER);
 
+        // 重跑轮直通：已确认过且齐备 → 跳过确认门直进阶段 1（分支按声明顺序首中即出）。
+        // 判已确认必须用 == 1 而不是 > 0：槽位未设置时值为 null，数值比较会退化成
+        // 字符串比较（"null" > "0" 为真），全新会话会被误判成"已确认过"绕过确认门
+        Branch skipConfirm = Branch.when(OpsDiagnoseWorkflowFactory.INV_THINK_NODE,
+                "slots.intake_confirmed == 1 && slots.missing_count == 0");
         Branch askUser = Branch.when(OpsDiagnoseWorkflowFactory.COLLECT_SLOTS_NODE,
                 "slots.missing_count > 0");
         // 齐备后统一走确认门（人在环中）：不直接开诊断，先让用户确认这些信息
@@ -74,7 +85,8 @@ public final class IntakeStageModule implements StageModule {
                         OpsDiagnoseWorkflowFactory.SLOT_EXTRACT_EXECUTOR, "slot_extract_raw"))
                 .node(CustomNodeDefinition.of(OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_NODE,
                         OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_EXECUTOR, "auto_resolve_note"))
-                .node(ConditionNodeDefinition.of(OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE, askUser, ready))
+                .node(ConditionNodeDefinition.of(OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE,
+                        skipConfirm, askUser, ready))
                 .node(CustomNodeDefinition.of(OpsDiagnoseWorkflowFactory.COLLECT_SLOTS_NODE,
                         OpsDiagnoseWorkflowFactory.ASK_MISSING_EXECUTOR, "clarify_question"))
                 .node(CustomNodeDefinition.of(OpsDiagnoseWorkflowFactory.CONFIRM_SLOTS_NODE,
@@ -82,13 +94,15 @@ public final class IntakeStageModule implements StageModule {
                 // 复检挂在问齐环迭代守卫下：超过补问上限即放行
                 .node(ConditionNodeDefinition.of(OpsDiagnoseWorkflowFactory.SLOTS_REGATE_NODE,
                         NodeMeta.empty().withGuards(OpsDiagnoseWorkflowFactory.INTAKE_ITERATION_GUARD),
-                        askUser, ready))
+                        skipConfirm, askUser, ready))
 
                 .edge(OpsDiagnoseWorkflowFactory.EXTRACT_SLOTS_NODE,
                         OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.AUTO_RESOLVE_NODE, OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE, OpsDiagnoseWorkflowFactory.COLLECT_SLOTS_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE, OpsDiagnoseWorkflowFactory.CONFIRM_SLOTS_NODE)
+                // 重跑轮直通的出口边（条件分支目标必须是已声明出边）
+                .edge(OpsDiagnoseWorkflowFactory.AUTO_GATE_NODE, OpsDiagnoseWorkflowFactory.INV_THINK_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.COLLECT_SLOTS_NODE, OpsDiagnoseWorkflowFactory.SLOTS_REGATE_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.SLOTS_REGATE_NODE, OpsDiagnoseWorkflowFactory.COLLECT_SLOTS_NODE)
                 .edge(OpsDiagnoseWorkflowFactory.SLOTS_REGATE_NODE, OpsDiagnoseWorkflowFactory.CONFIRM_SLOTS_NODE)

@@ -21,6 +21,9 @@ public final class OpsPrompts {
     /** auto-resolve 骨架模板的 key（{{now}}/{{missing}}/{{confirmed}}/{{question}} 四个插值位）。 */
     public static final String AUTO_RESOLVE_ASSET = "workflow/ops_diagnose_v2/auto-resolve";
 
+    /** 上一轮主张的槽位名（与 {@code OpsRunner.PRIOR_FINDINGS_SLOT} 同名同物）。 */
+    private static final String PRIOR_FINDINGS_SLOT = "prior_findings";
+
     private OpsPrompts() {
     }
 
@@ -99,6 +102,11 @@ public final class OpsPrompts {
         // 多数轮次没有这一项，用模板默认值渲染成「（无）」，避免空标题诱发模型自行脑补
         sb.append("\n## 用户补充说明（用户在排查过程中给出的信息或方向，按需采纳）\n")
                 .append("{{slots.").append(ActExecutor.USER_DIRECTIVE_SLOT).append("|（无）}}\n");
+        // 上一轮诊断主张（仅追问轮非空，由 OpsRunner 从 sa_agent_finding 装入）：
+        // 让模型知道"上一轮到底断言了什么"，否则用户说"结论不对"时它只能从零重排。
+        // 用模板默认值渲染占位，避免空标题诱发模型脑补（与上面 user_directive 同处理）。
+        sb.append("\n## 上一轮已确立的主张（用户可能对其中某条有异议，请据此回应或修正）\n")
+                .append("{{slots.").append(PRIOR_FINDINGS_SLOT).append("|（本轮不是追问，无）}}\n");
         // replan 修正段：未裁决时渲染为空（replan_note 默认空串），adjust 时携带重跑提示
         sb.append("\n## 修正要求（上一轮 replan 裁决）\n{{slots.replan_note}}\n");
         return sb.toString();

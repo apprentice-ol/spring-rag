@@ -168,7 +168,7 @@ public class ActExecutor implements NodeExecutor {
                 String observation = outcome.observation();
                 scratchpad += "Thought: " + preview(context.slots().getString(prefix + "_out", ""))
                         + "\nAction: " + intent.toolName() + " " + intent.arguments()
-                        + "\nObservation: " + observation + "\n---\n";
+                        + "\nObservation: " + truncateObservation(observation) + "\n---\n";
                 writes.put("scratchpad", scratchpad);
                 writes.put("observation", observation);
                 writes.put("has_calls", 1);
@@ -565,6 +565,40 @@ public class ActExecutor implements NodeExecutor {
     private static boolean nonBlank(Object value) {
         return value != null && !String.valueOf(value).isBlank()
                 && !"null".equalsIgnoreCase(String.valueOf(value).trim());
+    }
+
+    /**
+     * 单条工具观测进 scratchpad 的长度上限。
+     *
+     * <p>4000 字符：够放下一次结构化工具返回（几条日志行 / 若干检索分片），
+     * 又不至于让一次"查回几十行日志"把上下文吃掉。</p>
+     */
+    private static final int OBSERVATION_MAX = 4000;
+
+    /**
+     * 截断过长的工具观测。
+     *
+     * <p><b>压缩优先级原本是反的</b>：{@code Thought}（模型推理，体积小）被截到 120 字符，
+     * 而 {@code Observation}（工具产出，**最占体积的那个**）全文进 scratchpad。
+     * 长尾场景（一次查回几十行日志）会随轮次线性撑大上下文——最该压的没压。</p>
+     *
+     * <p>截断处**显式标注**并给出下一步：让模型知道"还有内容没看到"，
+     * 应当缩小查询范围重查（traceId / 时间窗都在槽位里，重查成本远低于背着全文），
+     * 而不是把被截断的那份当成全部——静默截断会诱导模型基于残缺证据下结论。</p>
+     *
+     * @param observation 工具观测原文
+     * @return 截断后的观测（未超限时原样返回）
+     */
+    private static String truncateObservation(String observation) {
+        if (observation == null) {
+            return "";
+        }
+        if (observation.length() <= OBSERVATION_MAX) {
+            return observation;
+        }
+        return observation.substring(0, OBSERVATION_MAX)
+                + "\n…（观测过长已截断：共 " + observation.length() + " 字符，此处只保留前 "
+                + OBSERVATION_MAX + "。如需完整内容，请缩小查询范围（时间窗 / 关键字 / limit）后重查）";
     }
 
     private static String preview(String text) {

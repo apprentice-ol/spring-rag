@@ -170,6 +170,15 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
                 return new RunOutcome(SessionState.FAILED, "", cursor, messages, usage, visited, null,
                         "超过最大步数限制：" + config.maxSteps(), trace);
             }
+            // 取消检查（节点边界）：会话被外部置为 CANCELLED（用户点「停止生成」）→ 立即收尾。
+            // 正在执行的节点打断不了，但**不会再开下一个节点**，也不会把中止后的结果
+            // 当成一次正常收尾落库——否则用户"停止"了，系统照样产出一份结论。
+            // 检查放在这里而不是起一个中断线程：节点边界是天然的、无锁的一致性点。
+            if (session.state() == SessionState.CANCELLED) {
+                save(session, cursor, slots);
+                return new RunOutcome(SessionState.CANCELLED, "", cursor, messages, usage, visited, null,
+                        "会话已取消", trace);
+            }
             NodeDefinition node = workflow.node(cursor.nodeId()).orElse(null);
             if (node == null) {
                 return new RunOutcome(SessionState.FAILED, "", cursor, messages, usage, visited, null,

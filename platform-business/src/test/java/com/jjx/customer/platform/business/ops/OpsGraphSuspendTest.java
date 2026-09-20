@@ -40,8 +40,8 @@ import org.junit.jupiter.api.Test;
  */
 class OpsGraphSuspendTest {
 
-    /** 边角调用（抽槽 / 自主补全 / replan 裁决）的脚本模型：按调用顺序出队。 */
-    private static final class ScriptedAskModel implements SingleTurnModel {
+    /** 边角调用（抽槽 / 自主补全 / replan 裁决）的脚本模型：按调用顺序出队。包可见供 OpsRunnerTaskTest 复用。 */
+    static final class ScriptedAskModel implements SingleTurnModel {
         final ArrayDeque<String> replies = new ArrayDeque<>();
 
         ScriptedAskModel enqueue(String... values) {
@@ -57,7 +57,8 @@ class OpsGraphSuspendTest {
         }
     }
 
-    private static Engine engineOf(ScriptedAskModel askModel, ScriptedModelProvider thinkModel) {
+    /** 内存引擎装配（包可见：{@code OpsRunnerTaskTest} 复用它驱动同一条诊断链）。 */
+    static Engine engineOf(ScriptedAskModel askModel, ScriptedModelProvider thinkModel) {
         DefaultToolRegistry registry = new DefaultToolRegistry();
         ValidateRequestTool validateTool = new ValidateRequestTool(new ObjectMapper());
         registry.register(validateTool);

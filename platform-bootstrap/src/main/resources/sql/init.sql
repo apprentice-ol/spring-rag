@@ -349,6 +349,12 @@ COMMENT ON COLUMN sa_agent_trace.workflow_id IS '执行的 Workflow id（执行�
 COMMENT ON COLUMN sa_agent_trace.prompt_hash IS '本次执行三层 prompt 快照的内容 hash（执行指纹三元组之三；改任一层 prompt 自动变化）';
 
 -- ===== Agent 会话状态（运维诊断追问中断的跨轮次槽位状态）=====
+-- ⚠️ 2026-09-19 起**已被 sa_agent_task 取代**（上下文四层结构：Conversation→Topic→Task→Attempt）。
+-- 原因：本表把「一次诊断」等同于「一个会话」（conversation_id UNIQUE），于是诊断一出结论就置 DONE，
+-- 下一轮消息既恢复不了也带不走槽位——正是"追问之下上下文全丢"的根因。
+-- 代码侧 AgentSessionServiceImpl / Entity / Mapper 已删除（Business 包 session/ 不再存在）。
+-- 表**保留不删**：仅为留存历史行；引擎侧旧会话 id（"ops-" + conversationId）同理成为孤儿，
+-- 不再被任何路径 load。确认无需回溯后可在后续版本一并清理。
 CREATE TABLE IF NOT EXISTS sa_agent_session (
     id              BIGSERIAL    PRIMARY KEY,
     conversation_id VARCHAR(64)  NOT NULL UNIQUE,               -- 会话（唯一：一会话至多一个进行中的 agent 状态）
@@ -480,3 +486,64 @@ COMMENT ON COLUMN sa_agent_session.autonomy_level IS '会话自主档位（L1/L2
 -- 人在环中：诊断链 traceId（首轮生成，后续追问轮沿用）——一次诊断跨多轮也是一条链
 ALTER TABLE sa_agent_session ADD COLUMN IF NOT EXISTS chain_trace_id VARCHAR(64);
 COMMENT ON COLUMN sa_agent_session.chain_trace_id IS '诊断链 traceId（同一次诊断跨轮沿用，轨迹不断链）';
+
+-- ===== Agent 任务（上下文四层结构：Conversation → Topic → Task → Attempt）=====
+-- Task = 工作边界（一个待解决的目标），Attempt = 执行边界（= 引擎会话）。
+-- 与 sa_agent_session 的差别：后者一张表装了两个生命周期
+--   Task 级 = slots/summary/autonomy_level/chain_trace_id
+--   Attempt 级 = stage/missing_slots
+-- 本表吸收 Task 级字段；Attempt 级状态归引擎会话（ops_engine_session/slots）。
+-- 注意：**conversation_id 不设 UNIQUE**——一个会话可以先后有多个 Task（旧表的 UNIQUE 正是"一会话一会话"假设的化身）。
+CREATE TABLE IF NOT EXISTS sa_agent_task (
+    task_id         VARCHAR(64)  PRIMARY KEY,          -- UUID（与 conversation_id 解耦，故不派生）
+    conversation_id VARCHAR(64)  NOT NULL,
+    agent_type      VARCHAR(32)  NOT NULL,             -- agent 范式：ops_diagnose
+    status          VARCHAR(16)  NOT NULL,             -- OPEN/RUNNING/SUSPENDED/CONCLUDED/CLOSED/ABANDONED
+    slots           JSONB,                             -- 业务槽位（权威源仍是引擎槽位，这里是挂起时刻的投影）
+    stage           VARCHAR(32),                       -- 挂起时所在节点（UI 展示"卡在哪一步"）
+    summary         TEXT,                              -- 终态回填（第 5 步 findings 落地后改为其投影）
+    autonomy_level  VARCHAR(8),                        -- 会话自主档位（L1/L2/L3，null=缺省 L2）
+    chain_trace_id  VARCHAR(64),                       -- 诊断链 traceId（同一次诊断跨 attempt 沿用）
+    attempt_count   INT          NOT NULL DEFAULT 0,   -- attemptId = "ops-" + task_id + "#" + attempt_count
+    topic_id        VARCHAR(64),                       -- 所属主题（第 4 步 Topic 层，当前为空）
+    create_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    update_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    close_time      TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sa_agent_task_conv  ON sa_agent_task (conversation_id, status);
+CREATE INDEX IF NOT EXISTS idx_sa_agent_task_chain ON sa_agent_task (chain_trace_id);
+COMMENT ON TABLE  sa_agent_task IS 'Agent 任务（四层结构的工作边界：Conversation→Topic→Task→Attempt）';
+COMMENT ON COLUMN sa_agent_task.task_id IS '任务 id（UUID，与 conversation_id 解耦）';
+COMMENT ON COLUMN sa_agent_task.status IS 'OPEN/RUNNING/SUSPENDED/CONCLUDED/CLOSED/ABANDONED（CONCLUDED=已出结论待用户反应）';
+COMMENT ON COLUMN sa_agent_task.attempt_count IS '已发起的 attempt 数；引擎会话 id = ops-<task_id>#<n>';
+COMMENT ON COLUMN sa_agent_task.topic_id IS '所属主题（第 4 步 Topic 层，当前为空）';
+
+-- 回收标记：引擎执行态已回收的任务不再参与每轮扫描（否则同一批终态任务会被反复取出来
+-- 走一遍"查无此行"的空删除）。诊断结论不受影响——它存在 sa_agent_finding / sa_message / sa_agent_trace。
+ALTER TABLE sa_agent_task ADD COLUMN IF NOT EXISTS engine_reclaimed SMALLINT NOT NULL DEFAULT 0;
+COMMENT ON COLUMN sa_agent_task.engine_reclaimed IS '引擎执行态是否已回收（0=未回收；回收环节置 1）';
+
+-- ===== Agent 诊断主张（Findings 台账）=====
+-- 主张 = 一次诊断产出的、**可被单独否定**的断言。原料是四段式结论的各段落，由 FindingExtractor 纯解析抽取（不耗模型）。
+-- 为什么不用一段文本存结论：文本无法局部否定——用户说"报文字段不对"时只能整段重来。
+-- **只追加**：用 status 标记失效，不物理删除。
+--   SUPERSEDED = 被新结论取代（正常演进） / RETRACTED = 被判定为错（否定）——两者审计含义不同，不可合并。
+CREATE TABLE IF NOT EXISTS sa_agent_finding (
+    finding_id      VARCHAR(64) PRIMARY KEY,
+    task_id         VARCHAR(64) NOT NULL,
+    conversation_id VARCHAR(64) NOT NULL,   -- 冗余自 task：按对话查主张是高频路径，省一次 join
+    kind            VARCHAR(16) NOT NULL,   -- ROOT_CAUSE/CONSTRAINT/FIX/RISK/ANSWER
+    claim           TEXT        NOT NULL,
+    evidence        JSONB,                  -- [{label,value,source}]：指针+摘录，不是全文
+    status          VARCHAR(16) NOT NULL,   -- ACTIVE/SUPERSEDED/RETRACTED
+    attempt_no      INT         NOT NULL,   -- 由第几次 attempt 产出
+    create_time     TIMESTAMP   NOT NULL DEFAULT NOW(),
+    update_time     TIMESTAMP   NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sa_agent_finding_task  ON sa_agent_finding (task_id, status);
+CREATE INDEX IF NOT EXISTS idx_sa_agent_finding_conv  ON sa_agent_finding (conversation_id, status);
+COMMENT ON TABLE  sa_agent_finding IS '诊断主张台账（可被单独否定的断言 + 证据指针；只追加，状态标记失效）';
+COMMENT ON COLUMN sa_agent_finding.kind IS 'ROOT_CAUSE/CONSTRAINT/FIX/RISK/ANSWER';
+COMMENT ON COLUMN sa_agent_finding.evidence IS '证据指针数组 [{label,value,source}]——不存全文，用时按 ref 回查';
+COMMENT ON COLUMN sa_agent_finding.status IS 'ACTIVE/SUPERSEDED（被取代）/RETRACTED（被判定为错）';
+COMMENT ON COLUMN sa_agent_finding.attempt_no IS '由第几次 attempt 产出（对应引擎会话 ops-<taskId>#<n>）';

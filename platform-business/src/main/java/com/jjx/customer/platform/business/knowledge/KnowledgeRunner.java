@@ -5,6 +5,8 @@ import com.jjx.customer.platform.business.trace.EngineTraceMapper;
 import com.agentframework.engine.core.Engine;
 import com.agentframework.engine.core.RunResult;
 import com.agentframework.runtime.session.Input;
+import com.agentframework.runtime.session.Session;
+import com.agentframework.runtime.session.StartOptions;
 import com.jjx.customer.platform.business.engine.AgentCatalog;
 import com.jjx.customer.platform.business.engine.PromptFingerprintResolver;
 import com.jjx.customer.platform.business.engine.AgentFingerprint;
@@ -153,7 +155,15 @@ public class KnowledgeRunner {
             slots.put(KnowledgeQaGraphFactory.FORCE_RETRIEVAL_SLOT, true);
         }
 
-        RunResult result = agentEngine.run(entry.id(), new Input(question, Map.of(), slots));
+        // 单轮检索问答：ephemeral 会话（不落引擎会话表）。
+        // 必须显式 startSession + asEphemeral()——agentEngine.run(agentId, input) 内部走的是
+        // StartOptions.defaults()（ephemeral=false），于是**每一次知识问答**都会生成一个随机 UUID
+        // 会话，往 ops_engine_session / ops_engine_slots 各写一行且永不删除。
+        // 这是高频路径（每次提问都走），泄漏速度远高于 ops 的单轮 REST。
+        Session singleTurn = agentEngine.startSession(
+                agentEngine.loadAgent(entry.id(), "latest"),
+                StartOptions.defaults().asEphemeral());
+        RunResult result = agentEngine.run(singleTurn, new Input(question, Map.of(), slots));
 
         List<RetrievedChunk> chunks = toChunks(result, agentId);
         AgentFingerprint fingerprint = new AgentFingerprint(entry.id(), entry.workflowId(),

@@ -1,6 +1,6 @@
 package com.jjx.customer.platform.business.orchestration;
 
-import com.jjx.customer.platform.business.session.AgentSessionState;
+import com.jjx.customer.platform.business.task.AgentTaskState;
 import com.jjx.customer.platform.common.util.TraceIdExtractor;
 import com.jjx.customer.platform.routing.RouteContext;
 import com.jjx.customer.platform.routing.RouteDecision;
@@ -30,11 +30,11 @@ public class RouteEvaluator {
      * 恢复路径不在此短路（traceId 由 ops agent 抽取合并进槽位）。
      */
     public FirstPass evaluateFirstPass(String question, String ruleNormalized,
-                                       AgentSessionState activeSession, String agentChoice) {
+                                       AgentTaskState activeTask, String agentChoice) {
         String traceId = TraceIdExtractor.extract(question);
         Optional<RouteDecision> shortCircuit = routeRegistry.evaluate(new RouteContext(
                 question, ruleNormalized, null, traceId,
-                activeSession == null ? null : activeSession.agentId(), agentChoice));
+                activeTask == null ? null : activeTask.agentId(), agentChoice));
         return new FirstPass(traceId, shortCircuit);
     }
 }

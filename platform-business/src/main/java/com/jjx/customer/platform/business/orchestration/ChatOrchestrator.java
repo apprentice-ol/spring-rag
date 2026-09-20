@@ -5,7 +5,7 @@ import com.jjx.ai.llmobservability.observation.logging.TelemetryLogger;
 import com.jjx.customer.platform.business.engine.AgentCatalog;
 import com.jjx.customer.platform.business.knowledge.KnowledgeRunner;
 import com.jjx.customer.platform.business.knowledge.RewritePolicy;
-import com.jjx.customer.platform.business.session.AgentSessionState;
+import com.jjx.customer.platform.business.task.AgentTaskState;
 import com.jjx.customer.platform.business.trace.AgentTraceService;
 import com.jjx.customer.platform.business.trace.model.TraceView;
 import com.jjx.customer.platform.common.util.QueryNormalizer;
@@ -102,13 +102,13 @@ public class ChatOrchestrator<S> {
 
         // ========== 0. 活动会话恢复（优先级最高，先于归一化/意图分类——否则"prod 环境，接口是 xxx"
         // 这类补槽消息会被误判成闲聊/悬空指代）==========
-        ResumeCoordinator.ResumeDecision resume = resumeCoordinator.findResumable(conversationId);
-        AgentSessionState activeSession = resume.activeSession();
-        boolean resumed = resume.resumed();
+        ResumeCoordinator.ResumeDecision resume = resumeCoordinator.findResumable(conversationId, question);
+        AgentTaskState activeTask = resume.activeTask();
+        boolean resumed = resume.continueTask();
         // 诊断链不断链：追问轮沿用首轮 traceId（否则每轮开新链，一次诊断散成 N 段孤立轨迹，
         // OpenObserve 深链与轨迹回看都是断的）
-        String otelTraceId = activeSession != null && StringUtils.hasText(activeSession.chainTraceId())
-                ? activeSession.chainTraceId() : currentTraceId();
+        String otelTraceId = activeTask != null && StringUtils.hasText(activeTask.chainTraceId())
+                ? activeTask.chainTraceId() : currentTraceId();
 
         String ruleNormalized = obsTemplate.step("rag.query.normalize", question, () -> QueryNormalizer.normalize(question));
         if (ruleNormalized.isBlank()) {
@@ -119,7 +119,7 @@ public class ChatOrchestrator<S> {
         // 如消息含 traceId 直接进运维诊断——省掉 rewrite+classify 两次 LLM 往返）。
         // 恢复路径不在此短路（traceId 由 ops agent 抽取合并进槽位）==========
         RouteEvaluator.FirstPass firstPass = routeEvaluator.evaluateFirstPass(
-                question, ruleNormalized, activeSession, agentChoice);
+                question, ruleNormalized, activeTask, agentChoice);
         String traceId = firstPass.traceId();
         if (firstPass.shortCircuit().isPresent() && !resumed) {
             RouteDecision d = firstPass.shortCircuit().get();
@@ -129,10 +129,12 @@ public class ChatOrchestrator<S> {
             return;
         }
         if (resumed) {
-            // 恢复：本轮消息是补充信息，按会话归属路由给创建它的 agent 合并槽位继续
-            // （会话 agentType 空白/未知回 ops——存量 sa_agent_session 全是 ops 的旧数据兼容）
-            agentBranchDispatcher.runAgentBranch(resumeCoordinator.requireResumeTarget(activeSession),
-                    question, conversationId, sink, otelTraceId, Map.of(), activeSession.slots(), autonomy);
+            // 恢复：本轮消息是补充信息，按任务归属路由给创建它的 agent 合并槽位继续
+            // （agentId 空白/未知回 ops——存量旧数据兼容）。
+            // 抢占不在这里做：已下移到 OpsRunner 紧挨真正的运行，避免"占了位却没跑起来"
+            // 这个需要额外释放的中间状态。
+            agentBranchDispatcher.runAgentBranch(resumeCoordinator.requireResumeTarget(activeTask),
+                    question, conversationId, sink, otelTraceId, Map.of(), activeTask.slots(), autonomy);
             return;
         }
 
@@ -216,7 +218,7 @@ public class ChatOrchestrator<S> {
         KnowledgeRunner.KnowledgeAnswer knowledgeAnswer = knowledgeRunner.retrieve(
                 question, searchCtx, paradigm,
                 new KnowledgeRunner.RunContext(historyForRewrite, null, traceId,
-                        agentChoice, activeSession == null ? null : activeSession.agentId(),
+                        agentChoice, activeTask == null ? null : activeTask.agentId(),
                         RewritePolicy.AUTO, false));
         List<RetrievedChunk> chunks = knowledgeAnswer.chunks();
         TraceView trace = knowledgeAnswer.trace();

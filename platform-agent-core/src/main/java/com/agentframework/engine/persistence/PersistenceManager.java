@@ -28,6 +28,29 @@ public final class PersistenceManager {
     private final SessionStore sessionStore;
     private final SlotStore slotStore;
     private final WorkspaceSnapshotStore snapshotStore;
+
+    /**
+     * 临时会话判定（会话是否 {@code ephemeral}）：装配期由 {@code EngineBuilder} 注入。
+     *
+     * <p><b>为什么本类需要它</b>：{@code ephemeral} 的判断原本只写在
+     * {@code ContextManager.persist()} 里，而本类的 {@link #checkpoint} 是<b>直接写 store</b> 的
+     * ——于是那个标志只挡住了 {@code startSession} 的初始持久化，<b>每个节点的 checkpoint 照样落库</b>，
+     * 等于从未生效。临时会话（单轮 REST / 知识问答）因此在引擎表里无限堆积。</p>
+     *
+     * <p>null = 不做该判断（不装配时的默认行为，兼容既有用法）。</p>
+     */
+    private java.util.function.Predicate<String> ephemeralCheck;
+
+    /**
+     * 注入临时会话判定。
+     *
+     * @param check 会话 id → 是否临时（不落库）
+     * @return 当前实例
+     */
+    public PersistenceManager ephemeralCheck(java.util.function.Predicate<String> check) {
+        this.ephemeralCheck = check;
+        return this;
+    }
     private final Tracer tracer;
     private final CheckpointStore checkpoints;
 
@@ -66,7 +89,7 @@ public final class PersistenceManager {
      * @param slots   槽位容器
      */
     public void checkpoint(Session session, Cursor cursor, Slots slots) {
-        if (session == null) {
+        if (session == null || (ephemeralCheck != null && ephemeralCheck.test(session.id()))) {
             return;
         }
         if (session instanceof MutableSession mutable && cursor != null) {

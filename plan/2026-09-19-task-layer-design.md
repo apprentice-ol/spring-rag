@@ -229,3 +229,147 @@ UPDATE sa_agent_task
 | 存量引擎会话是否搬迁 | 见 §六，建议不搬迁 |
 | Task 与 Topic 的多对一关系确认 | 待第 4 步——若 Topic 也是按目标切，Task 与 Topic 可能退化成一对一 |
 | RAG 线接入时机 | 结构统一后评估；`agent_type` 位已留 |
+
+---
+
+## 十、落地记录（2026-09-19）
+
+子步 1–4 已完成；子步 5（存量迁移）与 §四的「新目标信号」**有意未做**，理由见下。
+
+### 10.1 新增
+
+| 文件 | 作用 |
+|---|---|
+| `task/entity/AgentTaskEntity.java` | 映射 `sa_agent_task`（`@TableId(INPUT)`：task_id 是 UUID 非自增） |
+| `task/AgentTaskState.java` | 业务契约 + `attemptIdOf(taskId, n)` 派生规则 + `currentAttemptId()` |
+| `task/mapper/AgentTaskMapper.java` | `claim` / `beginAttempt` / `release` / `expire` |
+| `task/AgentTaskServiceImpl.java` | 读写 + 惰性 TTL + 档位读取 |
+| `sql/init.sql` | `sa_agent_task` 建表（已在真实 PG 上以 `BEGIN…ROLLBACK` 验证语法） |
+
+### 10.2 关键实现决策（三处偏离原设计，均是有意的）
+
+**① 抢占从决策步下移到执行侧。** 原设计沿用旧结构，在 `ResumeCoordinator`（决策链第 0 步）抢占。
+改为在 `OpsRunner` **紧挨真正的运行**抢占——这样"占了位却没跑起来"（降级闸拒租约 / 抛异常）
+**在结构上不再存在**，`release` 从"必须的补偿"退化为"异常路径的兜底"。
+`ResumeCoordinator` 因此变成只读。
+
+**② 出结论落 `CONCLUDED`，不是 `CLOSED`。** "系统给出了结论"≠"目标达成"，后者由人判定。
+留成可沿用态，下一轮追问才能挂回同一 Task。
+
+**③ 槽位携带与"是否恢复"解耦。** 旧实现只在挂起恢复时才带槽位；新实现**所有路径都带**
+（任务上已确认的 → 本轮传入的覆盖）。这才是"出了结论后说不对，等于从头开始"的真正修复点——
+它不需要新数据结构，只需要在 `OpsRunner` 里无条件合并 `task.slots()`。
+
+### 10.3 实现过程中发现并修复的两个 bug
+
+**① 挂起任务遇引擎会话缺失会永久卡死。** 恢复分支条件不成立后落到新 attempt 分支，
+而 `beginAttempt` 的 WHERE 排除了 `SUSPENDED` → 返回 -1 → 抛异常 → **此后该任务每条消息都抛错**。
+修法：`beginAttempt` 放开 `SUSPENDED`（并发安全不受影响——并发抢占时先到者已把状态改成 RUNNING）。
+
+**② `expire` 未覆盖 `RUNNING`。** 进程被杀（部署重启 / OOM）留下永久 RUNNING 行——`release` 只在异常路径执行，
+崩溃时不走。且 `findActive` 见它会当成"有 attempt 在跑"。修法：TTL 条件加入 `RUNNING`。
+
+### 10.4 删除
+
+`business/session/` 整包（`AgentSessionServiceImpl` / `AgentSessionState` / `Entity` / `Mapper`）——
+切到 Task 后无任何调用点，留着就是同一概念的两个映射。
+⚠️ 这**同时移除了第 1 步在该包里的 `release` 修复**——它已被 §10.2-① 的架构变更取代（抢占下移后
+该中间状态不存在），不是丢失。
+
+`OpsRunner.engineSessionIdOf`（`"ops-" + conversationId`）删除——留着只会被误用。
+
+### 10.5 未做（有意）
+
+| 项 | 理由 |
+|---|---|
+| **§四 的「新目标信号」** | 正是本文档自评的**致命风险**（判错则上下文断裂）。去掉它后行为**严格优于现状**（无场景更差），符合 HITL 那条「最坏退化 = 现状」原则。等 Task 层跑稳再加 |
+| **存量数据迁移** | 库内为测试数据；跳过引擎侧改名（高风险、低收益）。旧 id `"ops-" + conversationId` 成为孤儿，`sa_agent_session` 表加废弃标注后保留 |
+| **OpsRunner 的端到端测试** | ✅ **已补齐并真机验证**，见 §10.6 |
+| Topic / Findings | 第 4、5 步 |
+
+---
+
+## 10.6 真机验证（2026-09-19，浏览器驱动）
+
+新代码此前从未执行过（`sa_agent_task` 0 行、`ops_engine_session` 新格式 0 条），
+以干净环境走完整链路。
+
+**① 单测**：`OpsRunnerTaskTest`（复用 `OpsGraphSuspendTest` 引擎骨架 + 内存任务服务）
+覆盖四轮调用：首轮建任务 → 补答 → 确认收尾 → 追问。首版**失败**——暴露 `markSuspended`
+不得写 `attempt_count` 这一隐含不变量（测试替身照抄了旧值，把 `beginAttempt` 的递增冲掉）；
+生产实现因"只更新 status/槽位"而侥幸正确，已在 javadoc 上写死该不变量。
+
+**② Mapper SQL**：`claim`/`beginAttempt`/`release`/`expire` 全部在真实 PG 上以 `BEGIN…ROLLBACK` 验证：
+并发第二刀抢到 0 行、`CONCLUDED` 追问序号 1→2、`release` 幂等返回 0 行、`expire` 如期改 `ABANDONED`。
+
+**③ 浏览器端到端**（前端 :5173 + 后端 :9081 + 真实 PG）：
+
+| 场景 | 观测 |
+|---|---|
+| A 新会话 | 建出 `sa_agent_task` 行（status=SUSPENDED, attempt_count=1）；引擎会话 id = `ops-<taskId>#1`（**新格式**） |
+| 挂起恢复 | `attempt_count` **仍为 1**（恢复不递增）；stage `collect_slots → confirm_slots`；未产生 `#2` |
+| 出结论 | status = **CONCLUDED**（非旧实现的 DONE）；结论为四段式 |
+| **C 追问（不认可结论）** | **同一 `taskId`**（未新建）；attempt_count **1→2**；`#1` 存为 COMPLETED **未被覆盖**；`#2` 独立新建 |
+| **槽位继承** | `#2` 的槽位快照：`interface`/`environment`/`trace_id` **与 `#1` 完全一致** |
+
+最后一行是本次改造的靶心：用户说"结论不对"时，系统**不再从零重排**。
+`#2` 直接推进到 `confirm_slots` 而未重新问齐，即为继承生效的行为证据。
+
+---
+
+## 10.7 第二轮真机测试（2026-09-19，Findings 链路 + 一个路由 bug）
+
+### 验证通过的部分
+
+新起会话走完整诊断后落库 **6 条主张**（1 ROOT_CAUSE 带 5 条证据 + 1 FIX + 4 RISK），
+与 §12.1 从真实数据估的 3-6 条吻合。`FindingExtractor` 的纯解析在真机上成立。
+
+### ⚠️ 发现并修复：CONCLUDED 任务的追问被 RAG 线劫持
+
+**现象**：诊断出结论后，用户回"我不同意「避免重复红冲」这条风险……请据此修正结论"，
+系统答成
+
+> 当前可用信息中并没有「避免重复红冲」这条风险结论……
+
+——**被 RAG 线接走了**（回复带 `[2](#cite-2)` 引用），任务停在 `CONCLUDED`、`attempt_count` 没变、
+未开出 `#2`。诊断上下文一点没用上。
+
+**根因：实现与设计文档不一致。** 设计（§3.2/§四）写着 `CONCLUDED` = *"已出结论，等用户反应"，
+默认沿用*；而 `ResumeCoordinator.findResumable` 实现成了"只有 SUSPENDED 短路路由，
+CONCLUDED 交给意图分类"。**把"等用户反应"的状态当普通新问题路由，与状态定义相悖。**
+
+**修复**：`findResumable(conversationId, question)` 改为
+`SUSPENDED → 归它` / `CONCLUDED → 默认归它`，并补上设计里说过的**新目标强信号例外**——
+本轮消息里出现与任务已确认值不同的 **traceId** 或**接口路径**时交回意图分类（确定性判据，不耗模型）。
+
+**守卫**：`ResumeCoordinatorTest` 11 例（异议必归诊断、换 traceId/接口算新目标、同接口仍归它、
+任务关键数据缺失时不误判、空消息不误判…）。
+
+### 修复后的真机复验（全部通过）
+
+```
+任务:      a1dd1d86-…  attempt_count = 2       ← 异议正确归入既有任务并开新 attempt
+引擎会话:  #2 SUSPENDED   #1 COMPLETED          ← 旧会话未被覆盖
+prior_findings 槽:                              ← 注入生效
+  上一轮已确立的主张（用户可能正对其中某条提出异议，请据此回应或修正）：
+  - [ROOT_CAUSE] order-service 在 prod 环境处理 POST /api/invoice/reverse…
+  - [FIX] 校验通过，修正后报文如下…
+```
+
+确认后跑完 attempt #2，**主张的失效语义正确**：
+
+```
+SUPERSEDED | attempt_no=1 | 6 条   ← 旧主张转「被取代」，未删除
+ACTIVE     | attempt_no=2 | 6 条   ← 新结论主张生效
+```
+
+闭环成立：**结论 → 抽主张落库 → 追问带上主张 → 新结论取代旧主张**。
+
+### 教训
+
+这条 bug **单测覆盖不到**——`OpsRunnerTaskTest` 直接调 `OpsRunner`，绕过了
+`ResumeCoordinator → ChatOrchestrator` 这段路由。只有把消息从 UI 打进去才会暴露。
+§10.5 里"端到端没有覆盖"那条自评，这次以另一种形式被印证了。
+
+**通用教训：单测能验证"组件做对了它被要求做的事"，验证不了"组装起来是不是对的事"。**
+路由层（谁决定把消息交给谁）尤其如此——它是各组件之间的胶水，没有单一归属。

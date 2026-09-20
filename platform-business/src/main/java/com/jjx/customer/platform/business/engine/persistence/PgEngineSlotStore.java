@@ -54,22 +54,28 @@ public class PgEngineSlotStore implements SlotStore {
                             + "ON CONFLICT (session_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()",
                     snapshot.sessionId(), toJson(snapshot));
         } catch (Exception e) {
-            log.warn("[engine-store] 引擎槽位保存失败：sessionId={} {}", snapshot.sessionId(), e.getMessage());
+            // 写失败 = 状态没落库。静默会让损坏延迟到"下一次恢复读到旧值/空值"才暴露，
+            // 那时已经分不清是数据本身如此还是写丢了。
+            log.error("[engine-store] 引擎槽位保存失败：sessionId={} {}", snapshot.sessionId(), e.getMessage());
+            throw new IllegalStateException("引擎槽位快照保存失败: " + snapshot.sessionId(), e);
         }
     }
 
     @Override
     public Optional<SlotSnapshot> load(String sessionId) {
+        List<SlotSnapshot> found;
         try {
-            List<SlotSnapshot> found = jdbc.query(
+            found = jdbc.query(
                     "SELECT snapshot FROM " + TABLE + " WHERE session_id = ?",
                     (rs, rowNum) -> readSnapshot(rs.getString("snapshot")),
                     sessionId);
-            return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
         } catch (Exception e) {
-            log.warn("[engine-store] 引擎槽位读取失败：sessionId={} {}", sessionId, e.getMessage());
-            return Optional.empty();
+            // 读不到 ≠ 没有：读失败必须上抛。返回 empty 会让调用方拿**空槽位**继续 resume，
+            // 表现为「流程结束但未产出结论」这类伪结论——比直接报错危险得多。
+            log.error("[engine-store] 引擎槽位读取失败：sessionId={} {}", sessionId, e.getMessage());
+            throw new IllegalStateException("引擎槽位快照读取失败: " + sessionId, e);
         }
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
     }
 
     @Override

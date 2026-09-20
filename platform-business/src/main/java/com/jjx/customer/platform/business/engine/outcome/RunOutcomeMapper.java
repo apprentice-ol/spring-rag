@@ -48,6 +48,10 @@ public final class RunOutcomeMapper {
         if (slots != null && slots.containsKey(ESCALATE_REASON_SLOT)) {
             return OutcomeKind.ESCALATE;
         }
+        if (result.state() == com.agentframework.runtime.session.SessionState.CANCELLED) {
+            // 用户中止：没有结论，必须与 DIRECT 区分开（否则会被当成一次正常收尾落库）
+            return OutcomeKind.CANCELLED;
+        }
         if (result.state() == com.agentframework.runtime.session.SessionState.FAILED) {
             return OutcomeKind.ESCALATE;
         }

@@ -58,22 +58,27 @@ public class PgEngineSessionStore implements SessionStore {
                             + "ON CONFLICT (session_id) DO UPDATE SET record = EXCLUDED.record, updated_at = NOW()",
                     record.sessionId(), toJson(record));
         } catch (Exception e) {
-            log.warn("[engine-store] 引擎会话保存失败（仅存内存）：sessionId={} {}", record.sessionId(), e.getMessage());
+            // 写失败 = 会话快照没落库，跨重启/跨实例恢复会读到旧状态；静默会让损坏延迟暴露
+            log.error("[engine-store] 引擎会话保存失败：sessionId={} {}", record.sessionId(), e.getMessage());
+            throw new IllegalStateException("引擎会话快照保存失败: " + record.sessionId(), e);
         }
     }
 
     @Override
     public Optional<SessionRecord> load(String sessionId) {
+        List<SessionRecord> found;
         try {
-            List<SessionRecord> found = jdbc.query(
+            found = jdbc.query(
                     "SELECT record FROM " + TABLE + " WHERE session_id = ?",
                     (rs, rowNum) -> readRecord(rs.getString("record")),
                     sessionId);
-            return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
         } catch (Exception e) {
-            log.warn("[engine-store] 引擎会话读取失败：sessionId={} {}", sessionId, e.getMessage());
-            return Optional.empty();
+            // 读不到 ≠ 没有（同 PgEngineSlotStore）：返回 empty 会被调用方当成"无会话"，
+            // 从而以全新会话重开一个其实存在的诊断
+            log.error("[engine-store] 引擎会话读取失败：sessionId={} {}", sessionId, e.getMessage());
+            throw new IllegalStateException("引擎会话快照读取失败: " + sessionId, e);
         }
+        return found.isEmpty() ? Optional.empty() : Optional.of(found.get(0));
     }
 
     @Override
