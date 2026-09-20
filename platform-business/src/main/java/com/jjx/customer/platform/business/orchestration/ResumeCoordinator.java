@@ -1,6 +1,7 @@
 package com.jjx.customer.platform.business.orchestration;
 
 import com.jjx.customer.platform.business.engine.AgentCatalog;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.task.AgentTaskServiceImpl;
 import com.jjx.customer.platform.business.task.AgentTaskState;
 import com.jjx.ai.llmobservability.observation.logging.TelemetryLogger;
@@ -27,9 +28,6 @@ public class ResumeCoordinator {
     public record ResumeDecision(AgentTaskState activeTask, boolean continueTask) {
     }
 
-    /** 接口路径（用于识别"本轮说的是另一个接口"这个新目标强信号）。 */
-    private static final java.util.regex.Pattern API_PATH =
-            java.util.regex.Pattern.compile("/[A-Za-z][\\w-]*(?:/[\\w.{}-]+)+");
 
     /**
      * 查活动任务并判定本轮消息是否归它（决策链第 0 步，优先级最高，先于归一化/意图分类——
@@ -79,26 +77,14 @@ public class ResumeCoordinator {
         return !looksLikeNewTarget(task, question);
     }
 
-    /** 新目标强信号：消息里的 traceId／接口路径与任务已确认值不一致（确定性判据，不耗模型）。 */
+    /**
+     * 新目标强信号：消息里的 traceId／接口路径与任务已确认值不一致（确定性判据，不耗模型）。
+     *
+     * <p>判据实现归 {@link OpsSlotCatalog#targetShifted}——{@code OpsRunner} 清旧目标槽位时
+     * 用的是同一份，避免"路由说是新目标、槽位却没清"这类两处漂移。</p>
+     */
     private static boolean looksLikeNewTarget(AgentTaskState task, String question) {
-        if (question == null || question.isBlank()) {
-            return false;
-        }
-        String taskTrace = task.slots() == null ? null : task.slots().get("trace_id");
-        String askedTrace = com.jjx.customer.platform.common.util.TraceIdExtractor.extract(question);
-        if (askedTrace != null && taskTrace != null && !taskTrace.isBlank() && !askedTrace.equals(taskTrace)) {
-            return true;
-        }
-        String taskIface = task.slots() == null ? null : task.slots().get("interface");
-        if (taskIface != null && !taskIface.isBlank()) {
-            var m = API_PATH.matcher(question);
-            while (m.find()) {
-                if (!m.group().equals(taskIface)) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return OpsSlotCatalog.targetShifted(task.slots(), question);
     }
 
     /** 恢复的目标 agent：按任务归属路由；agentId 空白/未知回 ops（存量旧数据兼容）。 */

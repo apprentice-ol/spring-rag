@@ -96,6 +96,60 @@ public final class OpsSlotCatalog {
     public static final Set<String> NAMES = ALL.stream().map(Spec::name)
             .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
+    /**
+     * 目标切换时失效的槽位（旧目标的痕迹）。
+     *
+     * <p>换接口 / 换 traceId = 换了排查目标：{@code interface / trace_id} 是目标标识，
+     * {@code error / payload / response} 是<b>那一次故障</b>的观测——目标一换全部过时。
+     * 而 {@code environment / time / symptoms} 描述的是"在什么条件下查"，仍然适用
+     * （且 time 有缺省机制兜底）。</p>
+     *
+     * <p><b>为什么必须清</b>：抽槽语义是「已确认值优先、只填空缺」，旧值留着就永远占位、
+     * 新值抽不进来——实测用户改说新接口后槽位仍是旧接口，模型同时收到矛盾的
+     * {@code {{slots.interface}}} 与 {@code {{slots.user_directive}}}（真机 2026-09-20）。</p>
+     */
+    public static final Set<String> STALE_ON_TARGET_SHIFT = Set.of(
+            INTERFACE, TRACE_ID, ERROR, PAYLOAD, RESPONSE);
+
+    /** 接口路径（新目标强信号的确定性判据之一，不耗模型）。 */
+    private static final java.util.regex.Pattern API_PATH =
+            java.util.regex.Pattern.compile("/[A-Za-z][\\w-]*(?:/[\\w.{}-]+)+");
+
+    /**
+     * 本轮消息是否把排查目标切到了别处（换 traceId / 换接口路径）。
+     *
+     * <p><b>判据是确定性的</b>：消息里出现与任务已确立值<b>不同</b>的 traceId 或接口路径。
+     * 同接口追问、补槽、异议、空消息都不触发——它们仍在原目标上。</p>
+     *
+     * <p>本判据有两个消费方，共用同一份实现以免漂移：{@code ResumeCoordinator}
+     * （新目标交回意图分类）与 {@code OpsRunner}（清掉 {@link #STALE_ON_TARGET_SHIFT}）。</p>
+     *
+     * @param slots    任务已确立的槽位（可为 null/空）
+     * @param question 本轮用户消息
+     * @return true = 目标已切换
+     */
+    public static boolean targetShifted(Map<String, String> slots, String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        String taskTrace = slots == null ? null : slots.get(TRACE_ID);
+        String askedTrace = com.jjx.customer.platform.common.util.TraceIdExtractor.extract(question);
+        if (askedTrace != null && taskTrace != null && !taskTrace.isBlank()
+                && !askedTrace.equals(taskTrace)) {
+            return true;
+        }
+        String taskInterface = slots == null ? null : slots.get(INTERFACE);
+        if (taskInterface != null && !taskInterface.isBlank()) {
+            java.util.regex.Matcher m = API_PATH.matcher(question);
+            while (m.find()) {
+                if (!m.group().equals(taskInterface)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private OpsSlotCatalog() {
     }
 

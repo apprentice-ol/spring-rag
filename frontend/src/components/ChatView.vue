@@ -370,6 +370,15 @@ function leadOf(clarify: ClarifyEvent): string {
   return s.length > 24 && !s.startsWith('请补充以下信息') ? s : ''
 }
 
+/** 假设的验证状态徽标文案（未知状态原样回显——后端加新状态不至于渲染空白）。 */
+function hypStatusLabel(status: string): string {
+  const s = (status || '').toLowerCase()
+  if (s === 'verified') return '已证实'
+  if (s === 'disproved') return '已排除'
+  if (s === 'unverified') return '待验证'
+  return status || '待验证'
+}
+
 /** 卡片上的值展示：ISO 时间窗压成人读形态，长值截断（完整值挂 title） */
 function shortValue(value?: string | null): string {
   const v = (value || '').trim()
@@ -819,6 +828,19 @@ function fillSuggestion(s: string) {
               排查需要你的判断
             </div>
             <div class="decide-summary">{{ m.clarify.summary }}</div>
+            <!-- 竞争假设（P0 结构化决策面）：用户看到的是完整假设空间与每条的判别动作，
+                 而不是一段「卡住了」的描述；已排除的也列（「不用再试」本身就是信息） -->
+            <ul v-if="m.clarify.hypotheses?.length" class="decide-hypotheses">
+              <li v-for="(h,hi) in m.clarify.hypotheses" :key="hi" class="decide-hyp">
+                <div class="decide-hyp-head">
+                  <span class="decide-hyp-no num">{{ 'h' + (hi + 1) }}</span>
+                  <span class="decide-hyp-status" :class="'status-' + h.status">{{ hypStatusLabel(h.status) }}</span>
+                  <span class="decide-hyp-claim">{{ h.claim }}</span>
+                </div>
+                <div v-if="h.evidence" class="decide-hyp-line">{{ h.evidence }}</div>
+                <div class="decide-hyp-line decide-hyp-next">判别动作：{{ h.nextAction }}</div>
+              </li>
+            </ul>
             <ul v-if="m.clarify.evidence?.length" class="decide-evidence">
               <li v-for="(e,ei) in m.clarify.evidence" :key="ei">
                 <span class="num decide-ev-no">{{ ei + 1 }}</span>
@@ -1175,6 +1197,17 @@ function fillSuggestion(s: string) {
 .decide-card { margin-top:10px; padding:12px 14px; background:var(--color-signal-bg); border:1px solid var(--color-border-light); border-left:3px solid var(--color-signal); border-radius:var(--radius-md); display:flex; flex-direction:column; gap:8px; }
 .decide-eyebrow { color:var(--color-warning-ink); margin-bottom:0; }
 .decide-summary { font-size:13.5px; font-weight:600; color:var(--color-ink); line-height:1.5; }
+.decide-hypotheses { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; }
+.decide-hyp { display:flex; flex-direction:column; gap:3px; padding:8px 10px; background:var(--color-surface-secondary); border-radius:var(--radius-sm); }
+.decide-hyp-head { display:flex; gap:7px; align-items:baseline; }
+.decide-hyp-no { flex-shrink:0; font-size:11px; font-weight:600; color:var(--color-ink-tertiary); }
+.decide-hyp-status { flex-shrink:0; font-size:10.5px; padding:1px 6px; border-radius:var(--radius-sm); line-height:1.6; }
+.decide-hyp-status.status-verified { color:#1f7a2b; background:var(--color-success-bg); }
+.decide-hyp-status.status-disproved { color:var(--color-danger); background:var(--color-danger-bg); }
+.decide-hyp-status.status-unverified { color:var(--color-warning-ink); background:var(--color-signal-bg); }
+.decide-hyp-claim { font-size:12.5px; font-weight:600; color:var(--color-ink); line-height:1.5; }
+.decide-hyp-line { font-size:12px; color:var(--color-ink-secondary); line-height:1.55; padding-left:2px; }
+.decide-hyp-next { color:var(--color-ink-tertiary); }
 .decide-evidence { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:4px; }
 .decide-evidence li { display:flex; gap:8px; align-items:baseline; font-size:12.5px; line-height:1.55; color:var(--color-ink-secondary); }
 .decide-ev-no { flex-shrink:0; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; color:var(--color-warning-ink); background:var(--color-surface); border:1px solid var(--color-border-light); border-radius:var(--radius-sm); }

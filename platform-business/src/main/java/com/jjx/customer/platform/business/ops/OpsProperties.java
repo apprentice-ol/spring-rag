@@ -9,13 +9,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param logsCache   日志查询缓存（两档 TTL）
  * @param sessionTtlMinutes 追问会话 TTL（分钟，基准最近更新时间）
  * @param maxLlmCalls 流程级 LLM 调用数上限（O9：超限转升级，不静默截断；D9：显式声明，参考实现未声明等于不限）
+ * @param qaMaxPerTask 任务内直答（Task QA）配额：单任务成功直答次数上限，超限回固定文案
+ *                     （P1：不降级重跑——重跑更贵，降级正中滥用）
  */
 @ConfigurationProperties(prefix = "ops")
 public record OpsProperties(
         OpenObserve openobserve,
         LogsCache logsCache,
         Integer sessionTtlMinutes,
-        Integer maxLlmCalls) {
+        Integer maxLlmCalls,
+        Integer qaMaxPerTask) {
 
     /** @return OpenObserve 配置，缺省为空配置（字段名取 OTel 语义约定） */
     public OpenObserve openobserveOrDefault() {
@@ -38,6 +41,11 @@ public record OpsProperties(
     /** @return LLM 调用上限，缺省 24（三阶段 maxSteps 4+5+3 + 抽槽/裁决余量） */
     public int maxLlmCallsEffective() {
         return maxLlmCalls == null || maxLlmCalls <= 0 ? 24 : maxLlmCalls;
+    }
+
+    /** @return 任务内直答配额，缺省 10（≤0 也取缺省——配额是防长尾不是开关，关闭走负数不成立） */
+    public int qaMaxPerTaskEffective() {
+        return qaMaxPerTask == null || qaMaxPerTask <= 0 ? 10 : qaMaxPerTask;
     }
 
     /**

@@ -5,50 +5,46 @@ import com.agentframework.definition.agent.AgentDefinition;
 import com.agentframework.definition.policy.QuotaPolicy;
 import com.agentframework.definition.policy.ToolPolicy;
 import com.agentframework.definition.workflow.WorkflowDefinition;
+import com.agentframework.engine.contextmanager.ContextManager;
 import com.agentframework.engine.core.Engine;
 import com.agentframework.engine.core.EngineBuilder;
 import com.agentframework.engine.toolexecutor.DefaultToolExecutor;
 import com.agentframework.engine.toolexecutor.DefaultToolRegistry;
 import com.agentframework.infra.modelgateway.DefaultModelGateway;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jjx.customer.platform.business.engine.AgentCatalog;
+import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
 import com.jjx.customer.platform.business.engine.adapter.GatewayModelAdapter;
 import com.jjx.customer.platform.business.engine.persistence.PgEngineSessionStore;
 import com.jjx.customer.platform.business.engine.persistence.PgEngineSlotStore;
-import com.jjx.customer.platform.business.knowledge.node.KbFinishExecutor;
 import com.jjx.customer.platform.business.knowledge.KbPrompts;
+import com.jjx.customer.platform.business.knowledge.intent.IntentClassifier;
+import com.jjx.customer.platform.business.knowledge.node.*;
+import com.jjx.customer.platform.business.knowledge.normalize.QueryRewriter;
 import com.jjx.customer.platform.business.knowledge.workflow.KnowledgeQaGraphFactory;
 import com.jjx.customer.platform.business.knowledge.workflow.KnowledgeReactGraphFactory;
-import com.jjx.customer.platform.business.knowledge.node.KbClassifyExecutor;
-import com.jjx.customer.platform.business.knowledge.node.KbCritiqueExecutor;
-import com.jjx.customer.platform.business.knowledge.node.KbNormalizeExecutor;
-import com.jjx.customer.platform.business.knowledge.node.KbRewriteExecutor;
-import com.jjx.customer.platform.business.knowledge.node.KbRouteExecutor;
-import com.jjx.customer.platform.business.knowledge.node.KbShortCircuitExecutor;
-import com.jjx.customer.platform.business.knowledge.intent.IntentClassifier;
-import com.jjx.customer.platform.business.knowledge.normalize.QueryRewriter;
-import com.jjx.customer.platform.routing.RouteRegistry;
-import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
-import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.business.ops.OpsPrompts;
 import com.jjx.customer.platform.business.ops.OpsProperties;
 import com.jjx.customer.platform.business.ops.TaskFollowUpQa;
-import com.jjx.customer.platform.business.workflow.common.ActExecutor;
-import com.jjx.customer.platform.observe.openobserve.OpenObserveLogQueryClient;
-import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
-import com.jjx.customer.platform.business.ops.workflow.stages.StageModule;
+import com.jjx.customer.platform.business.ops.slot.OpsSlotCatalog;
 import com.jjx.customer.platform.business.ops.tool.CurrentTimeTool;
 import com.jjx.customer.platform.business.ops.tool.QueryLogsTool;
 import com.jjx.customer.platform.business.ops.tool.ValidateRequestTool;
-import com.jjx.ai.llmobservability.observation.propagation.ContextPropagator;
+import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
+import com.jjx.customer.platform.business.ops.workflow.stages.SharedDeps;
+import com.jjx.customer.platform.business.ops.workflow.stages.StageModule;
+import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.jjx.customer.platform.config.llm.SpringAiModelProvider;
-import com.jjx.customer.platform.config.prompt.PromptStore;
 import com.jjx.customer.platform.config.properties.AgentProperties;
 import com.jjx.customer.platform.config.properties.ChatProperties;
 import com.jjx.customer.platform.knowledge.retrieval.RetrievalEngine;
 import com.jjx.customer.platform.knowledge.tools.RetrievalTool;
+import com.jjx.customer.platform.mcp.McpExtensionToolSource;
+import com.jjx.customer.platform.observe.openobserve.OpenObserveLogQueryClient;
 import com.jjx.customer.platform.prompt.snapshot.PromptStorePromptProvider;
+import com.jjx.customer.platform.routing.RouteRegistry;
+import jakarta.annotation.PostConstruct;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -96,8 +92,7 @@ public class AgentEngineConfiguration {
     public TaskFollowUpQa taskFollowUpQa(DefaultModelGateway gateway,
             PromptStorePromptProvider promptProvider, ObjectMapper objectMapper,
             RetrievalEngine retrievalEngine, ChatProperties chatProperties,
-            @org.springframework.beans.factory.annotation.Value(
-                    "${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
+            @Value("${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
         RetrievalTool retrievalTool = new RetrievalTool(retrievalEngine, chatProperties.getTopK(),
                 chatProperties.getSimilarityThreshold(), chatProperties.getRecallBudget(),
                 chatProperties.getCandidateLimit(), chatProperties.getContextTopK(), minRelevanceScore);
@@ -126,7 +121,7 @@ public class AgentEngineConfiguration {
      * <p>放在 {@code @PostConstruct} 而不是某个 bean 方法里：这是进程级的静态装配，
      * 必须在任何一次 {@code engine.run} 之前完成，不能依赖"某个 bean 恰好先被创建"。</p>
      */
-    @jakarta.annotation.PostConstruct
+    @PostConstruct
     void installTelemetryTaskPropagation() {
         TaskPropagation.install(ContextPropagator::wrap);
     }
@@ -145,7 +140,7 @@ public class AgentEngineConfiguration {
      * 而回收只需要"按会话 id 释放内存"。窄依赖也让回收逻辑可单测。</p>
      */
     @Bean
-    public com.agentframework.engine.contextmanager.ContextManager agentContextManager(Engine agentEngine) {
+    public ContextManager agentContextManager(Engine agentEngine) {
         return agentEngine.contexts();
     }
 
@@ -158,12 +153,11 @@ public class AgentEngineConfiguration {
                               AgentProperties agentProperties,
                               ChatProperties chatProperties,
                               OpsProperties opsProperties,
-                              com.jjx.customer.platform.mcp.McpExtensionToolSource mcpToolSource,
+                              McpExtensionToolSource mcpToolSource,
                               IntentClassifier intentClassifier,
                               RouteRegistry routeRegistry,
                               QueryRewriter queryRewriter,
-                              @org.springframework.beans.factory.annotation.Value(
-                                      "${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
+                              @Value("${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
 
         // ---- 工具面（共享注册表：RAG 检索 + ops 诊断 + 时间）----
         DefaultToolRegistry sharedRegistry = new DefaultToolRegistry();

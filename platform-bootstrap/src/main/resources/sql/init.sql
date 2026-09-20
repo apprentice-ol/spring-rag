@@ -505,6 +505,7 @@ CREATE TABLE IF NOT EXISTS sa_agent_task (
     autonomy_level  VARCHAR(8),                        -- 会话自主档位（L1/L2/L3，null=缺省 L2）
     chain_trace_id  VARCHAR(64),                       -- 诊断链 traceId（同一次诊断跨 attempt 沿用）
     attempt_count   INT          NOT NULL DEFAULT 0,   -- attemptId = "ops-" + task_id + "#" + attempt_count
+    qa_count        INT          NOT NULL DEFAULT 0,   -- 任务内直答（Task QA）成功次数（P1 配额计数）
     topic_id        VARCHAR(64),                       -- 所属主题（第 4 步 Topic 层，当前为空）
     create_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
     update_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -513,6 +514,8 @@ CREATE TABLE IF NOT EXISTS sa_agent_task (
 CREATE INDEX IF NOT EXISTS idx_sa_agent_task_conv  ON sa_agent_task (conversation_id, status);
 CREATE INDEX IF NOT EXISTS idx_sa_agent_task_chain ON sa_agent_task (chain_trace_id);
 COMMENT ON TABLE  sa_agent_task IS 'Agent 任务（四层结构的工作边界：Conversation→Topic→Task→Attempt）';
+-- 旧库补列（幂等）
+ALTER TABLE sa_agent_task ADD COLUMN IF NOT EXISTS qa_count INT NOT NULL DEFAULT 0;
 COMMENT ON COLUMN sa_agent_task.task_id IS '任务 id（UUID，与 conversation_id 解耦）';
 COMMENT ON COLUMN sa_agent_task.status IS 'OPEN/RUNNING/SUSPENDED/CONCLUDED/CLOSED/ABANDONED（CONCLUDED=已出结论待用户反应）';
 COMMENT ON COLUMN sa_agent_task.attempt_count IS '已发起的 attempt 数；引擎会话 id = ops-<task_id>#<n>';

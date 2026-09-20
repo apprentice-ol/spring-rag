@@ -82,6 +82,46 @@ class ReplanHandoffTest {
         assertEquals(2, request.options().size(), "应带继续/终止两个选项");
         assertTrue(request.options().stream().anyMatch(c -> "redirect".equals(c.value())));
         assertTrue(request.options().stream().anyMatch(c -> "terminate".equals(c.value())));
+        assertTrue(request.context().hypotheses().isEmpty(), "无假设时为空列表（卡片退化为现状文本）");
+    }
+
+    /**
+     * P0（2026-09-20）：ask_human 的竞争假设外化——结构化决策面（真机轮 5 夹具：
+     * adjust 用尽挂起时用户只看到一段糊状「日志查询未得到有效结果」）。
+     */
+    @Test
+    void ask_human裁决_竞争假设外化_无判别动作的丢弃() throws Exception {
+        ReplanExecutor executor = executor((system, user) ->
+                "{\"action\":\"ask_human\",\"reason\":\"查不到\",\"question\":\"需要你的判断\","
+                        + "\"evidence\":\"检索未命中\","
+                        + "\"hypotheses\":["
+                        + "{\"claim\":\"知识库缺该接口的字段表\",\"status\":\"verified\","
+                        + "\"evidence\":\"检索未命中：通道有候选被精排过滤\",\"next_action\":\"提供接口文档或样例报文\"},"
+                        + "{\"claim\":\"检索问句改写得不好\",\"status\":\"unverified\","
+                        + "\"evidence\":\"\",\"next_action\":\"换问句重查\"},"
+                        + "{\"claim\":\"可能就是没文档\",\"status\":\"unverified\","
+                        + "\"evidence\":\"\",\"next_action\":\"\"}]}");   // 无判别动作 → 必须丢弃
+        NodeResult result = executor.execute(node(), contextOf(Map.of(), null));
+
+        assertTrue(result.isSuspended());
+        List<HumanRequest.Hypothesis> hypotheses = pendingOf(result).context().hypotheses();
+        assertEquals(2, hypotheses.size(), "无 next_action 的假设不进决策卡（不可证伪的假设没有决策增量）");
+        assertEquals("知识库缺该接口的字段表", hypotheses.getFirst().claim());
+        assertEquals("verified", hypotheses.getFirst().status());
+        assertTrue(hypotheses.getFirst().evidence().contains("精排过滤"));
+        assertTrue(hypotheses.getFirst().nextAction().contains("样例报文"));
+        assertEquals("换问句重查", hypotheses.get(1).nextAction());
+    }
+
+    /** 旧挂起会话的暂存 JSON（无 hypotheses 字段）反序列化兼容——存量恢复不受协议扩展影响。 */
+    @Test
+    void 旧决策JSON无hypotheses字段_反序列化为空列表() throws Exception {
+        String legacy = "{\"kind\":\"DECIDE\",\"prompt\":\"需要判断\",\"slots\":[],"
+                + "\"context\":{\"summary\":\"上下文\",\"evidence\":[\"事实一条\"]},"
+                + "\"options\":[{\"value\":\"redirect\",\"label\":\"继续\"}],\"allowFreeText\":true}";
+        HumanRequest parsed = MAPPER.readValue(legacy, HumanRequest.class);
+        assertTrue(parsed.context() != null && parsed.context().hypotheses().isEmpty(),
+                "缺 hypotheses 字段的旧 JSON 应归一化为空列表");
     }
 
     @Test

@@ -210,6 +210,37 @@ public class AgentTaskServiceImpl {
     }
 
     /**
+     * 任务内直答（Task QA）已用配额（P1：防单任务无限追问的长尾）。
+     *
+     * @param taskId 任务标识
+     * @return 已成功直答次数；查询失败 = 0（放行，配额偏松不是故障）
+     */
+    public int qaCountOf(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return 0;
+        }
+        try {
+            AgentTaskEntity e = taskMapper.selectById(taskId);
+            return e == null || e.getQaCount() == null ? 0 : e.getQaCount();
+        } catch (Exception ex) {
+            log.warn("[AgentTask] 读取 QA 计数失败（按未用处理）: {}", ex.getMessage());
+            return 0;
+        }
+    }
+
+    /** QA 直答成功后递增计数（失败只 warn）。 */
+    public void incrementQaCount(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+        try {
+            taskMapper.incrementQaCount(taskId);
+        } catch (Exception ex) {
+            log.warn("[AgentTask] QA 计数递增失败: {}", ex.getMessage());
+        }
+    }
+
+    /**
      * 落结论态：状态置 CONCLUDED（<b>不是 CLOSED</b>）。
      *
      * <p>语义差别是这次改造的核心——"系统给出了结论"不等于"目标达成"，

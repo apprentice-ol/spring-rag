@@ -17,15 +17,17 @@ import java.util.List;
  * @param options       点选项（DECIDE；空 = 纯文本回答；点击回传 #decision:&lt;value&gt;）
  * @param evidence      决策上下文要点（DECIDE；已查明事实，让人不必重看全程就能决策）
  * @param allowFreeText 是否允许自由文本回复（null = true 兼容）
+ * @param hypotheses    竞争假设（DECIDE；2026-09-20 P0：claim + 验证状态 + 判别动作的结构化决策面，
+ *                      空列表 = 旧事件/无假设，按现状渲染证据文本）
  */
 public record ClarifyRequest(String sessionId, String summary, List<SlotQuestion> questions,
                              List<SlotQuestion> reviewed, String kind,
                              List<ClarifyChoice> options, List<String> evidence,
-                             Boolean allowFreeText) {
+                             Boolean allowFreeText, List<ClarifyHypothesis> hypotheses) {
 
     /** 兼容旧构造（纯问齐，无人在环扩展字段）。 */
     public ClarifyRequest(String sessionId, String summary, List<SlotQuestion> questions) {
-        this(sessionId, summary, questions, List.of(), null, List.of(), List.of(), null);
+        this(sessionId, summary, questions, List.of(), null, List.of(), List.of(), null, List.of());
     }
 
     /** 兼容 Jackson 反序列化缺省字段（record 全参构造不适用可缺省 JSON）。 */
@@ -35,6 +37,7 @@ public record ClarifyRequest(String sessionId, String summary, List<SlotQuestion
         kind = kind == null || kind.isBlank() ? "CLARIFY" : kind;
         options = options == null ? List.of() : options;
         evidence = evidence == null ? List.of() : evidence;
+        hypotheses = hypotheses == null ? List.of() : hypotheses;
     }
 
     /** @return 是否为决策移交请求（前端渲染证据 + 选项而非问题清单） */
@@ -50,5 +53,19 @@ public record ClarifyRequest(String sessionId, String summary, List<SlotQuestion
      * @param description 行为说明（可空）
      */
     public record ClarifyChoice(String value, String label, String description) {
+    }
+
+    /**
+     * 竞争假设（DECIDE 决策移交的结构化决策面，2026-09-20 P0）。
+     *
+     * <p>delivery 契约镜像（shared 不依赖 agent-core，与 ClarifyChoice 镜像 Choice 同模式）。
+     * 前端渲染 claim + 状态徽标 + 判别动作；不识别时静默丢弃（既有约定）。</p>
+     *
+     * @param claim      假设内容
+     * @param status     verified（已证实）/ disproved（已排除）/ unverified（待验证）
+     * @param evidence   支撑或排除它的事实（一句话；空串 = 尚无证据）
+     * @param nextAction 判别动作——什么操作能验证/排除它
+     */
+    public record ClarifyHypothesis(String claim, String status, String evidence, String nextAction) {
     }
 }

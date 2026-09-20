@@ -121,12 +121,49 @@ public record HumanRequest(Kind kind, String prompt, List<SlotAsk> slots,
         }
     }
 
-    /** DECIDE/APPROVE 的决策上下文：让人不必重看全程就能决策的最小信息集。 */
-    public record DecisionContext(String summary, List<String> evidence) {
+    /**
+     * DECIDE/APPROVE 的决策上下文：让人不必重看全程就能决策的最小信息集。
+     *
+     * <p>{@code hypotheses}（2026-09-20）：决策移交时外化的<b>竞争假设</b>——每个带验证状态与
+     * 判别动作，让人看到的是完整假设空间而不是一段"卡住了"的糊状描述。可选：
+     * 旧数据 / 无假设时为空列表，前端按现状渲染证据文本（降级安全）。</p>
+     */
+    public record DecisionContext(String summary, List<String> evidence,
+                                  List<Hypothesis> hypotheses) {
+
+        /** 兼容构造（无假设）：存量调用点与旧 JSON 反序列化产物走这里。 */
+        public DecisionContext(String summary, List<String> evidence) {
+            this(summary, evidence, List.of());
+        }
 
         public DecisionContext {
             summary = summary == null ? "" : summary;
             evidence = List.copyOf(evidence == null ? List.of() : evidence);
+            hypotheses = List.copyOf(hypotheses == null ? List.of() : hypotheses);
+        }
+    }
+
+    /**
+     * 单个竞争假设（决策移交时外化，供人判断与点选方向）。
+     *
+     * @param claim     假设内容（如「知识库缺该接口的字段表」）
+     * @param status    验证状态：verified（已证实）/ disproved（已排除）/ unverified（待验证）
+     * @param evidence  支撑或排除它的事实（一句话；空 = 尚无证据）
+     * @param nextAction 判别动作——什么操作能验证/排除它。说不出判别动作的假设不允许进入
+     *                  决策卡（不可证伪的假设对决策没有增量），由生产方负责过滤
+     */
+    public record Hypothesis(String claim, String status, String evidence, String nextAction) {
+
+        public Hypothesis {
+            claim = claim == null ? "" : claim;
+            status = status == null ? "" : status.trim().toLowerCase();
+            evidence = evidence == null ? "" : evidence;
+            nextAction = nextAction == null ? "" : nextAction;
+        }
+
+        /** @return 是否可进入决策卡（claim 与判别动作都在，才谈得上让人裁决） */
+        public boolean actionable() {
+            return !claim.isBlank() && !nextAction.isBlank();
         }
     }
 

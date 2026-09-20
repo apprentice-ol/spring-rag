@@ -32,6 +32,7 @@
 - 「这个错误码在文档里有没有说明」→ retrieve（query：INVOICE_CODE_REQUIRED 错误码 说明）
 - 「不对，invoiceCode 我们系统里是有值的」→ rerun（推翻结论 + 新事实）
 - 「查下日志里这单现在还报不报错」→ rerun（需要日志实时数据）
+- 「重查」→ rerun（用户在 QA 直答后要求换轨重跑，一词即行动指令）
 
 输出一行 JSON（不要 markdown 围栏、不要解释）：
 {"label":"answer|retrieve|rerun","query":"面向知识库的检索问句（仅 retrieve 时给）","reason":"一句话理由"}

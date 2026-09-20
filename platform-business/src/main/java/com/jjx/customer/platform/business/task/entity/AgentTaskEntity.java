@@ -53,6 +53,9 @@ public class AgentTaskEntity {
     /** 已发起的 attempt 数；引擎会话 id = {@code ops-<taskId>#<n>} */
     private Integer attemptCount;
 
+    /** 任务内直答（Task QA）成功次数（P1 配额计数，超限回固定文案不降级重跑） */
+    private Integer qaCount;
+
     /** 所属主题（Topic 层预留，当前为空） */
     private String topicId;
 

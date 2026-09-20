@@ -58,8 +58,14 @@ public class OpsRunner {
     /** 「基本信息已确认过」槽位名（由 IntakeStageModule 声明）：重跑轮预填 1，跳过重复确认门。 */
     public static final String INTAKE_CONFIRMED_SLOT = "intake_confirmed";
 
+    /** 关联诊断背景的槽位名（由 IntakeStageModule 声明，compose 渲染「关联诊断背景」段）。 */
+    public static final String RELATED_FINDINGS_SLOT = "related_findings";
+
     /** 单条主张截断长度。 */
     private static final int FINDING_CLAIM_MAX = 400;
+
+    /** 关联背景单条截断（比主张的 400 更紧——背景只要能认出「是哪件事」）。 */
+    private static final int RELATED_CLAIM_MAX = 200;
 
     /** 注入的主张条数上限——**有界是硬要求**：组装成本必须与历史长度解耦。 */
     private static final int FINDING_MAX = 10;
@@ -100,10 +106,34 @@ public class OpsRunner {
         return sb.toString();
     }
 
+    /**
+     * 渲染关联诊断背景（同会话早前任务的结论概要，P1.5）。
+     *
+     * <p><b>不带 {@code [#n]} 编号</b>：编号是「本任务主张可被主张变更精确指认」的锚点，
+     * 跨任务主张混入会把否定标错对象——来源改用「早前任务·类型」文字标记。</p>
+     *
+     * @param findings 关联主张（任务倒序、每任务 ≤2 条，由 relatedOf 保证有界）
+     * @return 注入文本；无关联 = 空串
+     */
+    static String renderRelated(List<AgentFinding> findings) {
+        if (findings == null || findings.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (AgentFinding f : findings) {
+            String claim = f.claim() == null ? "" : f.claim().replaceAll("\\s+", " ").trim();
+            if (claim.length() > RELATED_CLAIM_MAX) {
+                claim = claim.substring(0, RELATED_CLAIM_MAX) + "…";
+            }
+            String label = f.kind() == AgentFinding.Kind.ROOT_CAUSE ? "根因" : "修正";
+            sb.append("- [早前任务·").append(label).append("] ").append(claim).append('\n');
+        }
+        return sb.toString();
+    }
+
     /** 一次诊断的执行产物（交付由调用方决定：SSE / REST 投影）。 */
     public record OpsAnswer(OutcomeKind kind, String text, TraceView trace,
                             HumanRequest humanRequest) {
-
         /** 兼容旧构造（无人在环请求）。 */
         public OpsAnswer(OutcomeKind kind, String text, TraceView trace) {
             this(kind, text, trace, null);
@@ -119,6 +149,9 @@ public class OpsRunner {
     /** 任务内直答（Task QA）：CONCLUDED 任务上「对结论的提问」的轻路径，不进 SOP。 */
     private final TaskFollowUpQa followUpQa;
 
+    /** ops 配置（P1：qaMaxPerTask 配额）。 */
+    private final OpsProperties opsProperties;
+
     /**
      * @param sessionSlots 会话已确认槽位（可空：单轮调用 / 首轮）
      * @param sessionId    会话标识（非空 = 出口落澄清会话；REST 单轮为 null）
@@ -126,11 +159,20 @@ public class OpsRunner {
     public OpsAnswer run(String question, Map<String, String> sessionSlots, String sessionId) {
         AgentTaskState task = (sessionId == null || sessionId.isBlank()) ? null : ensureTask(sessionId);
         // 任务内直答（2026-09-20）：CONCLUDED 任务上「对结论的提问」不进 SOP——读投影单次直答。
-        // 判定 / 应答任何一步不成立都返回 empty，落回下方重跑路径（最坏退化 = 现状行为）。
+        // P1 配额检查在分类调用**之前**：超限轮零 LLM 消耗，回固定文案而非降级重跑
+        //（重跑更贵，降级正中滥用）；判 rerun / 应答失败照旧落回下方重跑路径（不劣化）。
         if (task != null && task.status() == AgentTaskState.Status.CONCLUDED) {
+            int qaBudget = opsProperties.qaMaxPerTaskEffective();
+            if (taskService.qaCountOf(task.taskId()) >= qaBudget) {
+                return new OpsAnswer(OutcomeKind.DIRECT,
+                        "本任务追问解读已达上限（" + qaBudget + " 次）。如结论仍有疑问，"
+                                + "请直接指出哪条不对（系统会重新排查），或开启新对话。",
+                        null);
+            }
             Optional<OpsRunner.OpsAnswer> direct = followUpQa.tryAnswer(task, question,
                     () -> findingService.activeOf(task.taskId()));
             if (direct.isPresent()) {
+                taskService.incrementQaCount(task.taskId());
                 return direct.get();
             }
         }
@@ -299,6 +341,16 @@ public class OpsRunner {
         if (sessionSlots != null) {
             prefill.putAll(sessionSlots);
         }
+        // 目标切换（用户改说另一个接口 / 另一个 traceId）：清掉旧目标的痕迹。
+        // 不清的话抽槽的「已确认值优先、只填空缺」会让旧 interface 永远占位，
+        // 新接口抽不进来——模型同时收到矛盾的 {{slots.interface}} 与 {{slots.user_directive}}
+        // （真机 2026-09-20：用户说 /api/order/create 后槽位仍是 /api/invoice/reverse）。
+        // 环境/时间/现象保留：那是"在什么条件下查"，与换目标无关。
+        if (OpsSlotCatalog.targetShifted(task.slots(), question)) {
+            OpsSlotCatalog.STALE_ON_TARGET_SHIFT.forEach(prefill::remove);
+            log.info("[ops] 目标已切换（换接口/换 traceId），清理旧目标槽位：{}",
+                    OpsSlotCatalog.STALE_ON_TARGET_SHIFT);
+        }
         withAutonomy(prefill, task);
 
         // 上一轮已确立的主张带进本轮上下文。没有它，"你这结论不对"会让模型不知道
@@ -306,6 +358,14 @@ public class OpsRunner {
         String priorFindings = renderFindings(findingService.activeOf(task.taskId()));
         if (!priorFindings.isBlank()) {
             prefill.put(PRIOR_FINDINGS_SLOT, priorFindings);
+        }
+
+        // P1.5 关联诊断背景（Topic 投影的最小形态）：同会话早前任务的结论概要。
+        // 让"刚才那个问题是连接池耗尽，这个是不是也一样"里的「刚才那个」可见；
+        // 防锚定（跨任务根因是强锚）由 compose 段头降权标注 + verify 证据链铁律双保险兜住
+        String related = renderRelated(findingService.relatedOf(task.conversationId(), task.taskId()));
+        if (!related.isBlank()) {
+            prefill.put(RELATED_FINDINGS_SLOT, related);
         }
 
         // ① 挂起中 → 恢复同一个 attempt。先抢占：并发双请求只有一个能继续，

@@ -18,6 +18,7 @@ import com.jjx.customer.platform.business.ops.slot.SlotProvenance;
 import com.jjx.customer.platform.business.workflow.common.ActExecutor;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -128,7 +129,8 @@ public class ReplanExecutor implements NodeExecutor {
                     // D7：本阶段重试额度用尽 → 决策移交（用户可能给得出模型给不出的新方向）
                     writes.put("replan_verdict", "ask_human");
                     handoff = decideRequest("阶段 " + stageLabel + " 自动重试额度已用尽",
-                            "自动重试 " + MAX_ADJUST_RETRIES + " 次仍未得到可用结论：" + verdict.reason());
+                            "自动重试 " + MAX_ADJUST_RETRIES + " 次仍未得到可用结论：" + verdict.reason(),
+                            verdict.hypotheses());
                     target = null;
                 } else {
                     writes.put("replan_verdict", "adjust");
@@ -145,7 +147,8 @@ public class ReplanExecutor implements NodeExecutor {
                 writes.put("replan_verdict", "ask_human");
                 handoff = decideRequest(
                         verdict.question().isBlank() ? "排查需要你的判断" : verdict.question(),
-                        verdict.evidence().isBlank() ? verdict.reason() : verdict.evidence());
+                        verdict.evidence().isBlank() ? verdict.reason() : verdict.evidence(),
+                        verdict.hypotheses());
                 target = null;
             }
             case "escalate" -> {
@@ -160,7 +163,8 @@ public class ReplanExecutor implements NodeExecutor {
                     // escalate 不再是死亡终点：终局判断交给用户（终止是选项之一）
                     writes.put("replan_verdict", "ask_human");
                     handoff = decideRequest("排查在这里卡住了，需要你的决策",
-                            verdict.reason().isBlank() ? "模型判断无法继续" : verdict.reason());
+                            verdict.reason().isBlank() ? "模型判断无法继续" : verdict.reason(),
+                            verdict.hypotheses());
                     target = null;
                 }
             }
@@ -370,12 +374,19 @@ public class ReplanExecutor implements NodeExecutor {
         return value instanceof Number number ? number.intValue() : 0;
     }
 
-    /** 决策移交请求：证据上下文 + 继续优先的选项（终止是选项之一，不是默认结局）。 */
-    private HumanRequest decideRequest(String question, String evidence) {
+    /**
+     * 决策移交请求：证据上下文 + 竞争假设（结构化决策面）+ 继续优先的选项。
+     *
+     * <p>hypotheses 为空时卡片退化为现状纯文本（不劣化）；非空时用户看到的是
+     * 「每个假设的验证状态 + 判别动作」的完整假设空间。</p>
+     */
+    private HumanRequest decideRequest(String question, String evidence,
+            List<HumanRequest.Hypothesis> hypotheses) {
         List<String> evidencePoints = evidence == null || evidence.isBlank()
                 ? List.of() : List.of(evidence.split("\\n+"));
         return HumanRequest.decide(question,
-                new HumanRequest.DecisionContext("阶段「" + stageLabel + "」结束后需要人工判断", evidencePoints),
+                new HumanRequest.DecisionContext("阶段「" + stageLabel + "」结束后需要人工判断",
+                        evidencePoints, hypotheses == null ? List.of() : hypotheses),
                 List.of(
                         new HumanRequest.Choice("redirect", "我补充信息，继续排查",
                                 "回复具体信息（traceId / 时间 / 报文 / 你的怀疑方向），将按新线索重跑本阶段"),
@@ -433,7 +444,8 @@ public class ReplanExecutor implements NodeExecutor {
             if (action.isEmpty()) {
                 return Verdict.continueOf("裁决缺少 action，按骨架继续");
             }
-            return new Verdict(action, reason, adjustment, question, evidence);
+            return new Verdict(action, reason, adjustment, question, evidence,
+                    hypothesesOf(parsed.get("hypotheses")));
         } catch (Exception e) {
             log.warn("[ops-replan] 裁决失败（按 continue）：{}", e.getMessage());
             return Verdict.continueOf("裁决失败：" + e.getMessage());
@@ -507,11 +519,54 @@ public class ReplanExecutor implements NodeExecutor {
      * @param adjustment 重跑提示（仅 adjust）
      * @param question   向用户的决策问句（仅 ask_human）
      * @param evidence   已查明事实与卡住点摘要（仅 ask_human，随请求透出给用户做决策依据）
+     * @param hypotheses 竞争假设（仅 ask_human：结构化决策面，每个带验证状态与判别动作）
      */
-    record Verdict(String action, String reason, String adjustment, String question, String evidence) {
+    record Verdict(String action, String reason, String adjustment, String question, String evidence,
+                   List<HumanRequest.Hypothesis> hypotheses) {
 
         static Verdict continueOf(String reason) {
-            return new Verdict("continue", reason, "", "", "");
+            return new Verdict("continue", reason, "", "", "", List.of());
         }
+    }
+
+    /**
+     * 解析裁决输出的竞争假设（ask_human 的结构化决策面，2026-09-20 P0）。
+     *
+     * <p>无判别动作（{@code next_action}）的假设一律丢弃——不可证伪的假设对决策没有增量，
+     * 进卡片只会稀释真假设（判据见 replan.md「假设外化」节）。</p>
+     */
+    private static List<HumanRequest.Hypothesis> hypothesesOf(Object value) {
+        if (!(value instanceof List<?> raw) || raw.isEmpty()) {
+            return List.of();
+        }
+        List<HumanRequest.Hypothesis> hypotheses = new ArrayList<>();
+        for (Object item : raw) {
+            if (!(item instanceof Map<?, ?> declared)) {
+                continue;
+            }
+            HumanRequest.Hypothesis h = new HumanRequest.Hypothesis(
+                    textOf(declared.get("claim")),
+                    textOf(declared.get("status")),
+                    textOf(declared.get("evidence")),
+                    textOf(firstNonNull(declared.get("next_action"), declared.get("nextAction"))));
+            if (h.actionable()) {
+                hypotheses.add(h);
+            } else {
+                log.info("[ops-replan] 丢弃无判别动作的假设：{}", preview(h.claim()));
+            }
+        }
+        return List.copyOf(hypotheses);
+    }
+
+    /** map 取值转文本（null/缺失 → 空串，"null" 字面量同样按空处理——与上方裁决字段同口径）。 */
+    private static String textOf(Object value) {
+        if (value == null || "null".equals(String.valueOf(value))) {
+            return "";
+        }
+        return String.valueOf(value).trim();
+    }
+
+    private static Object firstNonNull(Object a, Object b) {
+        return a != null ? a : b;
     }
 }

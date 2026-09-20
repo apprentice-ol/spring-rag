@@ -6,7 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jjx.customer.platform.business.task.entity.AgentFindingEntity;
 import com.jjx.customer.platform.business.task.mapper.AgentFindingMapper;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -76,6 +79,58 @@ public class AgentFindingServiceImpl {
             return List.of();
         }
     }
+
+    /**
+     * 同会话<b>其他任务</b>的生效主张（P1.5 关联诊断背景：Topic 投影的最小形态）。
+     *
+     * <p>让新任务里"刚才那个问题是连接池耗尽，这个是不是也一样"的「刚才那个」可见。
+     * 仅取 ROOT_CAUSE / FIX（风险与约束对「理解早前发生了什么」没有增量）；有界：
+     * 任务数 ≤{@value #RELATED_MAX_TASKS}、每任务 ≤{@value #RELATED_PER_TASK} 条
+     * （组装成本与历史长度解耦，与 prior_findings 的 FINDING_MAX 同哲学）。</p>
+     *
+     * @param conversationId 所属对话
+     * @param excludeTaskId  当前任务（它的主张走 prior_findings 带 [#n] 编号，不得混入）
+     * @return 主张列表（任务按最近优先、任务内按产出序）；无 = 空列表
+     */
+    public List<AgentFinding> relatedOf(String conversationId, String excludeTaskId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<AgentFindingEntity> rows = findingMapper.selectList(
+                    new LambdaQueryWrapper<AgentFindingEntity>()
+                            .eq(AgentFindingEntity::getConversationId, conversationId)
+                            .ne(AgentFindingEntity::getTaskId, excludeTaskId == null ? "" : excludeTaskId)
+                            .eq(AgentFindingEntity::getStatus, AgentFinding.Status.ACTIVE.name())
+                            .in(AgentFindingEntity::getKind, List.of(
+                                    AgentFinding.Kind.ROOT_CAUSE.name(), AgentFinding.Kind.FIX.name()))
+                            .orderByDesc(AgentFindingEntity::getUpdateTime)
+                            .orderByAsc(AgentFindingEntity::getCreateTime));
+            Map<String, List<AgentFinding>> byTask = new LinkedHashMap<>();
+            for (AgentFindingEntity row : rows) {
+                byTask.computeIfAbsent(row.getTaskId(), k -> new ArrayList<>()).add(toFinding(row));
+            }
+            List<AgentFinding> bounded = new ArrayList<>();
+            int tasks = 0;
+            for (List<AgentFinding> taskFindings : byTask.values()) {
+                if (tasks >= RELATED_MAX_TASKS) {
+                    break;
+                }
+                bounded.addAll(taskFindings.subList(0, Math.min(taskFindings.size(), RELATED_PER_TASK)));
+                tasks++;
+            }
+            return List.copyOf(bounded);
+        } catch (Exception ex) {
+            log.warn("[findings] 读取关联诊断背景失败（按无关联处理）: {}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /** 关联背景上限：最多取近几个任务。 */
+    private static final int RELATED_MAX_TASKS = 2;
+
+    /** 关联背景上限：每任务最多几条。 */
+    private static final int RELATED_PER_TASK = 2;
 
     /**
      * 判定某条主张为错（用户明确否定时调用）。

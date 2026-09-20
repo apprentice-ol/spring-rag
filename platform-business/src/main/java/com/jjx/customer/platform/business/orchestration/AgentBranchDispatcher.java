@@ -130,11 +130,24 @@ public class AgentBranchDispatcher<S> {
                     .toList();
             // CONFIRM 的「确认，开始排查」也是选项——漏投影的话卡片只剩信息没有动作（实测踩到）
             return new ClarifyRequest(conversationId, request.prompt(), questions, reviewed,
-                    request.kind().name(), toChoices(request), evidence, request.allowFreeText());
+                    request.kind().name(), toChoices(request), evidence, request.allowFreeText(),
+                    toHypotheses(request));
         }
-        // 决策移交：点选项投影成 options，证据进 evidence
+        // 决策移交：点选项投影成 options，证据进 evidence，竞争假设进 hypotheses（P0 结构化决策面）
         return new ClarifyRequest(conversationId, request.prompt(), List.of(), List.of(),
-                request.kind().name(), toChoices(request), evidence, request.allowFreeText());
+                request.kind().name(), toChoices(request), evidence, request.allowFreeText(),
+                toHypotheses(request));
+    }
+
+    /** 竞争假设投影（core Hypothesis → delivery 契约镜像；无假设 = 空列表，按现状渲染）。 */
+    private static List<ClarifyRequest.ClarifyHypothesis> toHypotheses(HumanRequest request) {
+        if (request.context() == null || request.context().hypotheses().isEmpty()) {
+            return List.of();
+        }
+        return request.context().hypotheses().stream()
+                .map(h -> new ClarifyRequest.ClarifyHypothesis(
+                        h.claim(), h.status(), h.evidence(), h.nextAction()))
+                .toList();
     }
 
     /** 点选项投影（DECIDE 的继续/终止、CONFIRM 的确认同口径）。 */

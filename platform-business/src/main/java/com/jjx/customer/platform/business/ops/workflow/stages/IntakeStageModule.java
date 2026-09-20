@@ -65,6 +65,10 @@ public final class IntakeStageModule implements StageModule {
           // 上一轮已确立的诊断主张：追问轮由 OpsRunner 从 sa_agent_finding 装入。
           // 没有它，"你这结论不对"会让模型不知道上一轮断言了什么，只能从零重排。
           .slot("prior_findings", SlotType.STRING)
+          // 关联诊断背景（P1.5）：同会话早前任务的结论概要，由 OpsRunner 装入——
+          // 让新任务里「刚才那个问题」可见。与 prior_findings 分槽：编号语义不同
+          //（本任务主张可被否定指认 vs 跨任务背景不可指认）
+          .slot("related_findings", SlotType.STRING)
           // 基本信息已确认过（重跑轮由 OpsRunner 预填 1）：同一 Task 的追问轮不再重复确认——
           // 确认门摊开的是「被推断的前提」，前提没变就不该再问（plan/2026-09-20-task-qa-loop.md §2.4）
           .slot("intake_confirmed", SlotType.NUMBER);

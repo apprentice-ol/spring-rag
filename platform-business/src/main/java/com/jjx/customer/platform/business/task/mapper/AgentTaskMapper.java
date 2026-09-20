@@ -65,6 +65,15 @@ public interface AgentTaskMapper extends BaseMapper<AgentTaskEntity>, TaskReaper
     int release(String taskId);
 
     /**
+     * 任务内直答（Task QA）计数递增（P1 配额）：QA 直答成功后调用，原子自增。
+     *
+     * @param taskId 任务标识
+     * @return 影响行数
+     */
+    @Update("UPDATE sa_agent_task SET qa_count = qa_count + 1 WHERE task_id = #{taskId}")
+    int incrementQaCount(String taskId);
+
+    /**
      * TTL 过期：超时未动的任务 → ABANDONED。
      *
      * <p>条件里**含 RUNNING**——进程被杀（部署重启 / OOM）会留下永远停在 RUNNING 的行：

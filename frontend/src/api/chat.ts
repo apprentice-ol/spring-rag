@@ -180,6 +180,17 @@ export interface ClarifyChoice {
   label: string
   description: string | null
 }
+/** 竞争假设（DECIDE 结构化决策面，后端 ClarifyHypothesis 镜像）。
+ *  claim + 验证状态 + 判别动作——用户看到的是完整假设空间，不是一段「卡住了」的描述。 */
+export interface ClarifyHypothesis {
+  claim: string
+  /** verified（已证实）/ disproved（已排除）/ unverified（待验证） */
+  status: string
+  /** 支撑或排除它的事实（空串 = 尚无证据） */
+  evidence: string
+  /** 判别动作——什么操作能验证/排除它 */
+  nextAction: string
+}
 export interface ClarifyEvent {
   sessionId: string | null
   summary: string
@@ -190,6 +201,8 @@ export interface ClarifyEvent {
   options?: ClarifyChoice[] | null
   evidence?: string[] | null
   allowFreeText?: boolean | null
+  /** 竞争假设（DECIDE；旧事件无此字段 → 不渲染假设块，按证据文本降级） */
+  hypotheses?: ClarifyHypothesis[] | null
 }
 
 export interface StreamHandlers {

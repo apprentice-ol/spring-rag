@@ -1,12 +1,9 @@
 package com.jjx.customer.platform.business.engine;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactory;
 import com.jjx.customer.platform.config.prompt.PromptStore;
-import com.jjx.customer.platform.prompt.mapper.PromptBindingMapper;
-import com.jjx.customer.platform.prompt.mapper.PromptBundleMapper;
-import com.jjx.customer.platform.prompt.mapper.PromptBundleReleaseMapper;
-import com.jjx.customer.platform.prompt.mapper.PromptMapper;
-import com.jjx.customer.platform.prompt.mapper.PromptVersionMapper;
+import com.jjx.customer.platform.prompt.mapper.*;
 import com.jjx.customer.platform.prompt.service.PromptBindingService;
 import com.jjx.customer.platform.prompt.snapshot.PromptStorePromptProvider;
 import org.springframework.context.annotation.Bean;
@@ -35,7 +32,7 @@ public class PromptAssetConfiguration {
             PromptBundleReleaseMapper releaseMapper,
             PromptMapper promptMapper,
             PromptVersionMapper versionMapper,
-            PromptStore promptStore, com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+            PromptStore promptStore, ObjectMapper objectMapper) {
         Map<String, List<String>> requiredKeys = new LinkedHashMap<>();
         for (AgentCatalog.Entry entry : AgentCatalog.all()) {
             requiredKeys.put(entry.id(), entry.allPromptKeys());

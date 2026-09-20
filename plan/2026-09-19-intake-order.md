@@ -69,6 +69,20 @@ bash scripts/seed-oo-log.sh "" "发票冲红失败" "invoice-service"   # 日志
 页面发：`traceId <打印的> prod 环境 帮我看看为什么报错`
 期望链：`extract_slots → auto_resolve（精查 → 补出 接口/请求参数/报错）→ confirm_slots → 用户确认 → inv → res → ver → conclude`
 
+**业务键（orderNo）反查**（2026-09-20 补：脚本原先只覆盖 traceId 精查与中文关键字，
+而真实排查里用户手上往往只有业务单号——这条链路有代码无数据）：
+
+```bash
+bash scripts/seed-oo-log.sh    # 第 4 个参数是 orderNo，不传则随机生成并打印
+```
+页面发：`orderNo <打印的> 报错了，最近10分钟`
+期望链：`extract_slots（业务键落 trace_id 槽）→ auto_resolve：looksLikeTraceId=false →
+searchByKeyword（业务键当关键字模糊查）→ 命中 → 提取 trace_id 落槽 → 后续同上`
+判据依据：`AutoResolveExecutor.looksLikeTraceId` 要求纯 hex 且 16-64 位，`ORD` 前缀天然不命中；
+关键字优先级是「业务键 > 接口名 > 错误摘要 > 现象」。
+⚠️ 反查要求**关键字 + 时间窗都有**，测试消息里要带时间（如「最近10分钟」）；
+body 进 OO 视图截 200 字，故脚本把 orderNo 写在正文第 ~35 字处（报错描述与报文首字段各一次）。
+
 ## 四、已知未接（不要误以为已实现）
 
 | 项 | 现状 |

@@ -24,6 +24,9 @@ public final class OpsPrompts {
     /** 上一轮主张的槽位名（与 {@code OpsRunner.PRIOR_FINDINGS_SLOT} 同名同物）。 */
     private static final String PRIOR_FINDINGS_SLOT = "prior_findings";
 
+    /** 关联诊断背景的槽位名（与 {@code OpsRunner.RELATED_FINDINGS_SLOT} 同名同物）。 */
+    private static final String RELATED_FINDINGS_SLOT = "related_findings";
+
     private OpsPrompts() {
     }
 
@@ -107,6 +110,12 @@ public final class OpsPrompts {
         // 用模板默认值渲染占位，避免空标题诱发模型脑补（与上面 user_directive 同处理）。
         sb.append("\n## 上一轮已确立的主张（用户可能对其中某条有异议，请据此回应或修正）\n")
                 .append("{{slots.").append(PRIOR_FINDINGS_SLOT).append("|（本轮不是追问，无）}}\n");
+        // 关联诊断背景（P1.5，同会话早前任务的结论概要）：不带 [#n] 编号（跨任务主张
+        // 不能进本任务的否定编号空间）；降权标注防锚定——跨任务根因对模型是强锚
+        //（「上次是 X，这次大概也是」），本轮结论必须有自己的证据链
+        sb.append("\n## 关联诊断背景（同会话早前任务的结论，仅供理解上下文——不是本轮证据，")
+                .append("本轮结论必须有自己的证据链）\n")
+                .append("{{slots.").append(RELATED_FINDINGS_SLOT).append("|（无）}}\n");
         // replan 修正段：未裁决时渲染为空（replan_note 默认空串），adjust 时携带重跑提示
         sb.append("\n## 修正要求（上一轮 replan 裁决）\n{{slots.replan_note}}\n");
         return sb.toString();
