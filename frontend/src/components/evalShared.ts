@@ -1,4 +1,5 @@
 /** 评测各 Tab / 详情抽屉共享的指标知识与纯工具函数。 */
+import { reactive } from 'vue'
 
 export interface MetricKnow {
   label: string
@@ -171,6 +172,17 @@ export function fmtScore(v: unknown): string {
   return Number.isFinite(n) ? n.toFixed(4) : String(v)
 }
 
+/**
+ * 聚合指标是否带分布明细（中位/min/max）。
+ *
+ * 导入的历史运行只回填了均值（汇总快照没有逐题分数），此时不该渲染
+ * 「中位 - · min - · max -」——那是拿占位符冒充信息。
+ */
+export function hasDistribution(m: { median?: unknown; min?: unknown; max?: unknown } | null): boolean {
+  if (!m) return false
+  return m.median != null || m.min != null || m.max != null
+}
+
 export function parseDocIds(json: string | null): string[] {
   if (!json) return []
   try {
@@ -275,7 +287,10 @@ export function categoryLabel(v: string | null | undefined): string {
  * 检索链早已不是"单次检索直出"，react 也不再是"原生 function calling"（那是 JSON 协议的工具循环）。
  * 说明文字失真的代价是读者拿它当依据做判断，比没有说明更坏。</p>
  */
-export const PARADIGMS: { value: string; label: string; desc: string }[] = [
+// 注意：必须是 reactive —— refreshParadigms() 拉完 /agent/registry 后用 splice 原地覆盖，
+// 普通数组不会触发重渲染，界面会停留在静态默认值（Knowledge / 运维诊断 / ReAct Loop），
+// 直到碰巧有别的状态变化才刷新一次。表现为"同一份代码在不同环境显示的范式标签不一样"。
+export const PARADIGMS = reactive<{ value: string; label: string; desc: string }[]>([
   {
     value: 'knowledge',
     label: 'Knowledge',
@@ -294,7 +309,7 @@ export const PARADIGMS: { value: string; label: string; desc: string }[] = [
     desc: '同一段查询理解链，之后交给模型自主循环：think（产出工具调用 JSON）→ act（执行检索）'
       + '→ decide（还有调用就继续，否则收尾）。跨轮命中累积，轮次有硬上限。',
   },
-]
+])
 
 /**
  * 历史范式的**展示标签**（纯展示，不参与任何逻辑）。

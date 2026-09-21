@@ -231,6 +231,40 @@
             </plugin>
             <!-- 依赖外置：mvn package 时把 runtime 依赖拷到 target/lib/（lib 外置部署模式，
                  pom 不动 lib 就不变，镜像只重 build 一次；业务代码只换瘦 jar + restart） -->
+            <!-- 把本项目 14 个模块（com.jjx.customer）的类合并进启动 jar：
+                 部署只需传**一个 jar**（约 5MB：全部业务代码 + 前端），第三方依赖仍在 lib/ 外置
+                 （pom 不变就不用重传）。替代此前的「薄 jar + lib 里的模块 jar」两处都要更新的模式。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <artifactSet>
+                                <includes>
+                                    <include>com.jjx.customer:*</include>
+                                </includes>
+                            </artifactSet>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <!-- 无需 transformer：模块 jar 里只有 class + agent/schemas 资源，
+                                 没有 META-INF/services / spring.factories 之类需要合并的多份同名文件 -->
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-dependency-plugin</artifactId>
@@ -245,6 +279,9 @@
                         <configuration>
                             <outputDirectory>${project.build.directory}/lib</outputDirectory>
                             <includeScope>runtime</includeScope>
+                            <!-- 项目自己的模块**不进 lib**：它们的类由下方 shade 合并进启动 jar。
+                                 留在 lib 会因 classpath（lib 在前）反向盖过新代码 —— 2026-09-20 踩过。 -->
+                            <excludeGroupIds>com.jjx.customer</excludeGroupIds>
                         </configuration>
                     </execution>
                 </executions>

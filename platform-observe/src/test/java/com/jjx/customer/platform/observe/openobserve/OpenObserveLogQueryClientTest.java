@@ -2,6 +2,7 @@ package com.jjx.customer.platform.observe.openobserve;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
@@ -48,5 +49,30 @@ class OpenObserveLogQueryClientTest {
     void 服务名里的单引号被转义() {
         assertEquals("service_name != 'o''brien'",
                 OpenObserveLogQueryClient.serviceExclusion("service_name", "o'brien"));
+    }
+
+    /**
+     * 0/负值端点必须被兜底替换，绝不透传给 OO——start_time=0 会被 400 拒收
+     * （{@code [file_list] invalid time range}），客户端吞掉后"不限时间全量查"静默全空。
+     */
+    @Test
+    void 无窗查询兜底为回溯窗() {
+        long now = 1_789_920_000_000L;
+        long day = 86_400_000L;
+        // start/end 均缺省：end=now，start=now-7d
+        assertArrayEquals(new long[]{now - 7 * day, now},
+                OpenObserveLogQueryClient.normalizeWindow(0, 0, now, 7));
+        // 只缺 start：end 按调用方给的算，start=end-7d
+        assertArrayEquals(new long[]{now - 5 * day - 7 * day, now - 5 * day},
+                OpenObserveLogQueryClient.normalizeWindow(0, now - 5 * day, now, 7));
+        // 只缺 end：end=now，start 原样
+        assertArrayEquals(new long[]{now - day, now},
+                OpenObserveLogQueryClient.normalizeWindow(now - day, 0, now, 7));
+        // 双端齐全：原样返回
+        assertArrayEquals(new long[]{now - day, now},
+                OpenObserveLogQueryClient.normalizeWindow(now - day, now, now, 7));
+        // lookbackDays 配成 0/负：按 1 天兜底，不能拼出倒置窗口
+        assertArrayEquals(new long[]{now - day, now},
+                OpenObserveLogQueryClient.normalizeWindow(0, 0, now, 0));
     }
 }

@@ -41,6 +41,21 @@ public class CachingIntentClassifier implements IntentClassifier {
 
     @Override
     public IntentResult classify(String question) {
+        return classify(question, "");
+    }
+
+    /**
+     * 带历史分类：历史非空时旁路缓存，也不写缓存。
+     *
+     * <p><b>为什么旁路</b>：缓存 key 只有 question，而裸关键词的意图恰恰由历史决定——
+     * "Refresh-Token" 在 token 概念话题里是 knowledge，在新会话里才可能是排障。
+     * 命中/写入都会把某个历史语境的结论串给另一个语境。首轮（无历史）照常走缓存。</p>
+     */
+    @Override
+    public IntentResult classify(String question, String recentHistory) {
+        if (recentHistory != null && !recentHistory.isBlank()) {
+            return delegate.classify(question, recentHistory);
+        }
         CacheProperties.Layer layer = cacheProperties.getIntent();
         if (!cacheProperties.isEnabled() || !layer.isEnabled()) {
             return delegate.classify(question);

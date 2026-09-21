@@ -7,6 +7,7 @@ import com.jjx.customer.platform.business.ops.workflow.OpsDiagnoseWorkflowFactor
 import com.jjx.customer.platform.business.ops.slot.OpsSlotExtractor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.agentframework.definition.agent.AgentDefinition;
@@ -211,5 +212,63 @@ class OpsGraphSuspendTest {
                 "conclude 应直出最终结论，实际 output=" + third.output()
                         + "，visited=" + third.visitedNodes()
                         + "，ver_stage_output=" + third.slots().get("ver_stage_output"));
+    }
+
+    /**
+     * 确定性协议 {@code #fill:} 补槽后，问齐环不能再重复问已补的槽
+     * （2026-09-20 真机踩坑：用户回 {@code #fill:{"environment":"prod"}}，下一张卡又问
+     * 「环境是正式还是测试？」——补了白补，追问循环）。
+     */
+    @Test
+    void fill协议补槽后不再重复问() {
+        // 边角脚本：抽槽(空) → 自主补全(无推断)；恢复轮 #fill 走确定性路径，零模型调用
+        ScriptedAskModel askModel = new ScriptedAskModel()
+                .enqueue("{\"environment\":null,\"interface\":null,\"time\":null}", "[]");
+        ScriptedModelProvider thinkModel = new ScriptedModelProvider();
+        Engine engine = engineOf(askModel, thinkModel);
+
+        Session session = engine.startSession(engine.loadAgent("ops_diagnose", "latest"),
+                StartOptions.defaults().withSessionId("ops-test-fill"));
+        RunResult first = engine.run(session, new Input("接口报错了帮忙看看", Map.of(), Map.of()));
+        assertTrue(first.suspended(), "缺必填槽位应挂起");
+
+        // ---- 恢复：#fill 只补 environment（interface 仍缺，应只追问接口）----
+        Map<String, Object> resumeSlots = new LinkedHashMap<>();
+        resumeSlots.put("user_clarify", "#fill:{\"environment\":\"prod\"}");
+        RunResult second = engine.resume(session,
+                new Input("#fill:{\"environment\":\"prod\"}", Map.of(), resumeSlots));
+
+        assertTrue(second.suspended(), "interface 仍缺，应再次挂起");
+        String ask = String.valueOf(second.output());
+        assertTrue(ask.contains("接口"), "仍缺 interface，问齐文案应问接口：" + ask);
+        assertFalse(ask.contains("环境是正式还是测试"), "environment 已由 #fill 补上，不应再问：" + ask);
+        assertEquals("prod", second.slots().get("environment"), "#fill 的值应落槽");
+    }
+
+    /**
+     * 反查未命中时，卡片必须把反查消费的关键槽（单号/时间窗）摊成带当前值的核对项——
+     * 只问缺失槽不摊关键数据，"请确认信息是否准确"就没有可确认的对象
+     * （真机 2026-09-20：连问 4 轮 interface，卡片上始终没有单号/时间窗的改动入口）。
+     */
+    @Test
+    void 反查未命中卡片摊开关键槽核对入口() {
+        // 边角脚本：抽槽(空) → 自主补全(无推断)；日志工具返回空 → 反查未命中
+        ScriptedAskModel askModel = new ScriptedAskModel()
+                .enqueue("{\"environment\":null,\"interface\":null,\"time\":null}", "[]");
+        ScriptedModelProvider thinkModel = new ScriptedModelProvider();
+        Engine engine = engineOf(askModel, thinkModel);
+
+        Map<String, Object> slots = new LinkedHashMap<>();
+        slots.put("trace_id", "ORD53f64352");
+        slots.put("time", "2026-09-20T22:44~2026-09-20T23:44");
+        Session session = engine.startSession(engine.loadAgent("ops_diagnose", "latest"),
+                StartOptions.defaults().withSessionId("ops-test-lookup"));
+        RunResult first = engine.run(session, new Input("orderNo ORD53f64352 报错了，最近1小时", Map.of(), slots));
+
+        assertTrue(first.suspended(), "缺 environment/interface 应挂起");
+        String card = String.valueOf(first.slots().get(HumanRequest.PENDING_SLOT));
+        assertTrue(card.contains("ORD53f64352"), "卡片应摊开单号当前值供核对：" + card);
+        assertTrue(card.contains("22:44"), "卡片应摊开时间窗当前值供核对：" + card);
+        assertTrue(card.contains("检索业务日志"), "反查未命中说明应作领读句：" + card);
     }
 }

@@ -122,7 +122,7 @@ public class AskMissingExecutor implements NodeExecutor {
             // 挂起结果同样要带回全部槽位写入：答复解析出的值必须先落槽位，否则重入会再问一遍
             NodeResult suspended = NodeResult.suspended(node.id(), askText)
                     .withSlotWrite(HumanRequest.PENDING_SLOT,
-                            writeClarifyRequest(missing, provenanceJson, lookupNote));
+                            writeClarifyRequest(missing, confirmed, provenanceJson, lookupNote));
             for (Map.Entry<String, Object> entry : writes.entrySet()) {
                 suspended = suspended.withSlotWrite(entry.getKey(), entry.getValue());
             }
@@ -238,10 +238,13 @@ public class AskMissingExecutor implements NodeExecutor {
      * 机器已补全项（P3）带值 + 来源角标一并透出，用户可当场纠正
      * （点选回传 {@code #override:}，或直接说话由回复解释器识别为推翻）。
      *
+     * @param missing        缺失的必填槽位名
+     * @param confirmed      当前已确认槽位（反查未命中时用于摊开关键槽的核对入口）
      * @param provenanceJson 「本轮已生效」的来源台账（不是 context 里的旧值）
      * @param lookupNote     反查空结果说明（非空时作为卡片领读句，请用户确认/修改信息）
      */
-    private String writeClarifyRequest(List<String> missing, String provenanceJson, String lookupNote) {
+    private String writeClarifyRequest(List<String> missing, Map<String, String> confirmed,
+            String provenanceJson, String lookupNote) {
         try {
             List<HumanRequest.SlotAsk> asks = new ArrayList<>(missing.size());
             for (String name : missing) {
@@ -251,6 +254,27 @@ public class AskMissingExecutor implements NodeExecutor {
                         : new HumanRequest.SlotAsk(spec.name(), spec.question(), spec.hint(),
                                 null, null, spec.options()));
             }
+            // 反查未命中：把反查消费的关键槽（单号/时间窗）摊在卡片上给核对入口。
+            // 台账只记机器取值，用户直给的槽不在其中（"首轮用户直给槽不写台账"的已知缺口），
+            // 只靠台账投影会出现「请确认信息是否准确」却没有任何可确认项的空转卡片——
+            // 用户想改单号/时间窗只能靠自由文本碰运气（真机 2026-09-20 连问 4 轮没人能改单号）。
+            if (lookupNote != null && !lookupNote.isBlank()) {
+                for (String slot : List.of(OpsSlotCatalog.TRACE_ID, OpsSlotCatalog.TIME)) {
+                    if (asks.stream().anyMatch(a -> a.name().equals(slot))
+                            || confirmed.getOrDefault(slot, "").isBlank()) {
+                        continue;
+                    }
+                    OpsSlotCatalog.Spec spec = specOf(slot);
+                    SlotProvenance.Entry entry = provenanceEntryOf(provenanceJson, slot);
+                    asks.add(new HumanRequest.SlotAsk(slot,
+                            spec == null ? slot : spec.question(),
+                            spec == null ? null : spec.hint(),
+                            confirmed.get(slot),
+                            entry == null ? null : entry.source(),
+                            spec == null ? List.of() : spec.options(),
+                            false, entry == null ? "已确认" : entry.evidence()));
+                }
+            }
             // 已自动补全项：值 + 来源（模型推断 / 日志反查 / 缺省值 / 规则提取 / 用户更正）
             List<String> notes = new ArrayList<>();
             for (SlotProvenance.Entry entry : SlotProvenance.parse(provenanceJson)) {
@@ -258,8 +282,9 @@ public class AskMissingExecutor implements NodeExecutor {
                     continue;
                 }
                 notes.add(entry.slot() + " = " + abbreviate(entry.value()) + "（" + entry.evidence() + "）");
-                if (missing.contains(entry.slot())) {
-                    continue; // 缺失项已在上面的问句里，不重复
+                if (missing.contains(entry.slot())
+                        || asks.stream().anyMatch(a -> a.name().equals(entry.slot()))) {
+                    continue; // 缺失项已在上面的问句里，关键槽已核对投影，均不重复
                 }
                 // ⚠️ user_override 曾在这里被排除（"已是用户确认过的值，不必再问"），后果是：
                 // 当唯一的"已补全项"就是用户自己刚说的值时，asks 为空 → 交付契约的 reviewed 为空
@@ -371,6 +396,14 @@ public class AskMissingExecutor implements NodeExecutor {
     /** 目录查找（未登记的槽位名返回 null）。 */
     private static OpsSlotCatalog.Spec specOf(String name) {
         return OpsSlotCatalog.ALL.stream().filter(s -> s.name().equals(name)).findFirst().orElse(null);
+    }
+
+    /** 台账里某槽的来源条目（无台账/未登记返回 null）。 */
+    private static SlotProvenance.Entry provenanceEntryOf(String provenanceJson, String slot) {
+        return SlotProvenance.parse(provenanceJson).stream()
+                .filter(e -> e.slot().equals(slot))
+                .findFirst()
+                .orElse(null);
     }
 
     /**

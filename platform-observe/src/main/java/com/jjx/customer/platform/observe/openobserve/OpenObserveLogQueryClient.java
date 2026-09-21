@@ -124,11 +124,36 @@ public class OpenObserveLogQueryClient {
         }
         String sql = "SELECT * FROM \"" + streamOf() + "\"" + where
                 + " ORDER BY _timestamp DESC LIMIT " + effective;
+        // 0/负值端点不能透传：OO 对无效时间范围直接 400 拒收，客户端吞掉后静默变"无命中"
+        long[] window = normalizeWindow(startMs, endMs, System.currentTimeMillis(), props.lookbackDays());
         String body = "{\"query\":{\"sql\":" + jsonQuote(sql)
-                + ",\"start_time\":" + startMs * 1000L
-                + ",\"end_time\":" + endMs * 1000L
+                + ",\"start_time\":" + window[0] * 1000L
+                + ",\"end_time\":" + window[1] * 1000L
                 + ",\"size\":" + effective + ",\"from\":0}}";
         return search(body);
+    }
+
+    /**
+     * 时间窗兜底（可单测的纯函数）：无效端点替换为回溯窗，绝不把 0 发给服务端。
+     *
+     * <p><b>为什么值得钉</b>：调用方约定"start/end 均缺省 = 不限时间全量按关键字查"
+     * （见 QueryLogsTool 的工具描述与 LogBackfill 的去窗重试），但 OO 的 {@code _search}
+     * 要求 start_time/end_time 是有效 epoch 微秒——{@code 0} 会得到
+     * {@code 400 [file_list] invalid time range}，客户端按失败语义返回空列表，
+     * 整条"不限时间查"路径从上线起就静默全空（2026-09-20 OO 里 13 条 400 实证）。
+     * 兜底窗复用 traceId 精查的 lookbackDays 语义：语义上"全量"就是"回溯这么长"。</p>
+     *
+     * @param startMs     开始时间（epoch 毫秒，<=0 视为缺省）
+     * @param endMs       结束时间（epoch 毫秒，<=0 视为缺省）
+     * @param nowMs       当前时刻（注入以便测试）
+     * @param lookbackDays 缺省端点的回溯天数（<=0 按 1 天）
+     * @return {@code [startMs, endMs]}，两端正的 epoch 毫秒
+     */
+    static long[] normalizeWindow(long startMs, long endMs, long nowMs, int lookbackDays) {
+        long end = endMs > 0 ? endMs : nowMs;
+        long backoff = Math.max(1, lookbackDays) * 86_400_000L;
+        long start = startMs > 0 ? startMs : end - backoff;
+        return new long[]{start, end};
     }
 
     /**
@@ -163,8 +188,12 @@ public class OpenObserveLogQueryClient {
      */
     private List<Map<String, Object>> search(String body) {
         if (!isAvailable()) {
+            log.warn("[openobserve] 跳过查询（不可用）：{}", unavailableReason());
             return List.of();
         }
+        // 请求体落日志：空结果时能对着实际发出的 SQL/窗口归因——
+        // 2026-09-21 真机排查"同条件手工命中、应用 0 命中"，此处无日志导致只能逐层猜测
+        log.info("[openobserve] 查询请求: {}", preview(body));
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(props.url() + (props.url().endsWith("/") ? "" : "/") + "_search"))

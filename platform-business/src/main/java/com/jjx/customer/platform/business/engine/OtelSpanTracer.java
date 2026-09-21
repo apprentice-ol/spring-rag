@@ -83,14 +83,18 @@ public final class OtelSpanTracer implements Tracer {
                 : traceId;
         Span core = new Span(effectiveTraceId, null, name, kind);
         applyAttributes(core, attributes);
-        io.opentelemetry.api.trace.Span ambient = io.opentelemetry.api.trace.Span.current();
         SpanBuilder builder = otelTracer.spanBuilder(name)
                 .setSpanKind(io.opentelemetry.api.trace.SpanKind.INTERNAL)
                 .setStartTimestamp(core.startTime());
         attachAttributes(builder, core);
-        if (!ambient.getSpanContext().isValid() && isOtelTraceId(effectiveTraceId)) {
-            // 无请求链可挂时才强制 traceId：Span.wrap(SpanContext) 造非记录 span 作隐式父，
-            // 根 span 的 traceId 即业务链 id，后续子 span 经映射自然同链
+        // 显式传入的 traceId（诊断链 chainTraceId）优先续链，ambient 只是回退——
+        // 顺序不能反：追问轮跑在 HTTP 请求线程上，ambient 永远有效（本轮 /chat/stream span），
+        // 若"有 ambient 就挂"，chainTraceId 永远不生效，每个追问轮的引擎 span 各自挂到
+        // 本轮新 trace 下，一次诊断在 traces 流里散成 N 段孤立碎片（2026-09-21 真机：
+        // 首轮 23 spans 完整，两个 #fill 追问轮各只剩 6 spans 的碎片 trace）。
+        // 只认显式传入（traceId 参数非空），自动生成的随机 id 不强制——否则会把没传
+        // traceId 的线（RAG 引擎会话）从请求链上撕下来。
+        if (traceId != null && !traceId.isBlank() && isOtelTraceId(effectiveTraceId)) {
             SpanContext forced = SpanContext.create(effectiveTraceId, randomSpanId(),
                     TraceFlags.getSampled(), TraceState.getDefault());
             builder.setParent(Context.root().with(io.opentelemetry.api.trace.Span.wrap(forced)));

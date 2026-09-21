@@ -43,7 +43,10 @@ public class KbClassifyExecutor implements NodeExecutor {
         String question = context.slots().getString(KnowledgeQaGraphFactory.QUESTION_SLOT, "");
         String normalized = context.slots().getString(
                 KnowledgeQaGraphFactory.NORMALIZED_QUERY_SLOT, question);
-        IntentResult intent = intentClassifier.classify(normalized);
+        // 历史随问题一起进分类：追问常是裸关键词，脱离历史会被按字面猜意图
+        // （"Refresh-Token" 被猜成"疑似排查令牌报错"劫持进诊断，2026-09-20 实证）
+        String history = context.slots().getString(KnowledgeQaGraphFactory.HISTORY_SLOT, "");
+        IntentResult intent = intentClassifier.classify(normalized, history);
 
         String domain = intent.getDomain() == null ? IntentResult.DOMAIN_KNOWLEDGE : intent.getDomain();
         Map<String, Object> writes = new LinkedHashMap<>();

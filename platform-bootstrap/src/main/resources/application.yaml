@@ -139,7 +139,10 @@ rag:
                         # 素材多则 RRF 融合质量更好；耗时花在 rerank 上，不在这。
     similarity-threshold: 0.0   # 不过滤（0.35 会把具体操作步骤块误过滤——步骤和"流程"查询语义距离较远）（阈值过滤向后推到精排环节）
     degrade-limit: 8            # Redis 断路器降级期间，昂贵路径（LLM 流式/ops 诊断）并发上限（DegradeGuard）
-    diagnose-min-confidence: 0.6 # 意图路由进诊断的置信度门槛：自动档低于此值不劫持，落回知识检索（显式选择不受限）
+    diagnose-min-confidence: 0.8 # 意图路由进诊断的置信度门槛：自动档低于此值不劫持，落回知识检索（显式选择不受限）。
+                                 # 2026-09-20 由 0.6 收紧：分类器对裸关键词的猜测（reason 自称"疑似"）常给 0.6——
+                                 # 正好卡死旧门槛卡线放行（实证：追问"Refresh-Token"被判诊断 0.6 劫持，答非所问）。
+                                 # "疑似"级置信应落回知识检索；显式选择诊断范式不受此门槛限制。
     # system-prompt 已迁至 prompts/rag/pipeline/rag-answer-system.md（单一来源）；
     # 如需运维覆盖，可在此设置 system-prompt: xxx
     history:                     # 多轮上下文：查询改写（消解指代）与答案生成/闲聊共用同一窗口
@@ -176,6 +179,13 @@ rag:
     #         sse-endpoint: /sse
   search:
     channels:
+      vector:
+        ef-search: 200                 # HNSW 检索宽度：越大召回越全，但单次查询摸的索引页也越多。
+                                       # 内存吃紧、索引装不进缓存的机器（页要从磁盘读）把它调小是最直接的降 I/O 手段：
+                                       # ef=200 约摸 2800 页，ef=64 约 900 页。代价是召回略降，由多通道 RRF 兜底。
+        query-timeout-seconds: 30      # 向量查询超时（秒）。**这是"通道存亡"开关**：超时=整条向量通道失败
+                                       #（只剩关键词，检索质量断崖），不是"变慢"。2026-09-20 服务器实测：
+                                       # 内存吃紧时一次 HNSW 查询读盘 7.6s，撞上原 8s 硬编码 → 通道整条挂掉。
       keyword:
         enabled: true           # 关键词通道：metadata.keywords 双向包含匹配 + doc_name 文档路由（专有名词/人名精确召回，补向量语义弱信号）
         mode: bm25             # 实现选择：sql=滑窗字词 SQL 检索（默认，零依赖；全表扫描无索引，当前 327 块毫秒级）

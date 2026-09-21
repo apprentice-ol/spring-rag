@@ -280,6 +280,12 @@ public final class RelativeTimeParser {
     }
 
     private static String window(LocalDateTime start, LocalDateTime end) {
-        return start.format(ISO) + "~" + end.format(ISO);
+        // 截断方向必须对称安全：start 向下（宁早）、end 向上进位到整分（宁晚）。
+        // 格式化 HH:mm 丢秒是单向的，end 若随之向下截断，会把「报错刚发生就问」的
+        // 最近 60 秒系统性切在窗外（真机 2026-09-21：09:20:26 的报错日志 vs
+        // 「最近10分钟」窗口 end=09:20:00，差 26 秒反查未命中）。进位让窗口
+        // 最多宽 59 秒，多查不漏查；卡片显示随之多一分钟，用户无感。
+        LocalDateTime safeEnd = end.plusMinutes(1).truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        return start.format(ISO) + "~" + safeEnd.format(ISO);
     }
 }

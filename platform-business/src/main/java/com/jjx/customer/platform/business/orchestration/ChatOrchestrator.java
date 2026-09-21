@@ -26,6 +26,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 对话编排器（ChatOrchestrator）：一次对话请求的决策中枢。
@@ -134,8 +135,15 @@ public class ChatOrchestrator<S> {
             // （agentId 空白/未知回 ops——存量旧数据兼容）。
             // 抢占不在这里做：已下移到 OpsRunner 紧挨真正的运行，避免"占了位却没跑起来"
             // 这个需要额外释放的中间状态。
-            agentBranchDispatcher.runAgentBranch(resumeCoordinator.requireResumeTarget(activeTask),
-                    question, conversationId, sink, otelTraceId, Map.of(), activeTask.slots(), autonomy);
+            //
+            // 人在环中续链（2026-09-21）：挂起任务是**同一诊断任务在等人**，追问轮不是
+            // 新请求而是该任务的下一步——整轮执行（引擎/反查/交付）挂到 chainTraceId 下，
+            // OO traces 里一次诊断从头到尾一条链可回放。HTTP 入口 span 在框架层更早创建
+            // 留在本轮 trace（入口台账），引擎侧另有 withTraceId 强制续链双保险。
+            try (io.opentelemetry.context.Scope ignored = chainScope(activeTask.chainTraceId())) {
+                agentBranchDispatcher.runAgentBranch(resumeCoordinator.requireResumeTarget(activeTask),
+                        question, conversationId, sink, otelTraceId, Map.of(), activeTask.slots(), autonomy);
+            }
             return;
         }
 
@@ -261,11 +269,20 @@ public class ChatOrchestrator<S> {
 
         // 8.3 非检索意图（问候/闲聊）：短路直答，不做检索。轨迹已下发——「为什么这轮没查文档」
         //     的答案就在那几步里（意图识别判定为非检索域）
-        if (!knowledgeAnswer.needsRetrieval()) {
-            log.info("[对话编排] 非检索意图 {}，走闲聊回复", knowledgeAnswer.intent());
+        //     会话范式锁定（父类约束，2026-09-20）：会话已确立任务上下文（历史非空）且本轮
+        //     检索有货时，闲聊判定不生效——「翻译一下」「总结刚才的回答」「Refresh-Token」
+        //     这类任务闲聊继承 RAG 范式继续生成（带引用；翻译检索结果时引用不断链）。
+        //     诊断会话的锁定更靠前（ResumeCoordinator 归入任务），到不了这里。
+        //     中途纯寒暄（"你好"）：检索无货 → 仍走闲聊兜底，比空检索降级提示合理。
+        if (!knowledgeAnswer.needsRetrieval() && (history.isBlank() || chunks.isEmpty())) {
+            log.info("[对话编排] 非检索意图 {}，走闲聊回复（首轮={}，检索块={}）",
+                    knowledgeAnswer.intent(), history.isBlank(), chunks.size());
             // 带历史：闲聊是非知识库请求的兜底，「翻译/总结上一轮结果」也落到这条路上
             chitchatResponder.handleNonQuery(question, conversationId, history, sink, otelTraceId);
             return;
+        }
+        if (!knowledgeAnswer.needsRetrieval()) {
+            log.info("[对话编排] 会话已有任务上下文且检索有货，chitchat 判定不生效，继承 RAG 范式");
         }
 
         // ========== 9. 空检索处理 ==========
@@ -300,5 +317,23 @@ public class ChatOrchestrator<S> {
     private static String currentTraceId() {
         var ctx = Span.current().getSpanContext();
         return ctx.isValid() ? ctx.getTraceId() : null;
+    }
+
+    /**
+     * 诊断链续链 scope：以 chainTraceId 造非记录 span 设为 current，作用域内新建的 span
+     * 全部落到该链上。非法 traceId（空/非 32 位 hex）返回 null（try-with-resources 对 null 安全）。
+     *
+     * @param traceId 挂起任务的业务链 traceId
+     * @return scope（try-with-resources 关闭）；不可续链时 null
+     */
+    private static io.opentelemetry.context.Scope chainScope(String traceId) {
+        if (traceId == null || !traceId.matches("\\p{XDigit}{32}")) {
+            return null;
+        }
+        io.opentelemetry.api.trace.SpanContext forced = io.opentelemetry.api.trace.SpanContext.create(
+                traceId, UUID.randomUUID().toString().replace("-", "").substring(0, 16),
+                io.opentelemetry.api.trace.TraceFlags.getSampled(),
+                io.opentelemetry.api.trace.TraceState.getDefault());
+        return Span.wrap(forced).makeCurrent();
     }
 }

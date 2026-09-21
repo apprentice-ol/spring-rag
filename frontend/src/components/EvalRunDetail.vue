@@ -8,6 +8,7 @@ import {
   metricKey,
   metricLabel,
   fmtScore,
+  hasDistribution,
   parseDocIds,
   parseDetail,
   statusText,
@@ -529,7 +530,9 @@ function durMin(): string {
             </div>
             <div class="agg-mean">{{ fmtScore(m.mean) }}</div>
             <div class="agg-bar"><span :style="{ width: Math.max(0, Math.min(1, m.mean)) * 100 + '%' }"></span></div>
-            <div class="agg-detail">中位 {{ fmtScore(m.median) }} · min {{ fmtScore(m.min) }} · max {{ fmtScore(m.max) }}</div>
+            <!-- 分布明细只在真有分布时显示：导入的历史 run 只有均值（汇总快照），
+                 摆出「中位 - · min - · max -」是拿噪声冒充信息 -->
+            <div v-if="hasDistribution(m)" class="agg-detail">中位 {{ fmtScore(m.median) }} · min {{ fmtScore(m.min) }} · max {{ fmtScore(m.max) }}</div>
           </div>
         </div>
       </div>

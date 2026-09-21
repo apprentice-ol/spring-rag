@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,7 +34,22 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class VectorSearchChannel implements SearchChannel {
 
-    private static final int QUERY_TIMEOUT_SECONDS = 8;
+    /**
+     * 向量查询超时（秒）——**这是"通道存亡"开关，不是性能旋钮**：
+     * 超时会让整条向量通道失败（只剩关键词，检索质量断崖式下降），而不是"变慢"。
+     * 2026-09-20 服务器实测：内存吃紧时一次 HNSW 查询读盘 7.6s，撞上原来的 8s 硬编码 → 通道整条挂掉。
+     * 机器慢就放宽，宁可慢也不要通道消失。
+     */
+    @Value("${rag.search.channels.vector.query-timeout-seconds:30}")
+    private int queryTimeoutSeconds;
+
+    /**
+     * HNSW 检索宽度：越大召回越全，**单次查询摸的索引页也越多**。
+     * 内存受限的机器（索引装不进缓存、页要从磁盘读）调小它是最直接的降 I/O 手段：
+     * ef=200 约摸 2800 页，ef=64 约 900 页。代价是召回略降，由多通道 RRF 兜底。
+     */
+    @Value("${rag.search.channels.vector.ef-search:200}")
+    private int efSearch;
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
@@ -82,7 +98,7 @@ public class VectorSearchChannel implements SearchChannel {
                     .build();
         }
 
-        // 对齐 ragent PgVectorRetrieverService：ef_search=200 + iterative_scan=relaxed_order。
+        // 对齐 ragent PgVectorRetrieverService：ef_search（默认 200，可配）+ iterative_scan=relaxed_order。
         // 默认 ef 偏小 + strict_order 会产生"召回悬崖"——漏掉语义稍远但内容命中的步骤块，
         // 剩下 cosine 分高但泛泛的概述块（"分两类"等高频词）。relaxed_order 让 HNSW 填满 LIMIT。
         //
@@ -120,15 +136,15 @@ public class VectorSearchChannel implements SearchChannel {
 
         List<RetrievedChunk> candidates = jdbcTemplate.execute((ConnectionCallback<List<RetrievedChunk>>) conn -> {
             try (Statement st = conn.createStatement()) {
-                st.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
-                st.execute("SET hnsw.ef_search = 200");
+                st.setQueryTimeout(queryTimeoutSeconds);
+                st.execute("SET hnsw.ef_search = " + efSearch);
                 st.execute("SET hnsw.iterative_scan = relaxed_order");
-                // 压过 ef_search=200 的代价模型翻转（见上注释），钉死 HNSW 索引路径
+                // 压过 ef_search 的代价模型翻转（见上注释），钉死 HNSW 索引路径
                 st.execute("SET enable_seqscan = off");
             }
             try {
                 try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
-                    ps.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+                    ps.setQueryTimeout(queryTimeoutSeconds);
                     for (int i = 0; i < sqlParams.size(); i++) {
                         ps.setObject(i + 1, sqlParams.get(i));
                     }

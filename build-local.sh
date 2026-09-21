@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # 本地构建产物（lib 外置部署模式）：
 #   1. 前端 dist → jar 的 static
-#   2. mvn package → 瘦 app.jar（业务代码 + 前端 dist，每次变）+ lib/（依赖，pom 不动就不变）
+#   2. mvn package → app.jar（**全部业务代码 + 前端**，约 3MB）+ lib/（仅第三方依赖）
+#      platform-bootstrap/pom.xml 用 maven-shade-plugin 把 14 个项目模块（com.jjx.customer）
+#      合并进 app.jar，并把它们排除出 lib/ → **部署只需传这一个 jar**。
+#      （2026-09-20 之前是「薄 jar + lib 里的模块 jar」，只传薄 jar 等于没更新业务代码，已修）
 #   3. 产物同步到项目根 —— Dockerfile 的 COPY 源是「context 根」，
 #      不刷新根目录那份，compose --build 会静默地拿旧 jar 构建出旧镜像（零报错）
 # 产物在 platform-bootstrap/target/ 下：
-#   - platform-bootstrap-0.0.1-SNAPSHOT.jar   瘦 jar（业务 + dist）
-#   - lib/                          依赖（首次传服务器，之后不变）
+#   - platform-bootstrap-0.0.1-SNAPSHOT.jar   app.jar（全部业务代码 + 前端 dist）
+#   - lib/                          仅第三方依赖（pom 不变就不用重传）
 # 项目根（Dockerfile COPY 源 / scp 上传源）：
 #   - platform-bootstrap-0.0.1-SNAPSHOT.jar + lib/
 # 用法：bash build-local.sh

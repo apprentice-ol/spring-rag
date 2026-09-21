@@ -46,8 +46,13 @@ public class OpsIntentRouteRule implements RouteRule {
 
     @Override
     public String domainDescriptor() {
-        return DOMAIN + "：排查线上报错/异常/日志/接口故障，用户给出报错信息、traceId、"
-                + "或要求「诊断/查日志/为什么失败」时选此域"
-                + "（例：✓ \"帮我看看刚才的报错\"、\"52462c684e1c47242ffea1bc96af94c3 是什么错\"）";
+        return DOMAIN + "：排查**线上系统故障**。必须同时满足两点才选此域："
+                + "① 明确的排障诉求（帮我排查/查一下日志/定位一下问题）；"
+                + "② 可定位的线上要素：traceId、订单号/流水号、接口路径、或环境+具体接口。"
+                + "只是询问概念/原理/报错含义/怎么解决（\"xxx 报错怎么办\"\"Refresh-Token\"这类求知识的）"
+                + "一律选 knowledge，即使句中出现\"报错/失败\"字眼"
+                + "（例：✓ \"52462c684e1c47242ffea1bc96af94c3 是什么错\"、"
+                + "✓ \"订单 ORD53f64352 下单失败，帮我查日志\"；"
+                + "✗ \"token 获取报错怎么解决\"、✗ \"Refresh-Token\"）";
     }
 }
