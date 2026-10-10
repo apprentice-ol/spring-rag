@@ -17,9 +17,13 @@ bash build-local.sh
 三步自动完成：前端 `npm run build` → dist 拷进 jar 的 `static/` → `mvn package`。产物：
 
 ```
-platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar   瘦 jar ~1.6MB（业务代码 + 前端页面）
-platform-bootstrap/target/lib/                          373 个依赖 jar ~251MB（pom 不变就不变）
+platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar   app.jar ~3.2MB
+   ← **全部业务代码**（maven-shade 已把 14 个 platform-* 模块合并进来）+ 前端 static
+platform-bootstrap/target/lib/                          380 个 jar ~252MB（**仅第三方依赖**）
 ```
+
+> **部署只需传这 1 个 jar**（约 3.2MB）。`lib/` 只有第三方依赖，pom 不变就不用重传。
+> 服务器上若残留旧的 `lib/platform-*.jar` 也不影响——Dockerfile 的 classpath 已把 `app.jar` 放在前面。
 
 > 前置：JDK 21（`D:/03_developtools/02_jdk/ms-21.0.11`）+ Node.js。产物路径在 build-local.sh 内写死，换机器改脚本头部。
 
@@ -124,18 +128,28 @@ docker compose -f docker-compose.server.yml logs app 2>&1 | grep -c "localhost:3
 
 ## 三、日常更新（只换业务代码）
 
+> **服务器上已有数据、且本次涉及表结构或知识库语料变更时，走 [deploy-upgrade.md](deploy-upgrade.md)**
+> （含结构对齐、语料迁移、缓存失效、回滚）。下面这节只适用于纯业务代码更新。
+
 ```bash
-# ① 本地重新打包
+# ① 本地打包（产物 platform-bootstrap-0.0.1-SNAPSHOT.jar 已同步到项目根）
 bash build-local.sh
 
-# ② 传新 jar（依赖没变就不传 lib/，pom 动过才传）
-scp platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/srv/www/spring-rag/
+# ② 传这一个 jar（3.2MB，含全部业务代码 + 前端）
+scp platform-bootstrap-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/srv/www/spring-rag/
 
-# ③ 服务器重建 app 容器
+# ③ 服务器重建（--build 必须，否则复用旧镜像跑旧 jar）
 ssh root@<SERVER_IP> "cd /srv/www/spring-rag && docker compose -f docker-compose.server.yml up -d --build app"
 
 # ④ 验证（同上 7-①③）
 ```
+
+> 历史坑（2026-09-20 修）：16 模块拆分后业务代码在 `lib/platform-*.jar`，只传薄 jar = 跑旧代码。
+> 现在 pom 用 maven-shade 把模块合并进 app.jar，且 Dockerfile classpath 改成 `app.jar:lib/*`（app 优先），
+> 所以**一个 jar 就是全部**。
+
+**pom 变更过时**（新增/升级依赖）：还要把 `platform-bootstrap/target/lib/` 全量传到服务器 `lib/`（约 252MB）。
+判据：本地 `ls platform-bootstrap/target/lib | wc -l`（当前 380）与服务器 `ls /srv/www/spring-rag/lib | wc -l` 不一致。
 
 **compose / Dockerfile / SQL 有变更时**：服务器 `git pull`（或 scp 对应文件）后再 up。
 
