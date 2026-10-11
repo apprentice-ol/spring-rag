@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [vue()],
   server: {
     port: 5173,
+    host: true, // 监听所有接口——容器浏览器（MCP Docker）经 host.docker.internal（宿主网关 IP）访问必需
     allowedHosts: ['host.docker.internal', 'localhost'], // 允许容器浏览器（MCP Docker web-test）访问
     proxy: {
       '/api': {
