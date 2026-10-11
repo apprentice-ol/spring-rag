@@ -23,8 +23,18 @@ import {
 } from '../api/bundle'
 import type { PromptKeyView } from '../api/prompt'
 import { activeParadigms } from './evalShared'
+import { useDrawerWidth } from '../composables/useDrawerWidth'
+import DrawerResizer from './DrawerResizer.vue'
 
 const props = defineProps<{ open: boolean; keys: PromptKeyView[] }>()
+
+// ── 抽屉宽度（可拖：比对包内容 / 绑定关系时拖宽） ──
+const {
+  width: bundleDrawerWidth,
+  startResize: startBundleResize,
+  reset: resetBundleWidth,
+  nudge: nudgeBundleResize,
+} = useDrawerWidth({ storageKey: 'rag-prompt-bundle-w', defaultWidth: 720, minWidth: 480, maxWidth: 1100 })
 const emit = defineEmits<{ 'update:open': [v: boolean]; changed: [] }>()
 
 // ===== 绑定区 =====
@@ -362,10 +372,17 @@ watch(
 </script>
 
 <template>
+  <DrawerResizer
+    v-if="open"
+    :width="bundleDrawerWidth"
+    @start="startBundleResize"
+    @reset="resetBundleWidth"
+    @nudge="nudgeBundleResize"
+  />
   <a-drawer
     :open="open"
     title="能力包与绑定"
-    :width="720"
+    :width="bundleDrawerWidth"
     @close="emit('update:open', false)"
   >
     <!-- 引导：先说清这是什么、怎么用 -->

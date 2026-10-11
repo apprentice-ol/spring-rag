@@ -9,6 +9,16 @@ import { fmtLatency, fmtTime } from '../utils/format'
 import type { AgentTrace } from '../api/chat'
 import AgentTraceTree from './AgentTraceTree.vue'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import { useDrawerWidth } from '../composables/useDrawerWidth'
+import DrawerResizer from './DrawerResizer.vue'
+
+// ── 思考流程抽屉宽度（可拖，比对步骤与槽位时拖宽） ──
+const {
+  width: detailDrawerWidth,
+  startResize: startDetailResize,
+  reset: resetDetailWidth,
+  nudge: nudgeDetailResize,
+} = useDrawerWidth({ storageKey: 'rag-agent-trace-detail-w', defaultWidth: 560, minWidth: 380, maxWidth: 1000 })
 
 const records = ref<AgentTraceRecord[]>([])
 const total = ref(0)
@@ -213,7 +223,14 @@ const columns = useResizableColumns([
     </div>
 
     <!-- 详情抽屉：复用 AgentTraceTree 渲染思考流程 -->
-    <a-drawer :open="selected !== null" :width="560" title="思考流程" @update:open="(v: boolean) => { if (!v) selected = null }">
+    <DrawerResizer
+      v-if="selected !== null"
+      :width="detailDrawerWidth"
+      @start="startDetailResize"
+      @reset="resetDetailWidth"
+      @nudge="nudgeDetailResize"
+    />
+    <a-drawer :open="selected !== null" :width="detailDrawerWidth" title="思考流程" @update:open="(v: boolean) => { if (!v) selected = null }">
       <AgentTraceTree v-if="selected" :trace="selected" />
     </a-drawer>
   </div>

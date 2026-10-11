@@ -3,6 +3,7 @@ import {
   listConversations, getMessages, deleteConversation,
   type ConversationItem, type AgentTrace, type Citation, type ClarifyEvent,
 } from '../api/chat'
+import { feedbackFlags } from '../api/badcase'
 
 /**
  * 会话共享状态（模块级 ref）：ConversationList 与 ChatView 分处两个 tab，
@@ -25,6 +26,8 @@ export interface Msg {
   citations?: Citation[]
   /** 人在环中卡片（SSE clarify 事件 / 历史加载获得；随消息落库，刷新页面后重渲染） */
   clarify?: ClarifyEvent
+  /** 已归集的 bad case 条目 id（点踩提交后回填 / 历史加载批量回填；非空 = 已反馈） */
+  feedbackId?: number
 }
 
 export const conversations = ref<ConversationItem[]>([])
@@ -96,11 +99,29 @@ function toMsg(m: {
   }
 }
 
+/**
+ * 历史消息回填「已反馈」标记（bad case 归集状态）：
+ * 一次批量查 feedback-flags（避免逐条请求）；失败不阻断消息加载。
+ */
+async function backfillFeedback(msgs: Msg[]) {
+  const ids = msgs.filter(m => m.role === 'assistant' && m.id != null).map(m => m.id as number)
+  if (!ids.length) return
+  try {
+    const flags = await feedbackFlags(ids)
+    for (const m of msgs) {
+      if (m.id != null && flags[m.id]) m.feedbackId = flags[m.id]
+    }
+  } catch {
+    /* 标记回填失败不影响聊天 */
+  }
+}
+
 async function loadMessages(convId: string) {
   try {
     // 首屏只取最近 50 条（升序），更早的走「向上加载」
     const msgs = await getMessages(convId)
     messages.value = msgs.map(toMsg)
+    await backfillFeedback(messages.value)
     hasEarlierMessages.value = msgs.length >= 50
   } catch {
     messages.value = []
@@ -115,7 +136,9 @@ export async function loadEarlierMessages(): Promise<boolean> {
   try {
     const earlier = await getMessages(activeId.value, oldestId)
     if (earlier.length > 0) {
-      messages.value = [...earlier.map(toMsg), ...messages.value]
+      const earlierMsgs = earlier.map(toMsg)
+      await backfillFeedback(earlierMsgs)
+      messages.value = [...earlierMsgs, ...messages.value]
     }
     hasEarlierMessages.value = earlier.length >= 50
     return earlier.length > 0

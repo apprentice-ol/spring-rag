@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { ArrowLeftOutlined, RobotOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined, ThunderboltOutlined, FileTextOutlined, ApartmentOutlined } from '@ant-design/icons-vue'
+import { ArrowLeftOutlined, RobotOutlined, DashboardOutlined, FolderOpenOutlined, BarChartOutlined, DeploymentUnitOutlined, ThunderboltOutlined, FileTextOutlined, ApartmentOutlined, BugOutlined } from '@ant-design/icons-vue'
 import AgentRegistryPanel from './components/AgentRegistryPanel.vue'
 import EvalDashboard from './components/EvalDashboard.vue'
+import BadcasePanel from './components/BadcasePanel.vue'
 import ConsoleDashboard from './components/ConsoleDashboard.vue'
 import CacheDashboard from './components/CacheDashboard.vue'
 import DocumentManage from './components/DocumentManage.vue'
@@ -14,6 +15,7 @@ import ComparePanel from './components/ComparePanel.vue'
 import AgentTracePanel from './components/AgentTracePanel.vue'
 import PromptManage from './components/PromptManage.vue'
 import TopTabs from './components/TopTabs.vue'
+import SelectionCopyBar from './components/SelectionCopyBar.vue'
 import type { MainNavKey } from './components/TopTabs.vue'
 import { useHorizontalSplitter, useIsMobile } from './composables/useSplitter'
 import { initChatState } from './composables/useChatState'
@@ -189,6 +191,10 @@ function closePreview() {
                 <template #icon><BarChartOutlined /></template>
                 评测
               </a-menu-item>
+              <a-menu-item key="badcase">
+                <template #icon><BugOutlined /></template>
+                Bad Case 归集
+              </a-menu-item>
               <a-menu-item key="trace">
                 <template #icon><DeploymentUnitOutlined /></template>
                 链路追踪
@@ -210,6 +216,7 @@ function closePreview() {
             <PromptManage v-else-if="adminTab === 'prompt'" />
             <AgentRegistryPanel v-else-if="adminTab === 'agents'" />
             <EvalDashboard v-else-if="adminTab === 'eval'" />
+            <BadcasePanel v-else-if="adminTab === 'badcase'" />
             <TraceView v-else-if="adminTab === 'trace'" />
             <ComparePanel v-else-if="adminTab === 'compare'" />
             <AgentTracePanel v-else-if="adminTab === 'agent-traces'" />
@@ -248,6 +255,8 @@ function closePreview() {
         </div>
       </div>
     </template>
+    <!-- 划词复制浮条：全局一次（对话回答 / 文档预览正文划选后出现） -->
+    <SelectionCopyBar />
   </a-config-provider>
 </template>
 

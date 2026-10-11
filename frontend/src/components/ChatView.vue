@@ -4,15 +4,20 @@ import {
   SendOutlined, UserOutlined, RobotOutlined,
   VerticalAlignBottomOutlined, MenuUnfoldOutlined, MenuOutlined,
   ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined, FileSearchOutlined,
+  DislikeOutlined,
 } from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
+import { collectBadcase, FEEDBACK_REASONS } from '../api/badcase'
 import { streamChat, cancelChat, type AgentTrace, type Citation, type ClarifyChoice, type ClarifyEvent, type ClarifySlotQuestion } from '../api/chat'
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
 import { copyWithToast } from '../composables/useClipboard'
+import { useDrawerWidth } from '../composables/useDrawerWidth'
 import { activeParadigms, chatParadigmOptions } from './evalShared'
 import { messages, activeId, currentTitle, hasEarlierMessages, loadEarlierMessages, type Msg } from '../composables/useChatState'
 import { useIsMobile } from '../composables/useSplitter'
 import ConversationList from './ConversationList.vue'
+import DrawerResizer from './DrawerResizer.vue'
 import AgentTraceTree from './AgentTraceTree.vue'
 import ParadigmHelp from './ParadigmHelp.vue'
 import MarkdownIt from 'markdown-it'
@@ -512,82 +517,32 @@ const traceLoading = ref(false)
 const drawerQuestion = ref<string | undefined>(undefined)
 const drawerCitations = ref<{ ref: number }[] | undefined>(undefined)
 /* ============ 轨迹抽屉宽度（可拖拽，偏好落 localStorage） ============
-   一屏装得下多少轨迹，取决于读者此刻在看什么：扫一眼步骤名 720 够，逐条比对
-   命中表的分数与通道就嫌挤。把宽度交给他自己拖，比替他猜一个固定值更靠谱。
-
-   上限跟着窗口走而不是取常量：一条 1200px 的抽屉在 1280 宽的屏上会把正文整个盖住，
-   而抽屉的用途恰恰是「对着回答看轨迹」——留不下一列正文就没意义了。 */
+   宽度逻辑抽到 useDrawerWidth（badcase 详情抽屉共用），手柄是 DrawerResizer 组件。
+   默认比 agent-framework 的 720 宽一档：那边命中表 6 列，这边多一列「引用」。 */
 const TRACE_W_KEY = 'rag-trace-w'
-/** 默认比 agent-framework 的 720 宽一档：那边命中表 6 列，这边多一列「引用」 */
 const TRACE_W_DEFAULT = 800
 const TRACE_W_MIN = 480
 const TRACE_W_MAX = 1200
 
-function clampTraceWidth(value: number): number {
-  const viewport = typeof window === 'undefined' ? 800 : window.innerWidth
-  const max = Math.max(TRACE_W_MIN, Math.min(TRACE_W_MAX, Math.round(viewport * 0.92)))
-  if (!Number.isFinite(value)) {
-    return Math.min(TRACE_W_DEFAULT, max)
-  }
-  return Math.min(max, Math.max(TRACE_W_MIN, Math.round(value)))
-}
+const {
+  width: traceDrawerWidth,
+  startResize: startTraceResize,
+  reset: resetTraceWidth,
+  nudge: nudgeTraceResize,
+} = useDrawerWidth({
+  storageKey: TRACE_W_KEY,
+  defaultWidth: TRACE_W_DEFAULT,
+  minWidth: TRACE_W_MIN,
+  maxWidth: TRACE_W_MAX,
+})
 
-/** 存储里的值可能是在更大的屏上写下的，读回来按当前窗口再钳一次。 */
-function readStoredTraceWidth(): number {
-  try {
-    const raw = window.localStorage.getItem(TRACE_W_KEY)
-    return raw === null ? TRACE_W_DEFAULT : Number(raw)
-  } catch {
-    return TRACE_W_DEFAULT // 隐私模式下 localStorage 不可用
-  }
-}
-
-const traceDrawerWidth = ref(clampTraceWidth(readStoredTraceWidth()))
-
-function persistTraceWidth() {
-  try {
-    window.localStorage.setItem(TRACE_W_KEY, String(traceDrawerWidth.value))
-  } catch {
-    /* 写入失败只影响下次打开的默认宽度，不值得打扰用户 */
-  }
-}
-
-/** 拖动中只改内存值，松手才落盘——每帧写一次 localStorage 是白费。 */
-function startTraceResize(event: PointerEvent) {
-  event.preventDefault()
-  const onMove = (move: PointerEvent) => {
-    // 抽屉贴右边，所以「指针到窗口右缘的距离」才是它该有的宽度
-    traceDrawerWidth.value = clampTraceWidth(window.innerWidth - move.clientX)
-  }
-  const onUp = () => {
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
-    persistTraceWidth()
-  }
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
-}
-
-function resetTraceWidth() {
-  traceDrawerWidth.value = clampTraceWidth(TRACE_W_DEFAULT)
-  persistTraceWidth()
-}
-
-/** 键盘微调：手柄可聚焦，方向键各挪 40px。 */
-function nudgeTraceResize(step: number) {
-  traceDrawerWidth.value = clampTraceWidth(traceDrawerWidth.value + step)
-  persistTraceWidth()
-}
-
-/** 窗口变小后原宽度可能盖住整个正文，跟着收一收。 */
-function onViewportResize() {
-  const clamped = clampTraceWidth(traceDrawerWidth.value)
-  if (clamped !== traceDrawerWidth.value) {
-    traceDrawerWidth.value = clamped
-  }
-}
-onMounted(() => window.addEventListener('resize', onViewportResize))
-onUnmounted(() => window.removeEventListener('resize', onViewportResize))
+/* 引用溯源抽屉：窄列表起档，拖宽看长文档名（reveal=hover，对话场景不插常驻线） */
+const {
+  width: citeDrawerWidth,
+  startResize: startCiteResize,
+  reset: resetCiteWidth,
+  nudge: nudgeCiteResize,
+} = useDrawerWidth({ storageKey: 'rag-cite-drawer-w', defaultWidth: 440, minWidth: 360, maxWidth: 1000 })
 
 async function openTrace(m: Msg) {
   traceDrawerOpen.value = true
@@ -623,6 +578,44 @@ function openObsLink(m: Msg) {
   if (!m.traceId) return
   const url = traceDetailUrl(m.traceId, m.ts)
   if (url) window.open(url, '_blank')
+}
+
+// ── bad case 反馈（点踩归集：提交后进入管理页待归因/转正）──
+const fbOpen = ref(false)
+const fbMessageId = ref<number | null>(null)
+const fbReason = ref('')
+const fbNote = ref('')
+const fbSubmitting = ref(false)
+
+function openFeedback(m: Msg) {
+  if (m.id == null) return
+  fbMessageId.value = m.id
+  fbReason.value = ''
+  fbNote.value = ''
+  fbOpen.value = true
+}
+
+async function submitFeedback() {
+  if (fbMessageId.value == null) return
+  const mid = fbMessageId.value
+  fbSubmitting.value = true
+  try {
+    const view = await collectBadcase({
+      messageId: mid,
+      reason: fbReason.value || undefined,
+      note: fbNote.value.trim() || undefined,
+    })
+    // 回填到对应气泡：按钮切换为「已反馈」态（历史加载时由 feedback-flags 批量回填）
+    const target = messages.value.find((x) => x.id === mid)
+    if (target) target.feedbackId = view.id
+    fbOpen.value = false
+    message.success('已归集为 bad case，可在「Bad Case 归集」页跟进')
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { message?: string } } }
+    message.error(err?.response?.data?.message || '反馈失败，请稍后再试')
+  } finally {
+    fbSubmitting.value = false
+  }
 }
 
 /** 消息时间（操作条右侧）：HH:mm */
@@ -907,14 +900,24 @@ function fillSuggestion(s: string) {
             <div class="decide-hint">补充信息（traceId / 时间 / 报文 / 你的怀疑方向）后发送即可续跑；也可以直接终止</div>
           </div>
           <span v-if="m.streaming&&m.content" class="stream-cursor"></span>
-          <!-- 操作条：轨迹回看 + 引用溯源 + traceId（chip 可复制）+ OpenObserve 全链路（流式结束后） -->
+          <!-- 操作条：复制回答 + 轨迹回看 + 引用溯源 + traceId（chip 可复制）+ OpenObserve 全链路（流式结束后） -->
           <div v-if="m.role==='assistant' && !m.streaming && (m.id || m.trace)" class="msg-actions">
+            <button v-if="m.content" class="action-btn" @click="copyWithToast(m.content, '已复制回答')">
+              <CopyOutlined />复制
+            </button>
             <button class="action-btn" @click="openTrace(m)">
               <ApartmentOutlined />轨迹
             </button>
             <button v-if="usedCitations(m).length" class="action-btn" @click="openCitations(m)">
               <FileSearchOutlined />引用 {{ usedCitations(m).length }}
             </button>
+            <button v-if="m.id && !m.feedbackId" class="action-btn" title="反馈这条回答的问题（归集为 bad case）"
+                    @click="openFeedback(m)">
+              <DislikeOutlined />反馈
+            </button>
+            <span v-else-if="m.feedbackId" class="action-btn action-btn-done" title="已归集为 bad case，可到管理页跟进">
+              <DislikeOutlined />已反馈
+            </span>
             <template v-if="m.traceId">
               <span class="trace-chip" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
               <button class="action-btn" title="复制 traceId" @click="copyWithToast(m.traceId)">
@@ -990,18 +993,12 @@ function fillSuggestion(s: string) {
          手柄是抽屉左缘上的一条全高抓取带：抽屉贴着右边，所以「指针到窗口右缘的距离」
          就是宽度。用 fixed 定位跟随宽度而不是塞进抽屉内部——塞进去就得和 antd 的
          body padding / header 层叠较劲，还要提防被 overflow 裁掉。 -->
-    <div
+    <DrawerResizer
       v-if="traceDrawerOpen"
-      class="trace-resize-handle"
-      :style="{ right: `${traceDrawerWidth}px` }"
-      role="separator"
-      tabindex="0"
-      aria-orientation="vertical"
-      aria-label="调整轨迹抽屉宽度，双击恢复默认"
-      @pointerdown="startTraceResize"
-      @dblclick="resetTraceWidth"
-      @keydown.left.prevent="nudgeTraceResize(-40)"
-      @keydown.right.prevent="nudgeTraceResize(40)"
+      :width="traceDrawerWidth"
+      @start="startTraceResize"
+      @reset="resetTraceWidth"
+      @nudge="nudgeTraceResize"
     />
     <a-drawer
       :open="traceDrawerOpen"
@@ -1022,9 +1019,16 @@ function fillSuggestion(s: string) {
     </a-drawer>
 
     <!-- 引用溯源抽屉：点击正文 [N] 角标或操作条「引用」打开，展示该回答被引用的来源文档 -->
+    <DrawerResizer
+      v-if="citeDrawerOpen"
+      :width="citeDrawerWidth"
+      @start="startCiteResize"
+      @reset="resetCiteWidth"
+      @nudge="nudgeCiteResize"
+    />
     <a-drawer
       :open="citeDrawerOpen"
-      :width="440"
+      :width="citeDrawerWidth"
       title="引用溯源"
       @update:open="(v: boolean) => (citeDrawerOpen = v)"
     >
@@ -1056,6 +1060,24 @@ function fillSuggestion(s: string) {
         </div>
       </template>
     </a-drawer>
+
+    <!-- bad case 反馈弹窗（点踩归集）：原因下拉 + 备注；提交时后端自取检索证据快照 -->
+    <a-modal
+      v-model:open="fbOpen"
+      title="反馈这条回答的问题"
+      :confirm-loading="fbSubmitting"
+      ok-text="提交反馈"
+      cancel-text="取消"
+      @ok="submitFeedback"
+    >
+      <div class="fb-label">问题类型</div>
+      <a-radio-group v-model:value="fbReason" class="fb-reasons">
+        <a-radio v-for="r in FEEDBACK_REASONS" :key="r.value" :value="r.value">{{ r.label }}</a-radio>
+      </a-radio-group>
+      <div class="fb-label">补充说明（可选）</div>
+      <a-textarea v-model:value="fbNote" :rows="3" placeholder="哪里不对？期望的答案是什么？" />
+      <div class="fb-hint">提交时会带上本次问答的检索证据，进入「Bad Case 归集」页待处理</div>
+    </a-modal>
   </div>
 </template>
 
@@ -1146,20 +1168,6 @@ function fillSuggestion(s: string) {
 .typing-indicator span:nth-child(2){animation-delay:.2s}
 .typing-indicator span:nth-child(3){animation-delay:.4s}
 @keyframes typing-bounce { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
-
-/* 轨迹抽屉的拖宽手柄：贴着抽屉左缘的一条透明抓取带，hover/聚焦时才显形——
-   常驻的竖线在每一轮对话旁边都插一根，比它能帮上的忙更吵。 */
-.trace-resize-handle {
-  position: fixed; top: 0; bottom: 0; width: 8px;
-  z-index: 1001; /* antd 抽屉内容层的 z-index 是 1000，手柄要浮在它上面才抓得到 */
-  cursor: col-resize; outline: none;
-}
-.trace-resize-handle::after {
-  content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px;
-  background: transparent; transition: background .12s ease;
-}
-.trace-resize-handle:hover::after,
-.trace-resize-handle:focus-visible::after { background: var(--color-primary, #0064fa); }
 
 /* 气泡操作条（轨迹 / traceId / OO 链路） */
 /* ── 引用溯源 ── */
@@ -1277,6 +1285,14 @@ function fillSuggestion(s: string) {
 .decide-hint { font-size:11.5px; color:var(--color-ink-tertiary); border-top:1px dashed var(--color-border-light); padding-top:8px; }
 .action-btn { display:inline-flex; align-items:center; gap:4px; border:none; background:none; padding:2px 8px; font-size:12px; color:var(--color-ink-tertiary); cursor:pointer; border-radius:var(--radius-sm); transition:color .15s, background .15s; }
 .action-btn:hover { color:var(--color-primary); background:var(--color-primary-light); }
+/* 已反馈态：常亮告警色但不可点（提示"已归集"，避免重复提交的错觉） */
+.action-btn-done { color:var(--color-warning-ink, #d46b08); cursor:default; }
+.action-btn-done:hover { color:var(--color-warning-ink, #d46b08); background:transparent; }
+/* bad case 反馈弹窗 */
+.fb-label { font-size:12px; font-weight:600; color:var(--color-ink-secondary); margin:10px 0 6px; }
+.fb-label:first-child { margin-top:0; }
+.fb-reasons { display:flex; flex-wrap:wrap; gap:4px 18px; }
+.fb-hint { margin-top:10px; font-size:11.5px; color:var(--color-ink-tertiary); }
 /* traceId chip：等宽缩略展示（悬停 title 看全量，旁边复制按钮取全文） */
 .trace-chip {
   font-family: var(--font-display);

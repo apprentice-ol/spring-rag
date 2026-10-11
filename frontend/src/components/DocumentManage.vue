@@ -28,6 +28,8 @@ import DocPreview from './DocPreview.vue'
 import CollectionDocTable from './CollectionDocTable.vue'
 import CollectionPickerModal from './CollectionPickerModal.vue'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import { useDrawerWidth } from '../composables/useDrawerWidth'
+import DrawerResizer from './DrawerResizer.vue'
 import {
   INGEST_STATUS_COLOR as STATUS_COLOR,
   INGEST_STATUS_TEXT as STATUS_TEXT,
@@ -49,6 +51,14 @@ const loading = ref(false)
 // ── 表格自适应高度（scroll.y 固定表头，表格内部滚动）──
 const tableWrap = ref<HTMLElement>()
 const tableBodyHeight = ref<number | undefined>(undefined)
+
+// ── 预览抽屉宽度（可拖，看长文档拖宽一档） ──
+const {
+  width: previewDrawerWidth,
+  startResize: startPreviewResize,
+  reset: resetPreviewWidth,
+  nudge: nudgePreviewResize,
+} = useDrawerWidth({ storageKey: 'rag-doc-preview-w', defaultWidth: 640, minWidth: 480, maxWidth: 1400 })
 
 function measure() {
   const el = tableWrap.value
@@ -585,10 +595,17 @@ interface ErrResp {
       </div>
     </div>
 
-    <!-- 预览抽屉 -->
+    <!-- 预览抽屉（左缘可拖宽） -->
+    <DrawerResizer
+      v-if="previewDoc !== null"
+      :width="previewDrawerWidth"
+      @start="startPreviewResize"
+      @reset="resetPreviewWidth"
+      @nudge="nudgePreviewResize"
+    />
     <a-drawer
       :open="previewDoc !== null"
-      :width="640"
+      :width="previewDrawerWidth"
       destroy-on-close
       :title="previewDoc?.name || '文档预览'"
       @update:open="onPreviewOpenChange"

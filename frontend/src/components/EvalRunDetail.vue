@@ -22,7 +22,17 @@ import {
   categoryLabel,
 } from './evalShared'
 import { useResizableColumns, vResize } from '../composables/useResizableColumns'
+import { useDrawerWidth } from '../composables/useDrawerWidth'
 import MetricHelp from './MetricHelp.vue'
+import DrawerResizer from './DrawerResizer.vue'
+
+// ── 指标解读抽屉宽度（可拖，说明文档窄起档） ──
+const {
+  width: guideDrawerWidth,
+  startResize: startGuideResize,
+  reset: resetGuideWidth,
+  nudge: nudgeGuideResize,
+} = useDrawerWidth({ storageKey: 'rag-eval-guide-w', defaultWidth: 440, minWidth: 360, maxWidth: 800 })
 
 /** 运行详情独立页（hash 子路由 #/admin/eval/runs/{id}）。 */
 const props = defineProps<{ runId: number; datasets?: { id: number; name: string }[] }>()
@@ -740,7 +750,14 @@ function durMin(): string {
     </a-modal>
 
     <!-- 指标解读：右侧抽屉 -->
-    <a-drawer :open="guideOpen" title="指标解读" placement="right" :width="440" @update:open="(v: boolean) => (guideOpen = v)">
+    <DrawerResizer
+      v-if="guideOpen"
+      :width="guideDrawerWidth"
+      @start="startGuideResize"
+      @reset="resetGuideWidth"
+      @nudge="nudgeGuideResize"
+    />
+    <a-drawer :open="guideOpen" title="指标解读" placement="right" :width="guideDrawerWidth" @update:open="(v: boolean) => (guideOpen = v)">
       <div class="guide-tip-top">衡量检索管线：召回 → 去重 → RRF 融合 → Rerank（不衡量 LLM 回答质量）</div>
       <div v-for="g in guides" :key="g.name" class="guide-row">
         <div class="g-head">
