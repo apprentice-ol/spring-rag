@@ -10,7 +10,7 @@ spring:
     import:
       - "optional:file:.env[.properties]"
       - "optional:file:../.env[.properties]"
-      # 可观测性配置文件名可切换：服务器部署（docker-compose.server.yml）设 TELEMETRY_CONFIG=application-telemetry-server.yaml
+      # 可观测性配置文件名可切换：服务器部署（docker/docker-compose.dev.yml）设 TELEMETRY_CONFIG=application-telemetry-dev.yaml
       # （直连 OpenObserve、无 collector / langfuse）；本地默认 application-telemetry.yaml
       - "optional:classpath:${TELEMETRY_CONFIG:application-telemetry.yaml}"
   application:
@@ -130,7 +130,7 @@ rag:
                         # 决定 rerank 的串行批数**（batch-size=12 → ceil(池/12) 次 HTTP）：120 是 10 批、
                         # 单条检索实测 avg 3747ms；40 是 4 批、实测 avg 2034ms（run 83）。这是全流程耗时
                         # 最敏感的旋钮，比调 batch-size 直接。
-                        # 降回 40 不掉召回：小块检索的对照实验（plan/2026-09-18-small-to-big-retrieval.md）
+                        # 降回 40 不掉召回：小块检索的对照实验（docs/plans/ingestion-and-retrieval.md）
                         # 本就是在 40 候选下做的，5/5 题期望分全部 ≥0.485 越过 0.3 阈值；且 40 个子块
                         # ≈16k 字符，仍在 rerank 的"瘦请求"区间内（避开长请求的分数衰减带）。
                         # 不建议再降到 20：精排 topN=context-top-k(10)×overfetch(3)=30，池子只有 20 则
@@ -223,7 +223,7 @@ rag:
   ingestion:
     chunk-size: 512       # 单块目标字符数（对齐 ragent 512；结构感知分块合并上限）
     chunk-overlap: 200    # 相邻块重叠字符数：跨块边界的答案需在上下块都完整出现，零重叠会直接损失召回
-    child-chunk:          # 小块检索、大块生成（2026-09-18；plan/2026-09-18-small-to-big-retrieval.md）
+    child-chunk:          # 小块检索、大块生成（2026-09-18；docs/plans/ingestion-and-retrieval.md）
       enabled: true       # 父块切子块进向量表（子块打分排序），父块原文存 sa_chunk_parent
       target-chars: 400   # 子块目标字符（对照实验：期望内容分数平均 +0.10，全库 cosine 区分度恢复）
       max-chars: 500      # 子块硬上限

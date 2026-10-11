@@ -17,8 +17,8 @@
 随后即可构建：
 
 ```bash
-docker compose build postgres                       # 本地版 docker-compose.yml
-docker compose -f docker-compose.server.yml build postgres   # 服务器版
+docker compose --project-directory . -f docker/docker-compose.yml build postgres            # 本地版（项目根执行）
+docker compose --project-directory . -f docker/docker-compose.dev.yml build postgres     # 服务器版
 ```
 
 > 升级 pg_search 版本时，同步改 `Dockerfile` 注释里的版本号与本说明。

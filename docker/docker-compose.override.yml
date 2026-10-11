@@ -1,0 +1,21 @@
+# docker/docker-compose.override.yml — 本地「复用宿主机服务」部署验证
+#
+# 背景：本机开发环境已有独立容器 rustfs(9000)/openobserve(5080)/redis(6379)/PG(5432,ragent-postgres)，
+#       与主 compose 的服务端口冲突。本 override 只用于**本地验证 app 容器化部署链路**：
+# 用法（项目根执行）：docker compose --project-directory . -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d --no-deps app    # --no-deps 跳过依赖链（不拉起 compose 内的 PG/Redis/RustFS/OO/OTel）
+# 依赖全部指向宿主机（Docker Desktop 内置 host.docker.internal）。
+# 账号密码等敏感值继续由主 compose 的 ${VAR} 从 .env 继承，不在此文件出现。
+services:
+  app:
+    environment:
+      # ---- 数据库：复用宿主机 ragent-postgres（与 IDEA 实例同库）----
+      SPRING_DATASOURCE_URL: jdbc:postgresql://host.docker.internal:5432/springai_rag
+      # ---- Redis：复用宿主机 6379 ----
+      SPRING_DATA_REDIS_HOST: host.docker.internal
+      SPRING_DATA_REDIS_PORT: "6379"
+      # ---- 对象存储：复用宿主机 rustfs(9000) ----
+      RAG_STORAGE_S3_ENDPOINT: http://host.docker.internal:9000
+      # ---- OpenObserve：复用宿主机 5080 ----
+      OPENOBSERVE_URL: http://host.docker.internal:5080/api/default
+      # ---- OTLP：复用宿主机 rag-otel-collector(4318) ----
+      OBSERVE_OTLP_ENDPOINT: http://host.docker.internal:4318

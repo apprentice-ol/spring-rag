@@ -1,0 +1,134 @@
+# Claude Code 研发流水线项目适配文件
+# 被全局 skill (dev-loop / 构建 / 接口测试 / 联调 / 部署) 读取；2026-10-11 起位于 .claude/pipeline/（旧位置 .claude/pipeline.yml 兼容）。
+# 规则：每个项目只维护这一份文件；skill 是通用的，不做项目假设。
+# 所有命令在项目根目录下执行；路径相对项目根。
+#
+# 环境约定（四词制）：local（开发·裸跑）/ docker（docker 开发·本机 compose）/ dev（测试·服务器）/ prod（正式·预留）
+# 与环境相关的三面必须使用同一组环境名、在这里统一挂接：
+#   ① 部署目标  deploy.targets.<env>        （部署方式/产物/入口）
+#   ② 测试环境  deploy.targets.<env>.apifox_env_id（Apifox 环境，接口测试对准目标环境）
+#   ③ 探活入口  deploy.targets.<env>.health （部署后校验/外部可达性探活）
+# 任何新增环境相关参数都不允许另起叫法。
+
+project:
+  name: springai-rag
+  description: Spring AI RAG 平台（17 模块 Maven + Vue3 前端）
+
+backend:
+  # ---- 构建 ----
+  build:
+    # 全量构建命令（含前端产物打包）
+    command: 'bash scripts/build-local.sh'
+    # 快速编译（仅后端，不打包，用于 IDEA MCP 不可用时的兜底编译验证）
+    compile: 'mvn -q -B compile -DskipTests -s .mvn/settings.xml'
+    java_home: 'D:\03_developtools\02_jdk\ms-21.0.11'
+  # ---- 产物 ----
+  artifact:
+    jar: 'platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar'
+    lib_dir: 'platform-bootstrap/target/lib'
+  # ---- 启动 ----
+  run:
+    # ⚠️ mvn spring-boot:run 不可用（spring-boot-maven-plugin 被 skip，配 shade 瘦 jar + lib 外置）
+    command: 'java -cp "{lib_dir}/*;{jar}" com.jjx.customer.platform.PlatformApplication'
+    main_class: 'com.jjx.customer.platform.PlatformApplication'
+    port: 9081
+    context_path: '/api/rag'
+    # IDEA 里的运行配置名（IDEA MCP execute_run_configuration 用）
+    idea_run_config: 'PlatformApplication'
+    # 启动完成标志（日志里出现即视为就绪）
+    ready_log: 'Started PlatformApplication'
+    health_path: '/ping/health'
+
+# 依赖服务（预检硬门禁）
+dependencies:
+  - { name: 'PostgreSQL', port: 5432 }
+  - { name: 'Redis', port: 6379 }
+  - { name: 'RustFS', port: 9000 }
+
+frontend:
+  enabled: true
+  dir: 'frontend'
+  dev:
+    command: 'npm run dev'
+    port: 5173
+  build:
+    command: 'npm run build'
+    dist: 'frontend/dist'
+    # dist 会被拷贝进 backend static（build-local.sh 已处理）
+    copy_to: 'platform-bootstrap/src/main/resources/static'
+
+api:
+  # ---- OpenAPI（Apifox 同步源头）----
+  openapi:
+    url: 'http://localhost:9081/api/rag/v3/api-docs'
+    known_issues: |
+      knife4j 4.5.0 传递的 springdoc 2.3.0 与 Spring Boot 3.5 不兼容（NoSuchMethodError: ControllerAdviceBean）,
+      已在根 pom 用 springdoc-openapi-bom 2.8.17 覆盖修复（2026-10-11）。
+  # ---- Apifox ----
+  apifox:
+    # 留空则通过 Apifox MCP / CLI 查询；填了直接用于 import 同步
+    project_id: '8912880'       # springai-rag（2026-10-11 apifox-cli 创建于个人团队 3044731）
+    test_suite_id: '34375'      # springai-rag 全接口冒烟回归（81 用例）
+    environment_id: '49548977'  # 默认 local（Apifox「local」）；其他环境用 deploy.targets.<env>.apifox_env_id（docker=49551199 / dev=49549707 / prod=49551206）
+    cli:
+      # 本地回归命令模板（CLI 凭据持久化于本机 `apifox auth login`，无需明文 token）
+      # --upload-report：报告总览上传云端（Apifox 桌面端/App「测试报告」可查每轮回归）
+      run: 'apifox run --test-suite {test_suite_id} --project {project_id} -e {environment_id} -r cli,junit,json --out-dir .claude/pipeline/reports/apifox --upload-report'
+      # 接口定义同步（代码 → Apifox，接口变更后执行）：
+      #   apifox import --project {project_id} --format openapi --file .claude/pipeline/reports/openapi.json
+      # 用例补齐（新接口生成冒烟用例）：走全局 api-test skill（自带通用生成器，分组自动解析）
+    # ⚠️ SSE 流式接口（/chat/stream）Apifox 自动化断言未官方背书，用 curl -N 脚本兜底
+  # 流式接口冒烟（api-test 步骤 6 用）
+  sse_smoke:
+    - { name: 'chat-stream', url: 'http://localhost:9081/api/rag/chat/stream?question=hello' }
+  smoke:
+    # 无鉴权项目的冒烟检查（联调前快速验证服务活着）
+    - { name: '首页', url: 'http://localhost:9081/api/rag/', expect: 200 }
+    - { name: 'OpenAPI', url: 'http://localhost:9081/api/rag/v3/api-docs', expect: 200 }
+
+# 联调清单（阶段 4 web-test 核心路径）
+testing:
+  e2e_cases:
+    - '对话页 → 发消息 → SSE 流式响应（含 traceId 回传）'
+    - '管理页 → 控制台（数据与健康状态渲染）'
+
+deploy:
+  # ---- 目标环境（四词制，详见文件头「环境约定」）----
+  targets:
+    local:                                 # 开发环境：IDEA / 命令行裸跑（无容器部署动作）
+      method: 'none'                       # 启动走 dev-loop 阶段 2（backend.run；IDEA 运行配置 PlatformApplication）
+      health: 'http://localhost:9081/api/rag/'
+      apifox_env_id: '49548977'            # Apifox「local」→ http://localhost:9081/api/rag
+    docker:                                # docker 开发环境：本机 compose（复用宿主机服务）
+      method: 'docker-compose'
+      compose_file: '--project-directory . -f docker/docker-compose.yml -f docker/docker-compose.override.yml'   # 实际执行: docker compose <compose_file> up -d --no-deps app；⚠ --project-directory 必带：compose 已移入 docker/，否则项目名变 "docker" → 数据卷名漂移
+      health: 'http://localhost:9081/api/rag/'
+      apifox_env_id: '49551199'            # Apifox「docker」→ http://localhost:9081/api/rag
+    dev:                                   # 测试环境：服务器 compose（ssh-scp 增量升级）
+      method: 'ssh-scp'                    # scp 上传产物 + ssh 执行 scripts/deploy-upgrade.sh（内部以 docker/docker-compose.dev.yml 重建 app）
+      compose_file: '--project-directory . -f docker/docker-compose.dev.yml'   # 拼进 deploy skill 的 `docker compose <compose_file> up` 模板；⚠ --project-directory 必带（防项目名/卷名漂移）
+      host: '${SERVER_IP}'                 # 来自 .env
+      # 对外入口 = nginx 80（9081/9000 不对外，是架构设计，无需放行）
+      # 探活注意：首次请求会触发 springdoc 等按需生成（2C4G 上 >10s），超时给足 30s
+      health: 'http://{host}/api/rag/'
+      apifox_env_id: '49549707'            # Apifox「dev」→ http://{host}/api/rag
+    prod:                                  # 正式环境：预留（暂无实体；就绪后补 method/host/health）
+      method: 'TBD'
+      # compose_file: '--project-directory . -f docker/docker-compose.prod.yml'
+      # health: 'http://{host}/api/rag/'
+      apifox_env_id: '49551206'            # Apifox「prod」（占位：地址暂同 dev，上线后改）
+      # 部署纪律（skill 强制执行）：
+      # 1. 部署前记回滚锚点（docker images | grep customer-platform-app 的当前 sha）
+      # 2. 部署后双探活：外部（health 地址）+ 内部（ssh 'curl -s localhost:9081/api/rag/ping/health'）
+      # 3. 数据库迁移必须前后兼容（expand/contract）
+      # 部署纪律（skill 强制执行）：
+      # 1. 健康检查失败 → 自动回滚（compose 回退到上一个 image tag）
+      # 2. 部署前后各做一次 smoke
+      # 3. 数据库迁移必须前后兼容（expand/contract）
+  scripts:
+    prepare: 'python scripts/deploy-prepare.py'
+    upgrade: 'bash scripts/deploy-upgrade.sh'
+    package: 'bash scripts/build-local.sh --package'   # 全新服务器部署包（一次性物料，产物在 dist/ 不入库）
+
+reports:
+  dir: '.claude/pipeline/reports'

@@ -1,0 +1,18 @@
+# 脚本类文件一律 LF 行尾。
+#
+# 为什么：开发机是 Windows，部署是「工作区文件直传服务器」（scp）或 git clone。
+# 若脚本带 CRLF，Linux 的 bash 会把 `set -euo pipefail` 读成带 \r 的选项，
+# 直接报 `invalid option name` / `set: pipefail` 而无法执行。
+# 2026-09-20 部署时踩过（当时的一次性部署脚本全篇 CRLF，服务器上第一步就挂）。
+#
+# 注意：git 本身默认按 LF 存储、按平台转换；真正的风险是 scp 工作区文件。
+# 这里显式钉住，避免 core.autocrlf 之类配置把 CRLF 带进来。
+*.sh   text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+
+# 二进制产物：禁止任何转换
+*.dump binary
+*.tgz  binary
+*.deb  binary
+*.jar  binary

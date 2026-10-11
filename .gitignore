@@ -48,3 +48,23 @@ __pycache__/
 # Binary 安装包（pg-search.deb 等 68MB 大文件不入 git；本地 docker build 时自行放置，
 # 见 docker/postgres/README.md）
 *.deb
+
+# 工具/流水线本地状态与分发包目录（不入库）
+.apifox/
+dist/
+
+# ===== Claude Code 本地状态 / 流水线产物（2026-10-11 整理）=====
+# 本地个人配置（权限白名单、MCP 启用记录）——不入库
+.claude/settings.local.json
+.claude/settings.local.*
+# 流水线运行台账与证据（reports 机制说明 README 保留入库）
+.claude/pipeline/reports/*
+!.claude/pipeline/reports/README.md
+# api-test 用例工作库（由 apifox-gen-cases.py 重新生成，不入库）
+.claude/pipeline/apifox/
+
+# ACL 恢复/诊断产物（一次性，2026-10-11）
+/acl-recovery/
+
+# oo_trace_query.py 默认输出
+/trace-*.json

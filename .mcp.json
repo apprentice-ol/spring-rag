@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "apifox": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "apifox-mcp-server@latest",
+        "--project=${APIFOX_PROJECT_ID}"
+      ],
+      "env": {
+        "APIFOX_ACCESS_TOKEN": "${APIFOX_ACCESS_TOKEN}"
+      }
+    },
+    "idea": {
+      "url": "http://127.0.0.1:64342/stream",
+      "type": "http"
+    }
+  }
+}

@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_spr_ai_store_vec_emb
     ON spring_ai_store_vector
     USING hnsw (embedding vector_cosine_ops);
 
--- ===== 父块存档（小块检索、大块生成，2026-09-18；见 plan/2026-09-18-small-to-big-retrieval.md）=====
+-- ===== 父块存档（小块检索、大块生成，2026-09-18；见 docs/plans/ingestion-and-retrieval.md）=====
 -- 向量表存子块（打分排序粒度），本表存父块原文（生成上下文粒度）。
 -- parent_key = doc_id + ":" + 父块 chunk_index（IndexerNode 生成，确定性）；与向量表同生命周期
 -- （IngestionEngineService 幂等清理 / IngestionController 删除文档时同批删除）。

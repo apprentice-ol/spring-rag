@@ -38,7 +38,7 @@ telemetry:
   # 单请求上限 → 导出整批 400 被弃（"request body too large"），traces 流 08-24 起断流，
   # OpenObserve 的 trace DAG 因此缺失。启用摘要+截断后单 span ≤8KB，批次回到 OO 可收范围。
   limits:
-    summarize: true                  # 输入/输出做摘要（同 application-telemetry-server.yaml 实测口径）
+    summarize: true                  # 输入/输出做摘要（同 application-telemetry-dev.yaml 实测口径）
     truncate: true                   # 超长字段截断
     max-span-io: 8192                # 单个 span 最大捕获 8KB（原 1 亿）
     summarize-max-string: 2000

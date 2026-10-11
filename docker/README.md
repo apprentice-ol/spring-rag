@@ -1,13 +1,21 @@
 # Docker 部署总览（唯一入口文档）
 
-本地开发、服务器部署、端口、账号、常见运维都从这里查。
-两个 compose 有意保持独立（本地含 collector/langfuse，服务器直连 OpenObserve），公共服务定义存在重复属预期——服务器命令 `docker compose -f docker-compose.server.yml up -d --build` 长期不变。
+本机开发、服务器部署、端口、账号、常见运维都从这里查。
+两个主 compose 有意保持独立（docker 环境含 collector/langfuse，dev 测试环境直连 OpenObserve），公共服务定义存在重复属预期。
+compose 文件统一在 `docker/` 下；**所有命令在项目根执行、必须带 `--project-directory .`**（否则项目名会推断成 `docker`，数据卷名从 `<目录名>_pg-data` 漂移成 `docker_pg-data`——等于挂空库启动）。
+
+**环境词表（四词制，与 `.claude/pipeline/pipeline.yml` 的 `deploy.targets` 一一对应）**：
+`local`（开发·IDE 裸跑）· `docker`（docker 开发·本机 compose，本文主场景）· `dev`（测试·服务器）· `prod`（正式·预留）。
 
 ## 文件地图
 
 ```
 docker/
 ├── README.md                                # 本文档
+├── docker-compose.yml                       # docker 开发编排（postgres/redis/rustfs/openobserve/otel-collector/app）
+├── docker-compose.override.yml              # docker 覆盖：app 复用宿主机服务（--no-deps app 部署验证）
+├── docker-compose.dev.yml                   # dev 测试环境编排（服务器；无 collector/langfuse，app 直连 OpenObserve）
+├── docker-compose.webtest.yml               # 本机 web-test 覆盖：释放 5080/9000 宿主端口冲突
 ├── app/Dockerfile                           # 应用运行时镜像（build context=项目根，COPY jar + lib/）
 ├── postgres/Dockerfile                      # pg16 + pgvector + pg_search 自定义镜像（BM25 关键词检索）
 ├── postgres/01-pg-search.sql                # 首启自动建扩展
@@ -16,12 +24,11 @@ docker/
 ├── otel-collector/otel-collector-config.yaml # 本地 collector：OTLP 扇出 OpenObserve + Langfuse
 └── langfuse/docker-compose.langfuse.yml      # 本地可选：Langfuse 自托管（独立 compose project）
 
-项目根
-├── docker-compose.yml                       # 本地开发编排（postgres/redis/rustfs/openobserve/otel-collector/app）
-├── docker-compose.server.yml                # 服务器编排（无 collector/langfuse，app 直连 OpenObserve）
+项目根（compose 命令的固定执行位置）
 ├── .env / .env.example                      # 凭据与账号（三方共用：compose 自动注入 / Spring config.import / 本地裸跑）
 ├── .dockerignore                            # app 镜像 build context 排除项（按根目录生效）
-└── build-local.sh                           # 构建产物：前端 dist 进 jar → 瘦 jar + lib/（platform-bootstrap/target/）
+├── .mvn/settings.xml                        # Maven 仓库镜像配置（-s 指定）
+└── scripts/build-local.sh                   # 构建产物：前端 dist 进 jar → 瘦 jar + lib/（platform-bootstrap/target/）
 ```
 
 ## 端口一览
@@ -35,16 +42,16 @@ docker/
 | 3000 | langfuse-web | Langfuse UI（仅本地可选） |
 | 9090 | langfuse-minio | Langfuse 附件 console（仅本地可选） |
 
-## 本地启动
+## 本机启动（docker 环境）
 
 ```bash
 # ① 首次前置：见 docker/postgres/README.md 下载 pg-search.deb 放到 docker/postgres/
 # ② 凭据：cp .env.example .env，填 DEEPSEEK_API_KEY / BAILIAN_API_KEY（LANGFUSE_AUTH 可选）
-# ③ 构建产物（前置 JDK 21 + Node）——脚本会自动把 jar/lib 同步到项目根，
-#    因为 app 镜像的 COPY 是在「context 根」找它们，不同步就会静默用旧 jar
-bash build-local.sh
-# ④ 起整套
-docker compose up -d --build
+# ③ 构建产物（前置 JDK 21 + Node）——产物落 platform-bootstrap/target/（瘦 jar + lib/），
+#    Dockerfile 直接 COPY 该路径（唯一事实源，不再向根目录另存副本）
+bash scripts/build-local.sh
+# ④ 起整套（项目根执行；带 override：app 接宿主机服务；全隔离沙盒时去掉第二个 -f）
+docker compose --project-directory . -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d --build
 ```
 
 - 访问 `http://localhost:9081/api/rag/`（前端已打进 jar）；Knife4j：`/api/rag/doc.html`
@@ -52,19 +59,19 @@ docker compose up -d --build
   → `localhost:3000` 首启注册 admin → 项目设置拿 pk/sk → 填 `.env` 的 `LANGFUSE_AUTH`（base64(pk:sk)）
 - 本地 IDEA 裸跑 app：collector 在 `localhost:4318`，根 `.env` 被自动读取（application.yaml `spring.config.import`）
 
-## 服务器部署
+## dev 测试环境部署（服务器）
 
 > 逐步操作手册（含 Nginx 反代、OO viewer 账号、验证清单、常见问题）见 **[../docs/deploy.md](../docs/deploy.md)**，本节为速览。
 
 ```bash
-# ① 本地构建产物（jar/lib 已由脚本同步到项目根，见上节 ③）
-bash build-local.sh
+# ① 本地构建产物（产物在 platform-bootstrap/target/，见上节 ③）
+bash scripts/build-local.sh
 
-# ② 上传（服务器项目根 = /srv/www/spring-rag；首次需 git clone 或整目录 scp）
-scp platform-bootstrap-0.0.1-SNAPSHOT.jar  root@<SERVER_IP>:/srv/www/spring-rag/
-scp -r lib                                 root@<SERVER_IP>:/srv/www/spring-rag/
-scp docker-compose.server.yml              root@<SERVER_IP>:/srv/www/spring-rag/
-scp -r docker                              root@<SERVER_IP>:/srv/www/spring-rag/   # 至少 app/ 与 postgres/ 子目录
+# ② 上传（服务器项目根 = /srv/www/<项目名>；首次部署建议直接用 bash scripts/build-local.sh --package 整包）
+scp platform-bootstrap/target/platform-bootstrap-0.0.1-SNAPSHOT.jar root@<SERVER_IP>:/srv/www/springai-rag/platform-bootstrap/target/
+scp -r platform-bootstrap/target/lib                                root@<SERVER_IP>:/srv/www/springai-rag/platform-bootstrap/target/
+scp .dockerignore root@<SERVER_IP>:/srv/www/springai-rag/
+scp -r docker                              root@<SERVER_IP>:/srv/www/springai-rag/   # 含三个 compose + app/Dockerfile + postgres/ 资产
 
 # ③ 服务器 .env（至少必填；账号类留空回退默认值）
 #    SERVER_IP=服务器外网IP
@@ -72,7 +79,7 @@ scp -r docker                              root@<SERVER_IP>:/srv/www/spring-rag/
 #    可选覆盖：POSTGRES_USER/PASSWORD、RUSTFS_*、ZO_ROOT_*、OO_VIEWER_*（见 .env.example）
 
 # ④ 启动
-docker compose -f docker-compose.server.yml up -d --build
+docker compose --project-directory . -f docker/docker-compose.dev.yml up -d --build
 ```
 
 **部署后必做**：
@@ -80,12 +87,12 @@ docker compose -f docker-compose.server.yml up -d --build
    → 默认展示 root 账号（`ZO_ROOT_USER_EMAIL/PASSWORD`；如需单独展示账号可在 `.env` 配 `OO_VIEWER_*` 覆盖）。前端「链路追踪」页与对话气泡「链路」按钮用它登录。
 2. 安全组放行 9081（app）/ 5080（OO）/ 9000（rustfs，或用 Nginx `/storage/` 反代后不开）。
 
-**升级业务代码**：重新 `build-local.sh` → scp 新 jar（依赖变了才传 lib/）→ `up -d --build`。
-服务器版 app 经 `TELEMETRY_CONFIG=application-telemetry-server.yaml` 直连 OpenObserve（无 collector/langfuse），无需额外配置。
+**升级业务代码**：重新 `scripts/build-local.sh` → scp 新 jar（依赖变了才传 lib/）→ `up -d --build`。
+dev 环境 app 经 `TELEMETRY_CONFIG=application-telemetry-dev.yaml` 直连 OpenObserve（无 collector/langfuse），无需额外配置。
 
 ## 两个 compose 的差异（改一处记得看另一处）
 
-| 差异点 | 本地 docker-compose.yml | 服务器 docker-compose.server.yml |
+| 差异点 | docker：docker/docker-compose.yml | dev：docker/docker-compose.dev.yml |
 |---|---|---|
 | otel-collector | ✅ 扇出 OO + Langfuse | ❌ app 直连 OO（`TELEMETRY_CONFIG`） |
 | langfuse | 可选另起（独立 compose） | 无 |
@@ -96,14 +103,14 @@ docker compose -f docker-compose.server.yml up -d --build
 ## 常见运维
 
 ```bash
-# 应用日志
-docker compose -f docker-compose.server.yml logs -f app        # 本地去掉 -f 参数
+# 应用日志（服务器；本地把 -f 的文件换成 docker/docker-compose.yml）
+docker compose --project-directory . -f docker/docker-compose.dev.yml logs -f app
 
 # 进 PostgreSQL
 docker exec -it rag-postgres psql -U postgres -d springai_rag
 
 # 重启单个服务
-docker compose -f docker-compose.server.yml restart app
+docker compose --project-directory . -f docker/docker-compose.dev.yml restart app
 ```
 
 **OpenObserve 频繁 OOM（Exit 137）**：4G 无 swap 宿主机 + WAL 重放内存峰值 + 无 restart 策略导致，

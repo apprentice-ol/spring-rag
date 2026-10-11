@@ -1,4 +1,4 @@
-# Langfuse v3 自托管（独立 compose project，不污染主 docker-compose.yml）。
+# Langfuse v3 自托管（独立 compose project：顶层 name: langfuse 固定项目名，不污染主 compose docker/docker-compose.yml）。
 # 启动：  docker compose -f docker/langfuse/docker-compose.langfuse.yml up -d
 # 访问：  http://localhost:3000   登录 （首启在 UI 自行注册的 admin 账号）
 # OTLP：  主 compose 的 otel-collector 经宿主端口 localhost:3000 上报（host.docker.internal，无需共享网络）
@@ -19,6 +19,7 @@ services:
       minio:      { condition: service_started }
     ports: ["3000:3000"]   # 宿主端口映射：主 compose 的 collector 经 host.docker.internal:3000 上报
     environment: &lf-env
+      HOSTNAME: 0.0.0.0                            # Next.js 绑定地址：不设则继承容器 ID，只绑单个 IP，宿主端口转发被 reset（官方 compose 同款必设）
       NEXTAUTH_URL: http://localhost:3000          # 必须等于浏览器访问地址含端口
       NEXTAUTH_SECRET: lf-nextauth-secret-2026-dev  # 开发自托管占位；生产换随机
       SALT: lf-salt-2026-dev

@@ -1,9 +1,9 @@
-# ===== Maven 产物：瘦 jar + lib/（lib 外置部署模式，镜像要 COPY 两者） =====
+# ===== Maven 产物：仅放行 platform-bootstrap 的瘦 jar + lib/（镜像 COPY 源；其余模块 target 全部排除） =====
 **/target/*
-!**/target/*.jar
-!**/target/*.jar.original
-!**/target/lib/
-!**/target/lib/**
+!platform-bootstrap/target/*.jar
+!platform-bootstrap/target/*.jar.original
+!platform-bootstrap/target/lib/
+!platform-bootstrap/target/lib/**
 
 # ===== 前端依赖与构建产物（dist 已打进 jar 的 static，无需进 context） =====
 frontend/node_modules/

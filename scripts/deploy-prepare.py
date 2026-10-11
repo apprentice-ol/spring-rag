@@ -247,7 +247,7 @@ def main() -> int:
         for p in problems:
             print(f"   - {p}")
         return 1
-    print("\n准备完成。下一步见 docs/deploy-upgrade.md")
+    print("\n准备完成。下一步见 docs/deploy.md（升级部署部分）")
     return 0
 
 

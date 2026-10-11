@@ -1,12 +1,12 @@
 # ====================================================================
-# 可观测性配置 —— 服务器版（docker-compose.server.yml 用）
+# 可观测性配置 —— dev 测试环境（docker/docker-compose.dev.yml 用）
 #
 # 与本地版 application-telemetry.yaml 的区别：
 #   - 去掉 telemetry.collector：app 直连 OpenObserve，服务器不部署 otel-collector 扇出
 #   - 去掉 telemetry.langfuse：服务器不部署 Langfuse
 #
-# 加载方式：docker-compose.server.yml 的 app 段设环境变量
-#   TELEMETRY_CONFIG=application-telemetry-server.yaml
+# 加载方式：docker/docker-compose.dev.yml 的 app 段设环境变量
+#   TELEMETRY_CONFIG=application-telemetry-dev.yaml
 # （application.yaml 的 import 用 ${TELEMETRY_CONFIG:application-telemetry.yaml} 按名加载）
 # ====================================================================
 

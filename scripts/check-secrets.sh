@@ -11,7 +11,7 @@
 # =============================================================================
 set -uo pipefail
 
-PLACEHOLDER='(xxx|XXX|\$\{|<[A-Za-z一-龥]|dev\.local|DevOnly|DevPg2026|DevRedis2026|DevCh2026|DevMinioSecret2026|lf-[a-z-]*dev|a1b2c3d4|example|changeme|placeholder|dummy|your[_-]|占位|sk-lf-|pk-lf-|git@|base64\(|localhost|=[[:space:]]*null\b|:[[:space:]]*(string|number|boolean|any|undefined)\b)'
+PLACEHOLDER='(xxx|XXX|\$\{|<[A-Za-z一-龥]|dev\.local|DevOnly|DevPg2026|DevRedis2026|DevCh2026|DevMinioSecret2026|lf-[a-z-]*dev|a1b2c3d4|example|changeme|placeholder|dummy|your[_-]|占位|sk-lf-|pk-lf-|git@|base64\(|localhost|=[[:space:]]*null\b|:[[:space:]]*(string|number|boolean|any|undefined)\b|=[[:space:]]*["'"'"'][[:space:]]*["'"'"'])'  # 末项：空串赋值（如 password = ""）非敏感，免误报
 
 # 只扫文本类文件；排除构建产物/依赖/锁文件（误报重灾区）
 SCAN_EXT='\.(md|yml|yaml|java|xml|properties|sh|sql|ts|js|vue|json|example|txt|cfg|conf|ini|env[^/]*)$|^\.env'
