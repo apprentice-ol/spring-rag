@@ -17,7 +17,7 @@ public class IngestionProperties {
     private int chunkOverlap = 200;
 
     /**
-     * 子块切分（小块检索、大块生成，2026-09-18；设计见 plan/2026-09-18-small-to-big-retrieval.md）。
+     * 子块切分（小块检索、大块生成，2026-09-18；设计见 docs/plans/ingestion-and-retrieval.md）。
      *
      * <p>chunker 产物 = 父块（生成侧上下文单元，不变）；IndexerNode 把父块再切成子块进向量表，
      * 父块原文存 sa_chunk_parent。检索侧由 ParentAggregationPostProcessor 按子块打分、
