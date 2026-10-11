@@ -81,6 +81,7 @@ body {
 ::selection {
   background: var(--color-primary);
   color: #fff;
+  text-shadow: none;
 }
 
 /* ===== 通用工具类 ===== */
@@ -195,6 +196,23 @@ body {
 /* 分页：全站统一外边距（替代各页 :deep 覆盖） */
 .ant-table-pagination.ant-pagination {
   margin: 14px 16px;
+}
+
+/* ===== 表头列宽拖拽把手（v-resize 指令动态创建，scoped 匹配不到，须全局） =====
+   三态：常态常显主色 45% 3px 竖线（浅，标示可拖边界）→ hover 加深为主色
+   → 拖拽中加粗 5px 强调。命中区 14px 跨列边界，竖线居中（linear-gradient 画线）。 */
+.th-resizer {
+  --resizer-line: color-mix(in srgb, var(--color-primary) 45%, transparent);
+  background: linear-gradient(to right,
+    transparent 5.5px, var(--resizer-line) 5.5px,
+    var(--resizer-line) 8.5px, transparent 8.5px);
+}
+.ant-table-thead th:hover .th-resizer,
+.th-resizer:hover { --resizer-line: var(--color-primary); }
+.th-resizer.dragging {
+  background: linear-gradient(to right,
+    transparent 4.5px, var(--color-primary) 4.5px,
+    var(--color-primary) 9.5px, transparent 9.5px);
 }
 
 /* ===== Semi 风格列表页通用骨架（页头 / 筛选卡 / 表格卡） ===== */
