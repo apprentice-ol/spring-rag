@@ -1,14 +1,24 @@
 package com.jjx.customer.platform.web;
 
 import com.jjx.customer.platform.common.exception.ClientException;
+import com.jjx.customer.platform.common.exception.ResourceNotFoundException;
 import com.jjx.customer.platform.common.exception.ServiceException;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
@@ -70,6 +80,93 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .badRequest()
                 .body(Map.of("code", 400, "message", e.getMessage()));
+    }
+
+    // ==================== 缺少必填参数（400） ====================
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingParam(MissingServletRequestParameterException e) {
+        log.warn("[全局异常] 缺少必填参数: {}", e.getMessage());
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("code", 400, "message", "缺少必填参数: " + e.getParameterName()));
+    }
+
+    // ==================== 上传缺少部件（400） ====================
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<Map<String, Object>> handleMissingPart(MissingServletRequestPartException e) {
+        log.warn("[全局异常] 上传缺少部件: {}", e.getMessage());
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("code", 400, "message", "缺少上传文件部件: " + e.getRequestPartName()));
+    }
+
+    // ==================== 请求体不可读（400） ====================
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnreadableBody(HttpMessageNotReadableException e) {
+        log.warn("[全局异常] 请求体不可读: {}", e.getMessage());
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("code", 400, "message", "请求体格式错误（JSON 解析失败）"));
+    }
+
+    // ==================== 参数类型不匹配（400） ====================
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Map<String, Object>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("[全局异常] 参数类型不匹配: {}", e.getMessage());
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("code", 400, "message", "参数类型错误: " + e.getName()));
+    }
+
+    // ==================== 请求方法不支持（405） ====================
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.warn("[全局异常] 请求方法不支持: {}", e.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(Map.of("code", 405, "message", "该接口不支持 " + e.getMethod() + " 方法"));
+    }
+
+    // ==================== Content-Type 不支持（415） ====================
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        log.warn("[全局异常] Content-Type 不支持: {}", e.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(Map.of("code", 415, "message", "不支持的 Content-Type: " + e.getContentType()));
+    }
+
+    // ==================== 资源不存在（404） ====================
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleResourceNotFound(ResourceNotFoundException e) {
+        log.debug("[全局异常] 资源不存在: {}", e.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(Map.of("code", 404, "message", e.getMessage()));
+    }
+
+    // ==================== 唯一约束冲突（409） ====================
+
+    /** 从 PG 报文 "Key (name)=(冒烟测试) already exists" 提取友好提示，失败退通用文案。 */
+    private static final Pattern DUPLICATE_KEY_DETAIL = Pattern.compile("Key \\((\\w+)\\)=\\((.+?)\\)");
+
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ResponseEntity<Map<String, Object>> handleDuplicateKey(DuplicateKeyException e) {
+        Matcher m = DUPLICATE_KEY_DETAIL.matcher(String.valueOf(e.getMessage()));
+        String msg = m.find()
+                ? m.group(1) + "「" + m.group(2) + "」已存在，请换一个"
+                : "资源已存在（唯一约束冲突）";
+        log.warn("[全局异常] 唯一约束冲突: {}", msg);
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(Map.of("code", 409, "message", msg));
     }
 
     // ==================== 服务端异常（500） ====================

@@ -2,11 +2,13 @@ package com.jjx.customer.platform.storage.service.impl;
 
 import com.jjx.customer.platform.storage.service.FileStorageService;
 import com.jjx.customer.platform.storage.domian.dto.StoredFileDTO;
+import com.jjx.customer.platform.common.exception.ResourceNotFoundException;
 import com.jjx.customer.platform.common.util.FileTypeDetector;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
@@ -102,6 +104,8 @@ public class LocalFileStorageService implements FileStorageService {
     public InputStream openStream(String key) {
         try {
             return Files.newInputStream(Path.of(key));
+        } catch (NoSuchFileException e) {
+            throw new ResourceNotFoundException("本地文件不存在: " + key);
         } catch (IOException e) {
             throw new RuntimeException("本地文件读取失败: " + key, e);
         }

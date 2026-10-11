@@ -65,11 +65,13 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
     @Override
     @Transactional
     public Long createPipeline(String name, String description, List<NodeConfig> nodes) {
+        // nodes 可选（OpenAPI 未标 required，"先建管道后配节点"合法）：null 容忍为空列表
+        List<NodeConfig> safeNodes = nodes == null ? List.of() : nodes;
         IngestionPipelineEntity pipeline = new IngestionPipelineEntity();
         pipeline.setName(name);
         pipeline.setDescription(description);
         pipelineMapper.insert(pipeline);
-        for (NodeConfig nc : nodes) {
+        for (NodeConfig nc : safeNodes) {
             IngestionPipelineNodeEntity node = new IngestionPipelineNodeEntity();
             node.setPipelineId(pipeline.getId());
             node.setNodeId(nc.getNodeId());
@@ -79,7 +81,7 @@ public class IngestionPipelineServiceImpl implements IngestionPipelineService {
             node.setConditionJson(jsonToString(nc.getCondition()));
             nodeMapper.insert(node);
         }
-        log.info("[ObservationPipeline] 创建流水线: id={}, name={}, nodes={}", pipeline.getId(), name, nodes.size());
+        log.info("[ObservationPipeline] 创建流水线: id={}, name={}, nodes={}", pipeline.getId(), name, safeNodes.size());
         definitionCache.remove(name);
         return pipeline.getId();
     }

@@ -18,6 +18,7 @@
 package com.jjx.customer.platform.storage.service.impl;
 
 import cn.hutool.core.lang.Assert;
+import com.jjx.customer.platform.common.exception.ResourceNotFoundException;
 import com.jjx.customer.platform.common.exception.ServiceException;
 import com.jjx.customer.platform.config.properties.RagStorageProperties;
 import com.jjx.customer.platform.storage.client.ObjectStorageClient;
@@ -34,6 +35,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -188,7 +190,12 @@ public class FileStorageServiceImpl implements FileStorageService {
     @Override
     public InputStream openStream(String key) {
         Assert.notBlank(key, "对象 key 不能为空");
-        return objectStorageClient.getObject(kbBucket, key);
+        try {
+            return objectStorageClient.getObject(kbBucket, key);
+        } catch (NoSuchKeyException e) {
+            // S3 NoSuchKey 是客户端可预期错误（404），不落兜底 500
+            throw new ResourceNotFoundException("对象不存在: " + key);
+        }
     }
 
     @Override
