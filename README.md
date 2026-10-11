@@ -103,14 +103,14 @@ npm run dev                # http://localhost:5173
 ### 2. Docker 一键部署
 
 ```bash
-# ① 构建产物（前端 dist 打进 jar，依赖外置到 lib/，并同步到项目根）
-bash build-local.sh
+# ① 构建产物（前端 dist 打进 jar，依赖外置 lib/；产物在 platform-bootstrap/target/）
+bash scripts/build-local.sh
 
 # ② 本地启动整套（PostgreSQL / Redis / RustFS / OpenObserve / OTel Collector / App）
-docker compose up -d --build
+docker compose --project-directory . -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d --build
 
 # 服务器部署
-docker compose -f docker-compose.server.yml up -d --build
+docker compose --project-directory . -f docker/docker-compose.dev.yml up -d --build
 ```
 
 完整部署流程（产物上传、.env、账号、端口、表结构迁移、常见运维）见 [docker/README.md](./docker/README.md) 与 [docs/deploy.md](./docs/deploy.md)。
@@ -179,7 +179,7 @@ customer-platform（父聚合 POM，包根 com.jjx.customer.platform）
 
 Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / ChatMemory / Advisor），
 不单独建 infra-ai 模块；pgvector 的写入与检索为手写 JDBC（cosine + HNSW），未依赖 Spring AI VectorStore 抽象。
-详见 [CLAUDE.md](./CLAUDE.md) 与 [docs/project-structure.md](./docs/project-structure.md)。
+详见 [CLAUDE.md](./CLAUDE.md) 与 [docs/architecture.md](./docs/architecture.md)。
 
 ## 技术栈
 
@@ -232,11 +232,11 @@ Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / C
 
 ### 配置
 
-- 本地默认使用 `application-telemetry.yaml`：应用 → OTel Collector → OpenObserve + Langfuse；服务器使用 `application-telemetry-server.yaml`：应用直连 OpenObserve（通过 `TELEMETRY_CONFIG` 环境变量切换）。
+- 本地默认使用 `application-telemetry.yaml`：应用 → OTel Collector → OpenObserve + Langfuse；服务器使用 `application-telemetry-dev.yaml`：应用直连 OpenObserve（通过 `TELEMETRY_CONFIG` 环境变量切换）。
 - 连接信息与凭据统一放 `.env`（`OPENOBSERVE_*` / `LANGFUSE_*` / `TELEMETRY_*`），不写进代码与 git。
 - LLM 的 `gen_ai` span 与 token 用量由 Spring AI 原生观测输出，llm-telemetry 负责会话/步骤/维度等业务级信息，并桥接 Spring AI 的 prompt/completion 捕获开关。
 
-详细的埋点规范、span 命名与注意事项见 [docs/llm-observability-guide.md](./docs/llm-observability-guide.md)。
+详细的埋点规范、span 命名与注意事项见 [docs/observability.md](./docs/observability.md)。
 
 ## 当前进度
 
@@ -265,13 +265,11 @@ Spring AI 扮演原 ragent 的 infra-ai 角色（ChatClient / EmbeddingModel / C
 
 ## 更多文档
 
-- [docs/project-structure.md](./docs/project-structure.md)：模块结构与依赖方向
-- [docs/ingestion-flow.md](./docs/ingestion-flow.md)：入库链路梳理
+- [docs/README.md](./docs/README.md)：文档中心（总索引）
+- [docs/architecture.md](./docs/architecture.md)：架构与结构规范（16 模块 / 数据流转 / Agent 重建规格）
+- [docs/platform-deep-dive.md](./docs/platform-deep-dive.md)：平台实现详解（含 LiveRAG 评测集构成）
+- [docs/observability.md](./docs/observability.md)：可观测性（设计思路 / 埋点指南 / 日志规范）
 - [docs/deploy.md](./docs/deploy.md) · [docker/README.md](./docker/README.md)：部署与运维
-- [docs/llm-observability-guide.md](./docs/llm-observability-guide.md)：Telemetry 埋点指南
-- [docs/logging-guide.md](./docs/logging-guide.md)：日志规范
-- [docs/opentelemetry设计思路.md](./docs/opentelemetry设计思路.md)：可观测性设计思路
-- [docs/liveRAG评测集.md](./docs/liveRAG评测集.md)：评测集说明
-- [plan/](./plan/)：设计计划与落地记录（诊断循环 / 上下文架构 / Task 层 / 人在环中 …）
-- [scripts/](./scripts/)：`seed-oo-log.sh` 灌测试日志、`check-secrets.sh` 提交前密钥检查
+- [docs/plans/](./docs/plans/README.md)：设计计划与落地记录（按主题归档）
+- [scripts/](./scripts/)：构建/部署脚本与运维工具（清单见 scripts/README.md）
 - [CLAUDE.md](./CLAUDE.md)：项目导航（面向 AI 编码助手）

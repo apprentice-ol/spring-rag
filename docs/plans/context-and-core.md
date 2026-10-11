@@ -1,7 +1,20 @@
+# 计划归档 · 上下文与会话架构（2026-09-19 → 2026-09-20）
+
+> 2026-10-11 文档整理：本文按时间顺序合并四份文档，原文完整保留，各部分以 `---` 分隔。
+>
+> - 2026-09-19 · 上下文与会话生命周期设计（总设计，含落地顺序）
+> - 2026-09-19 · Task 层设计（总设计落地第 3 步）
+> - 2026-09-20 · RAG 线多轮上下文（设计 + 实施计划）
+> - 2026-09-20 · 核心收敛：契约进 core、实现进平台、策略留业务
+
+---
+
+<!-- 原文件：docs/plans/2026-09-19-context-architecture.md -->
+
 # 上下文与会话生命周期设计 — 2026-09-19
 
 > 状态：**设计阶段，未落地**。本文档汇聚 2026-09-19 讨论的结论、依据与待定项，作为跨会话交接的权威说明。
-> 关联：`plan/2026-09-19-human-in-the-loop.md`（同日的 HITL 落地）、`plan/2026-09-12-module-split-progress.md`
+> 关联：`docs/plans/hitl-and-task-qa.md`（同日的 HITL 落地）、`docs/plans/platform-refactor.md`
 > 标注约定：**【确认】**= 读过代码/调用点；**【推断】**= 由代码结构推导；**【待验证】**= 无依据，需数据
 
 ---
@@ -472,7 +485,7 @@ Topic「发票红冲失败」
 
 1. ~~**修静默降级**——`PgEngineSlotStore` 的 load/save、`#4 RUNNING 死状态`~~ ✅ **已完成 2026-09-19**，见 §十一
 2. **内核瘦身**——删 Workspace、补生命周期契约（可与 1 并行）
-3. ~~**引入 Task 实体 + 改会话 id 派生规则**~~ ✅ **子步 1-4 已完成 2026-09-19**（记录见 `plan/2026-09-19-task-layer-design.md` §十）。⚠️ **缺测试覆盖**——OpsRunner 的 Task 逻辑未经验证
+3. ~~**引入 Task 实体 + 改会话 id 派生规则**~~ ✅ **子步 1-4 已完成 2026-09-19**（记录见本文「Task 层设计」§十）。⚠️ **缺测试覆盖**——OpsRunner 的 Task 逻辑未经验证
 4. **Topic 层**（取决于第 3 步稳定）
 5. **Findings 台账**——**先拿 2-3 个真实诊断跑一遍验证粒度，再定表结构**
 6. 清理/回收、并发约束（同一 Task 同时只有一个 in-flight attempt）、reaper
@@ -968,3 +981,800 @@ DefaultWorkflowRuntime            ← 每个节点后都调 checkpoint（4 处�
 > 单测验证"函数按它被要求的方式工作"，验证不了"整条链路是否真的这么走"。
 
 这也是本轮唯一一个靠"起真实应用 + 观察副作用"才挖出来的内核缺陷。
+
+---
+
+<!-- 原文件：docs/plans/2026-09-19-task-layer-design.md -->
+
+# Task 层设计（落地第 3 步）— 2026-09-19
+
+> 状态：**设计阶段，未落地**。上游文档：本文「上下文与会话生命周期设计」§八 落地顺序第 3 步。
+> 本文只覆盖**第 3 步（引入 Task + 改 id 派生规则）**，不依赖第 4 步的 Topic 层——Topic 只留字段位。
+> 标注：**【确认】**= 读过代码；**【待定】**= 需决策。
+
+---
+
+## 一、这一步要解决什么
+
+拆掉 `"ops-" + conversationId` 这个把 **conversation 与 attempt 焊死**的派生规则，引入 Task 层，使：
+
+| 场景 | 现状 | 目标 |
+|---|---|---|
+| 新会话 · 新 task | 全新建 | 全新建 |
+| 旧会话 · 新 task | ⚠️ 无落点，被当成上一个诊断的补充 | 新建 Task，不继承 finding |
+| 旧会话 · 旧 task · 追问 | ⚠️ 看引擎是否 SUSPENDED，两种命运且用户不可见 | 沿用 Task，开新 Attempt |
+
+**顺带解决**：追问预算不算诊断预算（不同 Attempt = 不同引擎 Session，预算天然各算各的）。
+
+---
+
+## 二、现状：要改的三处【确认】
+
+```
+OpsRunner.engineSessionIdOf(conversationId) → "ops-" + conversationId   ← 要改
+OpsRunner.execute:111-143        load 后判 state==SUSPENDED 决定 resume/startSession  ← 要改
+ChatOrchestrator:131-136         resumed 分支 → activeSession.slots() 作预填        ← 要改
+ResumeCoordinator.findResumable  只认 AWAITING_USER                                ← 要改
+```
+
+`sa_agent_session` 一张表装两个生命周期（§1.2 物证），本步把它拆开。
+
+---
+
+## 三、目标结构
+
+### 3.1 实体与 id
+
+```
+taskId     = UUID                      ← 无派生，与 conversationId 解耦
+attemptNo  = sa_agent_task.attempt_count（自增）
+attemptId  = "ops-" + taskId + "#" + attemptNo
+```
+
+**为什么 attemptId 派生而非另存字段**：可从 Task 行算出（无需额外列）、id 自带归属信息（`ops-<taskId>#3` 一眼看出是哪个 task 的第几次）、**不同 attempt 的引擎行天然隔离 → 多实例互相覆盖的问题消失**。
+
+**为什么 taskId 不派生**：派生就意味着和 conversation 耦合，而我们正是要拆开这个耦合。追问开新 attempt、换目标开新 task，都不该改 conversationId。
+
+### 3.2 状态机
+
+```
+                    ┌──────────────────────────────────┐
+                    ▼                                  │
+  新建 ──► open ──► running ──► concluded ──► closed ───┘（用户提新目标时旧 Task 关闭）
+             ▲          │           │
+             │          │           └──► open（用户不认可结论，开新 Attempt）
+             │          │
+             └──────────┴──► suspended（attempt 挂起，等用户回答）
+                            │
+                            └──► abandoned（TTL 过期 / 用户放弃）
+```
+
+| 状态 | 含义 | 收到新消息时 |
+|---|---|---|
+| `open` | 目标未达成，无 in-flight attempt | 沿用 |
+| `running` | 有 in-flight attempt | **拒绝并提示**（并发保护） |
+| `suspended` | attempt 挂起，明确在等用户回答 | **沿用**（resume 该 attempt） |
+| `concluded` | **已出结论，等用户反应** | **默认沿用**（见 §四） |
+| `closed` | 目标达成 / 用户结束 | 不沿用 → 新建 Task |
+| `abandoned` | 放弃 / 过期 | 不沿用 → 新建 Task |
+
+**`concluded` 是本设计新增的关键状态**，它正是场景 C 分裂的根因所在：现状用"引擎是否 COMPLETED"隐式区分，用户看不出、代码也没声明。显式化之后，"出结论"≠"任务结束"。
+
+> 【待定】`concluded` 与 `closed` 是否值得拆成两个状态？拆的理由是"目标是否达成由人判定"，系统只能知道自己出了结论。若认为复杂度过高，可退化为 `closed` + `last_conclusion` 非空标记——但那样"新消息默认解读为对结论的反应"这条行为就没有状态依据了。
+
+### 3.3 表结构
+
+```sql
+CREATE TABLE IF NOT EXISTS sa_agent_task (
+    task_id         VARCHAR(64)  PRIMARY KEY,
+    conversation_id VARCHAR(64)  NOT NULL,
+    agent_type      VARCHAR(64)  NOT NULL,
+    status          VARCHAR(16)  NOT NULL,
+    slots           JSONB,
+    stage           VARCHAR(64),
+    summary         TEXT,
+    autonomy_level  VARCHAR(8),
+    chain_trace_id  VARCHAR(64),
+    attempt_count   INT          NOT NULL DEFAULT 0,
+    topic_id        VARCHAR(64),
+    create_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    update_time     TIMESTAMP    NOT NULL DEFAULT NOW(),
+    close_time      TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_task_conv_status ON sa_agent_task(conversation_id, status);
+CREATE INDEX IF NOT EXISTS idx_task_chain_trace ON sa_agent_task(chain_trace_id);
+```
+
+字段来源逐条交代：
+
+| 字段 | 来源 | 说明 |
+|---|---|---|
+| `slots` | 原 `sa_agent_session.slots` | 8 个业务槽，**权威源仍是引擎槽位，这里是挂起投影** |
+| `stage` | 原 `sa_agent_session.stage` | attempt 级，但留作 UI 展示（"卡在哪一步"） |
+| `summary` | 原字段，一直恒 `null` | 终态回填；**第 5 步 findings 落地后改为其投影** |
+| `autonomy_level` / `chain_trace_id` | 原样 | Task 级 |
+| `attempt_count` | 新 | 见 §五 原子递增 |
+| `topic_id` | 新，**可空** | 第 4 步才填，本步不依赖 |
+| `missing_slots` | **不迁移** | 可从 `OpsSlotCatalog` 重算（现有代码 `clarifyStateOf` 就是这么做的，字段本身冗余） |
+| `prompt_releases` | **不迁移** | 【确认】本步涉及的读写路径未使用；若他处依赖需单独确认 |
+
+---
+
+## 四、判定逻辑：新 task 还是追问 ★
+
+**这是本步的核心，也是现状最缺的一环。** 判定必须显式，不能靠引擎状态推断。
+
+```
+输入：新消息 + 该 conversation 的活跃 Task（status ∈ {open, running, suspended, concluded}）
+输出：沿用 Task（可能开新 Attempt） / 新建 Task
+```
+
+判定顺序：
+
+```
+1. status == running     → 拒绝，提示"上一轮还在跑"（并发保护，见 §五）
+2. status == suspended   → 沿用，resume 该 attempt            【确定】
+3. status == concluded   → 默认沿用（用户在对结论作反应）      【默认】
+                            └─ 命中「新目标信号」→ 新建 Task    【见下】
+4. status == open        → 沿用，开新 Attempt
+5. 无活跃 Task            → 新建 Task + Attempt 1
+```
+
+**「新目标信号」的规则（第 3 条的例外）**：
+
+| 信号 | 强度 | 动作 |
+|---|---|---|
+| 消息中出现**不同的 traceId** | 强 | 候选新建 |
+| 消息中出现**不同的 interface** | 强 | 候选新建 |
+| 用户显式表达（"另一个问题"/"顺便看看"） | 强 | 新建 |
+| 语义与当前 Task 目标无重叠 | 弱 | **候选**，不自动新建 |
+
+强信号**直接新建**（确定性高）；弱信号**不自动新建**，走 HITL 确认卡片（复用现有 `HumanRequest.DECIDE` 机制）。
+
+**可纠正**：新建 Task 时在 UI 上留可见标记且可撤销（同本文「上下文与会话生命周期设计」§5.2 的机制）——切错了代价是上下文断裂，必须可回滚。
+
+> 【待定】"语义无重叠"这条弱信号本轮要不要做？不做则第 3 条只有强信号例外，会用"新接口/新 traceId"漏掉换了话题但没换实体的情形。建议**先做规则，模型判定留到有真实案例之后**。
+
+---
+
+## 五、并发与多实例
+
+**同一 Task 同时只有一个 in-flight Attempt。**
+
+用一条原子 UPDATE 取得执行权（替代现有只覆盖 AWAITING_USER 的 `claim`）：
+
+```sql
+UPDATE sa_agent_task
+   SET status = 'running',
+       attempt_count = attempt_count + 1,
+       update_time = NOW()
+ WHERE task_id = ?
+   AND status IN ('open', 'suspended');
+-- 影响行数 = 1 才拿到执行权；= 0 说明已有 in-flight，拒绝
+```
+
+这条同时完成三件事：**并发互斥**、**attempt 计数递增**、**状态推进**。且因为是单条 UPDATE，多实例下天然正确（对比现状：首轮并发可同时 `startSession`，内存态永久分叉）。
+
+**多实例收益**：不同 attempt 用不同 engine sessionId（`ops-<taskId>#N`），引擎表不再被同 key 覆盖；内存缓存陈旧的作用域被压到单个 attempt 内。
+
+> 【待定】`claim` 的原子性依赖 DB 行锁，但引擎会话本身仍无并发控制。若同一 attempt 被两个实例同时 resume，问题依旧。是否需要 attempt 级锁（如 `running` 状态下记录持有者 + 超时）？建议**先只做 Task 级**，观察是否够用。
+
+---
+
+## 六、迁移路径
+
+分五步，每步可独立验证：
+
+| 步 | 动作 | 可验证点 |
+|---|---|---|
+| 1 | `init.sql` 加 `sa_agent_task`（幂等 DDL） | 启动建表成功 |
+| 2 | 新增 `AgentTaskServiceImpl`（读写新表），`AgentSessionServiceImpl` 保留 | 单测 |
+| 3 | `OpsRunner` 改走 Task：`attemptIdOf(taskId, n)` 替换 `engineSessionIdOf(conversationId)` | 三场景手测 |
+| 4 | `ChatOrchestrator` resumed 分支 + `ResumeCoordinator` 改读 Task | 三场景手测 |
+| 5 | 存量数据迁移 | 见下 |
+
+**存量数据处理**（两块）：
+
+- **业务侧**：`sa_agent_session` 的 AWAITING_USER 行 → `sa_agent_task` 的 `suspended` 行（`taskId` 取新 UUID，`attempt_count=1`）
+- **引擎侧**：存量 `ops_engine_session` / `ops_engine_slots` 的 key 是 `ops-<conversationId>`，新格式是 `ops-<taskId>#1` → **需要 UPDATE 改名**，映射关系从业务侧迁移结果取
+
+> 【确认】库内 201 个会话以测试数据为主（用户确认）。若确认可弃，**引擎侧改名可省**——旧 key 永不再被 load，自然废弃，只需定期清理。建议走这条，省一次高风险数据搬迁。
+
+---
+
+## 七、不做什么（边界）
+
+| 不做 | 原因 |
+|---|---|
+| **不建 Topic 表** | 第 4 步；本步只留 `topic_id` 可空字段 |
+| **不建 Findings 表** | 第 5 步，且粒度未验证（只有发票一个案例） |
+| **不动内核** | 内核的 Session == Attempt 语义是对的；本步只改业务层派生规则 |
+| **不改 RAG 线** | 本步只覆盖 ops；RAG 走 Task 化在结构统一后单独评估 |
+| **不做回收 / reaper** | 第 6 步；但 Task 状态机为它留好了依据（见落地下文） |
+
+**"Task 是通用层"是本步的设计约束**（`agent_type` 已入表，不硬编码 ops），但**本步只实现 ops 一条线的接入**。
+
+---
+
+## 八、风险与回滚
+
+| 风险 | 缓解 |
+|---|---|
+| 判定逻辑切错，把新目标并进旧 Task | 强信号才自动新建；UI 可见标记 + 可撤销 |
+| 存量挂起会话在切换瞬间丢失 | 迁移脚本先跑，再切代码 |
+| 引擎侧旧 key 残留 | 不搬迁则定期清理（比搬迁安全） |
+| 回滚 | 全部为增量改动（新表 + 新服务类），旧表和旧代码路径可保留一个版本周期 |
+
+---
+
+## 九、未定项
+
+| 项 | 说明 |
+|---|---|
+| `concluded` 独立成状态 vs 退化为标记 | 见 §3.2 待定 |
+| 弱信号（语义无重叠）是否本轮做 | 见 §四 待定，建议先不做 |
+| attempt 级并发锁 | 见 §五 待定，建议先只做 Task 级 |
+| 存量引擎会话是否搬迁 | 见 §六，建议不搬迁 |
+| Task 与 Topic 的多对一关系确认 | 待第 4 步——若 Topic 也是按目标切，Task 与 Topic 可能退化成一对一 |
+| RAG 线接入时机 | 结构统一后评估；`agent_type` 位已留 |
+
+---
+
+## 十、落地记录（2026-09-19）
+
+子步 1–4 已完成；子步 5（存量迁移）与 §四的「新目标信号」**有意未做**，理由见下。
+
+### 10.1 新增
+
+| 文件 | 作用 |
+|---|---|
+| `task/entity/AgentTaskEntity.java` | 映射 `sa_agent_task`（`@TableId(INPUT)`：task_id 是 UUID 非自增） |
+| `task/AgentTaskState.java` | 业务契约 + `attemptIdOf(taskId, n)` 派生规则 + `currentAttemptId()` |
+| `task/mapper/AgentTaskMapper.java` | `claim` / `beginAttempt` / `release` / `expire` |
+| `task/AgentTaskServiceImpl.java` | 读写 + 惰性 TTL + 档位读取 |
+| `sql/init.sql` | `sa_agent_task` 建表（已在真实 PG 上以 `BEGIN…ROLLBACK` 验证语法） |
+
+### 10.2 关键实现决策（三处偏离原设计，均是有意的）
+
+**① 抢占从决策步下移到执行侧。** 原设计沿用旧结构，在 `ResumeCoordinator`（决策链第 0 步）抢占。
+改为在 `OpsRunner` **紧挨真正的运行**抢占——这样"占了位却没跑起来"（降级闸拒租约 / 抛异常）
+**在结构上不再存在**，`release` 从"必须的补偿"退化为"异常路径的兜底"。
+`ResumeCoordinator` 因此变成只读。
+
+**② 出结论落 `CONCLUDED`，不是 `CLOSED`。** "系统给出了结论"≠"目标达成"，后者由人判定。
+留成可沿用态，下一轮追问才能挂回同一 Task。
+
+**③ 槽位携带与"是否恢复"解耦。** 旧实现只在挂起恢复时才带槽位；新实现**所有路径都带**
+（任务上已确认的 → 本轮传入的覆盖）。这才是"出了结论后说不对，等于从头开始"的真正修复点——
+它不需要新数据结构，只需要在 `OpsRunner` 里无条件合并 `task.slots()`。
+
+### 10.3 实现过程中发现并修复的两个 bug
+
+**① 挂起任务遇引擎会话缺失会永久卡死。** 恢复分支条件不成立后落到新 attempt 分支，
+而 `beginAttempt` 的 WHERE 排除了 `SUSPENDED` → 返回 -1 → 抛异常 → **此后该任务每条消息都抛错**。
+修法：`beginAttempt` 放开 `SUSPENDED`（并发安全不受影响——并发抢占时先到者已把状态改成 RUNNING）。
+
+**② `expire` 未覆盖 `RUNNING`。** 进程被杀（部署重启 / OOM）留下永久 RUNNING 行——`release` 只在异常路径执行，
+崩溃时不走。且 `findActive` 见它会当成"有 attempt 在跑"。修法：TTL 条件加入 `RUNNING`。
+
+### 10.4 删除
+
+`business/session/` 整包（`AgentSessionServiceImpl` / `AgentSessionState` / `Entity` / `Mapper`）——
+切到 Task 后无任何调用点，留着就是同一概念的两个映射。
+⚠️ 这**同时移除了第 1 步在该包里的 `release` 修复**——它已被 §10.2-① 的架构变更取代（抢占下移后
+该中间状态不存在），不是丢失。
+
+`OpsRunner.engineSessionIdOf`（`"ops-" + conversationId`）删除——留着只会被误用。
+
+### 10.5 未做（有意）
+
+| 项 | 理由 |
+|---|---|
+| **§四 的「新目标信号」** | 正是本文档自评的**致命风险**（判错则上下文断裂）。去掉它后行为**严格优于现状**（无场景更差），符合 HITL 那条「最坏退化 = 现状」原则。等 Task 层跑稳再加 |
+| **存量数据迁移** | 库内为测试数据；跳过引擎侧改名（高风险、低收益）。旧 id `"ops-" + conversationId` 成为孤儿，`sa_agent_session` 表加废弃标注后保留 |
+| **OpsRunner 的端到端测试** | ✅ **已补齐并真机验证**，见 §10.6 |
+| Topic / Findings | 第 4、5 步 |
+
+---
+
+## 10.6 真机验证（2026-09-19，浏览器驱动）
+
+新代码此前从未执行过（`sa_agent_task` 0 行、`ops_engine_session` 新格式 0 条），
+以干净环境走完整链路。
+
+**① 单测**：`OpsRunnerTaskTest`（复用 `OpsGraphSuspendTest` 引擎骨架 + 内存任务服务）
+覆盖四轮调用：首轮建任务 → 补答 → 确认收尾 → 追问。首版**失败**——暴露 `markSuspended`
+不得写 `attempt_count` 这一隐含不变量（测试替身照抄了旧值，把 `beginAttempt` 的递增冲掉）；
+生产实现因"只更新 status/槽位"而侥幸正确，已在 javadoc 上写死该不变量。
+
+**② Mapper SQL**：`claim`/`beginAttempt`/`release`/`expire` 全部在真实 PG 上以 `BEGIN…ROLLBACK` 验证：
+并发第二刀抢到 0 行、`CONCLUDED` 追问序号 1→2、`release` 幂等返回 0 行、`expire` 如期改 `ABANDONED`。
+
+**③ 浏览器端到端**（前端 :5173 + 后端 :9081 + 真实 PG）：
+
+| 场景 | 观测 |
+|---|---|
+| A 新会话 | 建出 `sa_agent_task` 行（status=SUSPENDED, attempt_count=1）；引擎会话 id = `ops-<taskId>#1`（**新格式**） |
+| 挂起恢复 | `attempt_count` **仍为 1**（恢复不递增）；stage `collect_slots → confirm_slots`；未产生 `#2` |
+| 出结论 | status = **CONCLUDED**（非旧实现的 DONE）；结论为四段式 |
+| **C 追问（不认可结论）** | **同一 `taskId`**（未新建）；attempt_count **1→2**；`#1` 存为 COMPLETED **未被覆盖**；`#2` 独立新建 |
+| **槽位继承** | `#2` 的槽位快照：`interface`/`environment`/`trace_id` **与 `#1` 完全一致** |
+
+最后一行是本次改造的靶心：用户说"结论不对"时，系统**不再从零重排**。
+`#2` 直接推进到 `confirm_slots` 而未重新问齐，即为继承生效的行为证据。
+
+---
+
+## 10.7 第二轮真机测试（2026-09-19，Findings 链路 + 一个路由 bug）
+
+### 验证通过的部分
+
+新起会话走完整诊断后落库 **6 条主张**（1 ROOT_CAUSE 带 5 条证据 + 1 FIX + 4 RISK），
+与 §12.1 从真实数据估的 3-6 条吻合。`FindingExtractor` 的纯解析在真机上成立。
+
+### ⚠️ 发现并修复：CONCLUDED 任务的追问被 RAG 线劫持
+
+**现象**：诊断出结论后，用户回"我不同意「避免重复红冲」这条风险……请据此修正结论"，
+系统答成
+
+> 当前可用信息中并没有「避免重复红冲」这条风险结论……
+
+——**被 RAG 线接走了**（回复带 `[2](#cite-2)` 引用），任务停在 `CONCLUDED`、`attempt_count` 没变、
+未开出 `#2`。诊断上下文一点没用上。
+
+**根因：实现与设计文档不一致。** 设计（§3.2/§四）写着 `CONCLUDED` = *"已出结论，等用户反应"，
+默认沿用*；而 `ResumeCoordinator.findResumable` 实现成了"只有 SUSPENDED 短路路由，
+CONCLUDED 交给意图分类"。**把"等用户反应"的状态当普通新问题路由，与状态定义相悖。**
+
+**修复**：`findResumable(conversationId, question)` 改为
+`SUSPENDED → 归它` / `CONCLUDED → 默认归它`，并补上设计里说过的**新目标强信号例外**——
+本轮消息里出现与任务已确认值不同的 **traceId** 或**接口路径**时交回意图分类（确定性判据，不耗模型）。
+
+**守卫**：`ResumeCoordinatorTest` 11 例（异议必归诊断、换 traceId/接口算新目标、同接口仍归它、
+任务关键数据缺失时不误判、空消息不误判…）。
+
+### 修复后的真机复验（全部通过）
+
+```
+任务:      a1dd1d86-…  attempt_count = 2       ← 异议正确归入既有任务并开新 attempt
+引擎会话:  #2 SUSPENDED   #1 COMPLETED          ← 旧会话未被覆盖
+prior_findings 槽:                              ← 注入生效
+  上一轮已确立的主张（用户可能正对其中某条提出异议，请据此回应或修正）：
+  - [ROOT_CAUSE] order-service 在 prod 环境处理 POST /api/invoice/reverse…
+  - [FIX] 校验通过，修正后报文如下…
+```
+
+确认后跑完 attempt #2，**主张的失效语义正确**：
+
+```
+SUPERSEDED | attempt_no=1 | 6 条   ← 旧主张转「被取代」，未删除
+ACTIVE     | attempt_no=2 | 6 条   ← 新结论主张生效
+```
+
+闭环成立：**结论 → 抽主张落库 → 追问带上主张 → 新结论取代旧主张**。
+
+### 教训
+
+这条 bug **单测覆盖不到**——`OpsRunnerTaskTest` 直接调 `OpsRunner`，绕过了
+`ResumeCoordinator → ChatOrchestrator` 这段路由。只有把消息从 UI 打进去才会暴露。
+§10.5 里"端到端没有覆盖"那条自评，这次以另一种形式被印证了。
+
+**通用教训：单测能验证"组件做对了它被要求做的事"，验证不了"组装起来是不是对的事"。**
+路由层（谁决定把消息交给谁）尤其如此——它是各组件之间的胶水，没有单一归属。
+
+---
+
+<!-- 原文件：docs/plans/2026-09-20-rag-multiturn-context.md -->
+
+# RAG 线多轮上下文（2026-09-20 设计 + 实施计划）
+
+**决策：RAG 主线保留最近 3 轮对话。**
+
+> **落地状态（2026-09-20）**：P0-1 / P0-2 / 阶段 1 / 阶段 2 **已实施**，编译通过 + 全量测试绿
+> （新增 `ChatMessageWriterTest` 9 例）。**真机未验**——本机 `rag-postgres` 容器处于 Exited，
+> 未启动；SQL 边界与多轮效果待真机回归，见 §六。
+
+## 一、现状（改造前，以代码为准）
+
+| 位置 | 现状 |
+|---|---|
+| `ChatMessageWriter.historyContext` | 硬编码 `LIMIT 4`（2 轮），每条 500 字符截断，**无配置项**，**零测试**（全仓唯一实现，无 test fake） |
+| `ChatOrchestrator:216` | 全仓唯一读取点 |
+| `KbRewriteExecutor` round 0 | 唯一消费者 → `QueryRewriter.rewrite(query, history, clarify)` |
+| `RagAnswerStreamer:135` | 生成侧**无历史**：`answer(question, ragContext.text(), null)` |
+| `IntentClassifier.classify(String)` | 单参，**无历史** |
+| `QueryRewriter:103` | 英文 query 直接 `return spellFix(query)` → **英文多轮无指代消解** |
+| `DocReferenceClarifier` | 指代悬空反问（正则 + 文档名比对，取 `recentUserText(…, 10)`，窗口比改写宽） |
+| `ChatClientConfig:48` | 明确「单轮阶段不挂 ChatMemory 顾问」——chitchat 传的 `CONVERSATION_ID` 无人消费 |
+
+**一句话**：历史只服务"查得对"（查询改写），不服务"答得对"（生成）。本次要补的是后半句。
+
+## 二、开工前必须先处理（P0，与 3 轮改动同源）
+
+### P0-1 答案缓存是跨会话的 —— 多轮追问会串答案
+
+- exact key = `CacheKeys.answerKey(ruleNormalized, paradigm, docver, promptHash)`（`AnswerCacheCoordinator:48`）
+- 语义 key = WHERE `paradigm + docver + prompt_hash`（`SemanticAnswerCache:79`）
+- **两者都没有会话维度**，而入 key 的问题文本是**规则归一化后的原句**——带指代的追问句（"它的配置呢"）
+  字面完全相同、向量距离≈0
+- 后果：A 会话（上文 Redis）问出的答案，B 会话（上文 Kafka）同句命中语义缓存（sim ≥0.95）→ 直接重放
+- **这个 bug 今天就存在**，不是 3 轮改出来的，只是多轮用得少没暴露；
+  3 轮 + 历史进生成会把它放大成「用 A 的上下文生成的答案喂给 B」
+
+**处理**：本轮 history 非空 → 答案缓存**整条旁路**（exact 读写 + 语义读写全跳过）。
+
+- 需要把 `historyContext` 从 `:216` 上移到缓存块（`:191`）之前——顺序本来就该如此（历史是决策输入）
+- ⚠️ 光把 key 置 null 不够：`storeAnswer` 里 `semanticAnswerCache.store(...)` 是**无条件**调的（`:164`），
+  必须一并加开关，否则语义层照写照命中
+- 代价：会话第 2 轮起不吃缓存。缓存的主战场本就是跨会话的独立提问（"redis 怎么配置"），可接受
+- **升级路径（暂不做）**：把 `rewritten_query` 从 `KnowledgeAnswer` 暴露出来，改成"改写生效才旁路"。
+  比加指代正则可靠——参照 QA 分类器从词表改 LLM 的教训（词表覆盖度不够）
+
+### P0-2 当轮问题被算进历史
+
+`ChatOrchestrator:100` 先 `appendUserMessage`，`:216` 才读历史 → 当前问题既在「历史对话」里，
+又在改写 prompt 末尾的 `当前问题：`（`QueryRewriter:115`）里再出现一次。
+**取 3 轮必须排除当轮**（修法见阶段 1）。顺带修正一个语义偏差：现状的 `LIMIT 4` 含当轮，
+实际只有 1.5 轮历史，不是宣称的 2 轮。
+
+## 三、阶段 1：历史取法（3 轮 + 排除当轮 + 可配置）
+
+### 接口（platform-shared）
+
+```java
+// ConversationStore
+/**
+ * 最近若干轮对话历史，渲染成 LLM 上下文前缀；无历史返回空串。
+ *
+ * @param spec 取法（轮数 / 单条截断 / 排除起点）
+ */
+String historyContext(String conversationId, HistorySpec spec);
+
+/** 取历史的规格。beforeMessageId 必给：编排开头已落库当轮问题，不排除就会被当成"历史"。 */
+record HistorySpec(Long beforeMessageId, int rounds, int maxCharsPerMessage) { }
+```
+
+`ChatOrchestrator` 用 `appendUserMessage` 的返回值当 `beforeMessageId`（现在这个返回值被丢掉了）。
+
+### 实现（platform-delivery，两段查询，精确 N 轮）
+
+```java
+// 1) 定位第 rounds 轮的起点：严格早于当轮的最近 rounds 条 user 消息，取最早一条的 id 作 floor
+//    WHERE conversation_id=? AND role='user' AND id < ? ORDER BY id DESC LIMIT rounds
+// 2) 取 [floor, beforeMessageId) 区间全部消息，升序渲染
+//    WHERE conversation_id=? AND id >= ? AND id < ? ORDER BY id ASC
+```
+
+按"第 N 条 user 消息"定界，而不是 `LIMIT rounds*2`——后者在**某轮没有助手回复**时
+（取消生成、落库失败）会算歪（多带一条悬空消息、少带一轮）。
+`< 2 条返回空串` 的旧短路随之取消：排除当轮后第 2 轮天然是 2 条。
+
+⚠️ 索引：`sa_message` 现有 `idx_sa_msg_conv (conversation_id)`（`init.sql:122`），无 `(conversation_id, id)`。
+单会话消息量小（实测全库 813 条），暂不加索引；若会话变长再补复合索引。
+
+### 配置（`ChatProperties`，`rag.chat.*`）
+
+```yaml
+rag:
+  chat:
+    history:
+      rounds: 3                  # 多轮上下文轮数（每轮 user+assistant）
+      message-max-chars: 500     # 单条截断（沿用现状值）
+```
+
+### 单测
+
+`ChatMessageWriter` 依赖 mapper，SQL 部分**真机验证**（照 `BEGIN…ROLLBACK` 的老办法）。
+可测的部分抽成包内 static 纯函数：
+`pickWindow(List<MessageEntity>, Long beforeId, int rounds)` + `render(List<MessageEntity>, int maxChars)`，
+单测覆盖：排除当轮 / 不足 3 轮 / 某轮缺助手回复 / 500 字截断 / 空名单。
+（现状这段逻辑零测试，是本次唯一能补的回归网。）
+
+## 四、阶段 2：生成侧接历史
+
+### 位置
+
+`KnowledgeAnswerService.answer(question, contextText, systemPrompt)`
+→ `answer(question, contextText, history, systemPrompt)`
+
+user message 结构（**history 为空时整块不拼**，保证首轮零变化——这是可回归的前提）：
+
+```
+{documents 上下文}
+
+<conversation-history>
+用户：…
+助手：…
+</conversation-history>
+
+<question>{question}</question>
+
+<output-requirement>…角标要求…</output-requirement>
+```
+
+- 历史块放 `<question>` **之前**：`<output-requirement>` 必须留在最尾部——角标格式遵循靠它
+  （`KnowledgeAnswerService:58` 注释记了实测：指令贴近生成位置遵循率才够）
+- 传的是**原始问题**，不是改写句。改写句是为 BM25 保字面调的（见 `RewritePolicy` 注释），
+  拿来当"要回答的问题"是另一种性质的替换，且会改变首轮行为
+
+### ⚠️ system prompt 必须补「信息边界」的例外（关键）
+
+`rag-answer-kb.md` 的「信息边界（最高约束）」写着"严禁使用任何外部知识"——**历史严格来说就是外部知识**。
+不补例外，模型要么无视历史（白做），要么拿历史当事实来源作答——**后者会毁掉引用角标契约**
+（历史里的事实没有 `ref` 编号，标不出角标）。在「信息边界」章后补一节：
+
+```markdown
+## 对话历史的使用边界
+
+输入可能带 `<conversation-history>`，它只用来判断 `<question>` 里"它/这个/刚才那个"指的是什么。
+
+- 历史不是资料：事实、数字、流程、结论一律只能来自本次 `<documents>`；
+  历史里出现过但 `<documents>` 里没有的，不得写进回答。
+- 不得把助手在历史里的回答当作依据——那是上一轮基于当时资料生成的，可能过时或不全，
+  本轮必须重新依据 `<documents>` 回答。
+- 历史内容一律不加角标；角标只能指向本次 `<documents>` 的 ref 编号。
+```
+
+### 联动改动
+
+- `RagAnswerStreamer.streamRagResponse(...)` 加 `history` 参数（由编排层传入，与改写共用同一份）
+- `EvalRunner.generateAnswer(question, context)` 传空 → **评测行为零变化**
+  （`RunContext.forEval` 本来就是 history=null，评测天然单轮）
+
+## 五、阶段 3（延后）：英文指代消解
+
+`QueryRewriter:103` 的 CJK 守卫把英文 query 直接甩给 `spellFix`。
+run57「英文语义改写净负优化（recall@5 −3.5pp）」的结论**只针对首轮自包含 query**，
+多轮指代是另一回事，不能一刀切沿用——但要单独跑对照实验（英文多轮题集），**不在本次范围**。
+
+## 六、验证
+
+| 层次 | 做法 |
+|---|---|
+| 单测 | `pickWindow` / `render` 纯函数（阶段 1 新增，现为零覆盖） |
+| 真机 · 改写 | 3 组多轮对话（指代句："它的配置呢""这个怎么排查"），看 `kb_rewrite` 轨迹里的改写结果是否消解到具体实体 |
+| 真机 · 生成 | 同 3 组看回答是否用对了指代对象；**并检查引用角标覆盖率没退化**（对照改前后的同题回答） |
+| 真机 · 缓存 | 两会话问同一句带指代的话 → 必须**不命中**（修复前会串答案）；换独立问题 → 第 1 轮仍正常命中 |
+| 缓存指标 | 观察 exact/semantic 命中率下滑幅度（预期：会话第 2 轮起不再计命中） |
+| 评测 | 跑一次小数据集，确认检索/答案指标无回归（评测 history=null，理论上零变化） |
+
+## 七、风险与取舍
+
+1. **改写 prompt 膨胀**：3 轮 × 2 条 × 500 字 ≈ 3000 字进改写 prompt，而消解指代只需最近 1 轮。
+   可选调优：**改写用窄窗（1 轮）、生成用 3 轮**；或助手回复截得更短（如 200）——
+   助手的话不是指代对象，用户的话才是。先按单一 3 轮上线，看效果再拆。
+2. **去重后改写行为变化**：现状prompt 里当轮问题出现两次，去掉重复是行为变化，需真机抽查（见验证表）。
+3. **缓存命中率下降**：见 P0-1 取舍。
+4. **不挂 ChatMemory**：`ChatClientConfig:48` 记的坑（资料被折叠进记忆、conversationId 串会话）仍在，
+   本方案走"显式拼文本"，不碰顾问。
+
+## 九、落地记录（2026-09-20）
+
+**改动清单**（8 个文件 + 1 个新测试）：
+
+| 文件 | 改动 |
+|---|---|
+| `ConversationStore`（shared） | `historyContext(conversationId, HistorySpec)`；新增 `HistorySpec` record（上界/轮数/截断，构造器收敛非法值） |
+| `ChatMessageWriter`（delivery） | 两段查询实现：① 定位第 N 条 user 消息作下界 ② 取区间全部消息；抽纯函数 `floorIdOf` / `render` / `truncate`；删除旧的 `LIMIT 4` + `size()<2` 短路 |
+| `ChatProperties`（shared） | `rag.chat.history.{rounds:3, message-max-chars:500}` |
+| `application.yaml`（bootstrap） | 同步上述两项 |
+| `ChatOrchestrator`（business） | 新增 6.4 步读历史（`appendUserMessage` 返回值当上界）；算 `cacheable`；缓存三级查询全部按 `cacheable` 短路；历史透传检索与生成 |
+| `AnswerCacheCoordinator`（business） | `storeAnswer` 加 `cacheable` 参数（false 时 exact + 语义都不写） |
+| `RagAnswerStreamer`（business） | 加 `history` / `cacheable` 参数并透传 |
+| `KnowledgeAnswerService`（knowledge） | `answer(question, context, history, systemPrompt)` + `historyBlock()`（空历史逐字节不变，保证首轮可回归） |
+| `rag-answer-kb.md`（prompt） | 新增「对话历史的使用边界」章 + 输入结构图补 `<conversation-history>` |
+| `ChatMessageWriterTest`（新增） | 9 例：下界取值 / 无历史 / 渲染 / 半轮窗口 / 截断 / null / 规格收敛 |
+
+**与原计划的差异**：
+
+1. 缓存旁路的具体形式定为**沿调用链传一个 `cacheable` 布尔**（编排算 → streamer 传 → coordinator 收），
+   而不是在 streamer 里由 `history` 反推——策略留在编排层，与"改写策略不埋在改写器里"同一条原则。
+   代价：`streamRagResponse` 参数到了 12 个，后续值得收成一个参数对象。
+2. `EvalRunner` **零改动**：它有自己的一条生成链（`ingestionChatClient` + `eval/answer-gen`），
+   与 `KnowledgeAnswerService.answer` 无关，评测天然单轮。
+3. 纯函数抽得比计划更细（多了 `floorIdOf` / `truncate`），让"取错下界"这个静默失败点进了单测。
+
+**已验证**：`mvn test` 全绿（business 135 / delivery 10（含新增 9）/ eval 40 / 其余各模块通过）。
+
+**未验证（真机，需先 `docker start rag-postgres`）**：
+
+- 两段 SQL 的边界（`id < 当轮` / `id >= 下界`）——纯函数覆盖不到，按惯例走真机
+- 3 轮历史进改写 prompt 后的实际消解效果（`kb_rewrite` 轨迹里看改写结果）
+- 多轮回答的指代正确性 + **引用角标覆盖率没退化**（新 prompt 章可能被模型忽略或过度引申）
+- 带指代的追问句不再命中答案缓存；独立问题的首轮仍正常命中
+
+## 八、明确不做 / 待定
+
+- 英文指代消解（阶段 3，需单独对照）
+- 意图分类接历史（域判定对上下文不敏感，接了只多一层不确定性）
+- 历史摘要压缩（3 轮 + 截断够用，到顶再说）
+- 缓存从"带历史就旁路"升级为"改写生效才旁路"（需先暴露 `rewritten_query`）
+
+---
+
+<!-- 原文件：docs/plans/2026-09-20-core-convergence.md -->
+
+# 2026-09-20 核心收敛：契约进 core、实现进平台、策略留业务
+
+> 背景问答：三条业务线（诊断 ops / RAG / 闲聊）的 context、trace、session 是否"各做各的"、能否收敛到 agent 核心。
+> 调研结论（三路并行探查）修正了前提：应用层轨迹已统一（同格式同表同入口）、历史窗口只有一份实现、
+> 消息/任务两个世界拆得对。真正的病灶是三处：**core 契约残缺**（轨迹无绝对时间戳）、**core 钩子未接线**
+> （StartOptions.traceId 闲置、span 体系休眠）、**出口语义靠命名约定**（escalate_node 字符串）。
+
+## 一、判据与三层模型
+
+唯一判据：**会不会被下一条业务线复制？** 会被复制的是机制，必须收敛；必然自定的差异是策略，声明即可。
+
+```
+业务线（ops / RAG / chitchat / 第四线…）   ← 策略：窗口参数、判据、prompt 边界、域语义
+        ↑ 声明
+平台机制层（shared + 能力域 + business 横切） ← 机制唯一实现：生命周期、装配、持久化、传播
+        ↑ 实现
+agent-core（com.agentframework，零依赖）     ← 契约与原语：引擎、槽位、HITL、轨迹契约、span SPI
+```
+
+- 契约进 core、实现进平台、策略留业务。
+- "core 不做实现"只约束存储/导出（SessionStore/SlotStore/SpanExporter 均是此模式），**不禁止 core 出契约**。
+  （旧论证"内核状态不可跨执行查询所以 Findings 不进 core"只排除实现，不排除契约——见 §五 C7。）
+
+## 二、逐项裁决总表
+
+| # | 事项 | 裁决 | 归宿 |
+|---|---|---|---|
+| C1 | 轨迹步绝对时间戳 | **收敛（core 契约残缺）** | ExecutionTraceStep 补字段 |
+| C2 | traceId 对齐 | **收敛（钩子闲置）** | StartOptions.traceId 接线 |
+| C3 | 节点终态语义 | **收敛（命名约定→声明）** | NodeDefinition.terminalKind |
+| C5 | core span 体系休眠 | **激活**（SpanExporter/Tracer→OTel 桥） | 平台侧桥接实现 |
+| C6 | 会话扫描契约 | 延后（reaper 尚可直接凿 PG，不阻塞） | core SessionStore 加只读扫描面 |
+| C7 | ClaimLedger 契约 | 延后（触发：第四条线需要"跨轮可否定结论"） | core SPI + 平台关系实现 |
+| P1 | 任务/尝试生命周期正名 | 延后（事实上已线无关，搬移是结构工程） | business/task → 平台服务，任务类型参数化 |
+| P2 | 有界装配器（4+ 份截断实现） | 延后（触发：下一个注入点出现） | business 横切 util |
+| P3 | findings/claims 渲染双份复制 | **收敛（本次）** | 共享渲染器，编号契约代码化 |
+| P4 | 线程上下文传播三份实现 | 延后（install 已全局，存量重复无害化中） | 收敛到 TaskPropagation 一份 |
+| P5 | recentUserText 裸窗口 | 延后（仅 1 消费方） | 收编进 HistorySpec 语义 |
+| P6 | cacheable 声明化 | 延后（与 P8 参数对象同一待办） | 请求上下文声明式属性 |
+| P8 | streamRagResponse 12 散参 | 延后（触发：新增编排分支时） | 参数对象 → 分支模板 |
+| — | Workspace/Memory 死壳 | 延后（ContextManager 手术，单独批次） | 从 core 删除 |
+| — | RAG 采纳 Task（attempt≡1） | 延后（可选，理论已统一） | Task 层可选注册 |
+
+保持域自治（结论：自治即正确，收敛反而是错）：窗口/预算参数、prompt 边界修辞（模式库问题）、
+Findings 的 kind 语义、targetShifted 判据、SlotProvenance、引用角标契约、缓存键构成、
+"无 agent 执行→无轨迹"的短路分支选择权。
+
+## 三、本次实施批次（2026-09-20）
+
+### C1 轨迹步绝对时间戳
+
+- `engine/core/ExecutionTraceStep`（record）在 `durationMs` 后加 `startedAtMs`/`endedAtMs`（epoch 毫秒）；
+  `toDocument()` 非零时输出。
+- `engine/workflowruntime/DefaultWorkflowRuntime` 节点循环：`nodeStartNanos` 旁记墙钟
+  `nodeStartWallMs`，`traceStep(...)` 加参透传；三个调用点（suspend/failed/normal）同步；`endedAtMs = 开始 + duration`。
+- 业务侧 `trace/EngineTraceMapper`：
+  - 轨迹根锚点优先取第一步 `startedAtMs`（真实执行起点），无则保留 `now − engineDuration` 反推；
+  - `stepDetail` 增补 `startedAtMs`（有值时）——绝对时间入 detail 通道，前端契约向后兼容（additive）；
+  - 单步 latency 语义不变（`now − durationMs` 技法产出的差值恒等于真实耗时，见原注释）。
+- 效果：消灭"每个数字都偏"的补偿链路第一步（反推起点），后续可完全删除反推逻辑。
+
+### C2 traceId 接线
+
+- core `runtime/session/StartOptions` 加 `withTraceId(String)`（对齐既有 with* 风格；null 安全——空则引擎自生成）。
+- `ops/OpsRunner.execute`：
+  - REST 单轮（task==null）：`StartOptions.defaults().asEphemeral().withTraceId(currentTraceId())`；
+  - 新 attempt：`.withTraceId(task.chainTraceId() != null ? task.chainTraceId() : currentTraceId())`；
+  - 挂起恢复（resume）不动——会话 traceId 已落会话。
+- `knowledge/KnowledgeRunner.retrieve`：`.withTraceId(ctx.traceId())`（RunContext 已携带编排层 otelTraceId）。
+- 效果：引擎会话（ops_engine_session 的 SessionRecord）、引擎事件（EventBus 带 traceId）、
+  以及 C5 激活后的引擎 span 根，三处与业务链 traceId 对齐；ephemeral 路径虽不落库，
+  但 DefaultEngine.startTrace 直接吃 session.traceId()（core 已留此传参点）。
+
+### C3 节点终态语义
+
+- core 新增 `definition/node/TerminalKind`（enum：FINISH / ESCALATE / ASK；`of(String)` 解析，未知返回 null）。
+- `definition/node/NodeDefinition` 加 `default TerminalKind terminalKind()`：读 meta 属性 `terminalKind`
+  （与既有 `isTerminal()` 的 meta 属性机制同风格，七个 NodeDefinition 实现零改动）。
+- `ExecutionTraceStep` 末尾加 `terminalKind` 字段（nullable）；`DefaultWorkflowRuntime.traceStep` 从 node 取；
+  `toDocument()` 非空输出。
+- 图声明：ops 图与 knowledge react 图的 `escalate_node` meta 加 `withAttribute("terminalKind", "ESCALATE")`。
+- `engine/outcome/RunOutcomeMapper`：声明优先（executionTrace 中存在 terminalKind==ESCALATE 的步 → ESCALATE），
+  保留 visitedNodes.contains(escalate_node) 与 escalate_reason 槽位兜底——旧图定义未声明时行为不变。
+- 效果：第四条线声明终态语义即可被出口映射识别，不再复制节点命名约定。
+
+### C5 span 体系激活：OtelSpanTracer 桥
+
+- 新文件 `business/engine/OtelSpanTracer implements com.agentframework.crosscutting.trace.Tracer`：
+  - `startTrace(traceId, name, kind, attrs)`：经 `GlobalOpenTelemetry.get().getTracer("agent-core")` 建 OTel span；
+    **父级优先取 ambient `Span.current()`**（TaskPropagation 已把请求链上下文搬进引擎线程 → 引擎 span
+    成为请求 span 的真子 span，traceId 天然对齐）；无 ambient 且 traceId 为 32 位 hex 时以非记录
+    SpanContext 强制该 traceId 作根；同时建 core Span 镜像（core 内部按 parentId 串联）。
+  - `startSpan`：按 core 父 span id 查映射取 OTel 父 context；双镜像入 `Map<coreSpanId, otelSpan>`。
+  - `endSpan`：用 core span 的 startTime/endTime 回填 OTel（setStartTimestamp + end(Instant)），映射移除。
+  - `recordEvent/setAttribute` 透传；`flush/finishedSpans` no-op（OTel 自行导出）。
+  - SpanKind 映射：core AGENT→INTERNAL，其余同名直传。
+- 装配：`AgentEngineConfiguration` 的 `EngineBuilder.create()....tracer(new OtelSpanTracer())`。
+  默认启用——运行时未配 OTel 导出时 GlobalOpenTelemetry 为 no-op，天然安全降级。
+- 效果：引擎内每次 run（agent:<id> 根）与每个节点（node:<id>）自动进 OTel 链；
+  **ops 线引擎内 LLM 调用的可观测不再依赖手工 @TelemetryStep 埋点**（此前 RAG 线 17 处、ops 线 0 处的采用不均被抹平）。
+
+### P3 findings/claims 渲染器收敛
+
+- 新文件 `business/task/FindingsText`：`renderNumbered(List<AgentFinding>, maxItems, claimMax)`
+  产出 `[#n] [kind] claim` 行序列 + 显式省略行；常量（10 条 / 400 字符）收敛为一份。
+- `OpsRunner.renderFindings` / `TaskFollowUpQa.renderClaims` 改调共享渲染器（前者拼标题段，后者空列表回 "（无）"）。
+  输出逐字节等价——编号顺序与 activeOf 查询一致的锁步从"注释约定"变"同一函数"。
+
+### 小清理
+
+- `KnowledgeAnswerService.chitchat`：删除无人消费的 `ChatMemory.CONVERSATION_ID` advisor 参数
+  （ragChatClient 无 ChatMemory advisor，参数是死的）及其 import；`conversationId` 形参与调用方同步收掉。
+- `OpsRunner.currentTraceId` javadoc：`AgentSessionServiceImpl` → 现职责归属 `AgentTaskServiceImpl`（chainTraceId 首轮写入）。
+- `AgentEngineConfiguration` 类注释：澄清会话表述改为 sa_agent_task 口径（sa_agent_session 已废弃）。
+
+## 四、验证
+
+## 四、验证
+
+> **实施状态（2026-09-20 当日）**：C1/C2/C3/C5/P3/小清理全部落地；
+> 测试 agent-core 164 绿、business 135 绿、knowledge 36 绿、delivery 10 绿，全仓 test-compile 干净。
+
+### 真机验证（2026-09-20，docker 浏览器 + 应用 API + DB）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| UI 回归 | ✅ 无回归 | 知识问答（引用角标/轨迹抽屉/traceId/链路按钮）、诊断挂起卡片（补充信息选项 +「我理解的信息」）均正常渲染 |
+| C1 时间戳 | ✅ | `sa_agent_trace.steps[].detail.startedAtMs` 在 knowledge 与 ops 两条线的每一步都有值 |
+| C2 traceId | ✅ | 重启后新任务 `ops-7a9a84b1…#1`：引擎会话 `record.traceId` == `sa_agent_task.chain_trace_id`（`aligned=t`）；改动前历史任务全部 `f` |
+| C3 终态声明 | ✅ 声明路径生效，**发现并修复一处漏声明** | 真机发现 `KnowledgeQaGraphFactory` 的 `kb_done`/`kb_shortcircuit` 未加 `terminalKind`（我初版只改了 react 图与 ops 图）→ 已补 `FINISH`；挂起运行不含终态节点，故 ops 侧 terminalKind 未在真机出现（符合预期） |
+| C5 引擎 span | ⚠️ **本地无法验证（OO 故障，与改动无关）** | 见下 |
+
+**C5 验证受阻的环境问题（独立故障，需另行处理）**：
+- OpenObserve 的 traces 流**近 24 小时 0 条可检索**（`GROUP BY service_name` 空集），但流统计声称 `doc_time_max` 是当天；
+- 绕过 collector **直发 OO `/api/default/v1/traces` 返回 HTTP 200**（`partialSuccess: null`），随后按 `service_name`/`trace_id` 检索仍 0 命中；
+- 同实例**日志流正常**（`springai_rag_logs` 当天数据可检索，最新到当前分钟）——说明 OO 只有 trace 摄入→可检索这条路径坏了；
+- 应用侧无桥接异常（日志搜 `otel span end failed` / `OtelSpanTracer` 均 0 命中），故 OtelSpanTracer 未抛错；
+- OO 容器 stdout 日志停在 09-03，且 `docker logs --since 45m` 为空（与其仍在服务 API 矛盾）。
+- **结论**：OO 实例的 trace 索引已卡死（历史上有过「08-24 起 traces 断流」同类记录）。C5 需在 OO 恢复后复验：OO 里应出现 `agent:<agentId>` 根 span + `node:<id>` 子 span，且 traceId 与 `sa_agent_trace.trace_id` 一致。
+
+- `mvn -pl platform-agent-core,platform-business,platform-knowledge -am test`（core record 变更波及面全在编译期暴露）。
+- 重点测试：core 引擎/workflowruntime 既有测试（ExecutionTraceStep 构造）、
+  business 的 AskMissingHandoffTest / OpsGraphSuspendTest / ChatMessageWriterTest（不应受影响）。
+- 真机验证点（下次启动时观察）：OO 里 ops 诊断一次 run 出现 agent:ops_diagnose 根 span + node:* 子 span，
+  且 traceId 与 sa_agent_trace.trace_id 一致；sa_agent_trace.steps detail 出现 startedAtMs。
+
+## 五、延后项与触发条件
+
+| 项 | 触发条件 | 第一步 |
+|---|---|---|
+| C6 会话扫描契约 | reaper 需要跨存储回收或第四条线自带引擎会话 | SessionStore 加 `listIdsIdleSince(Instant)` |
+| C7 ClaimLedger 契约 | 第四条线需要跨轮可否定结论（报告线/深化 RAG 追问） | core 出 SPI + 数据模型，sa_agent_finding 实现平移 |
+| P1 任务生命周期正名 | 第四条线需要挂起/恢复/多 attempt | business/task → 平台服务 + 任务类型注册 |
+| P2 有界装配器 | 新增第 5 个截断注入点 | business 横切 util + 四处迁移 |
+| P4 传播收敛 | 触碰 LlmCallGuard/Controller 线程模型时 | common 出 SPI，observe 注册 ContextPropagator |
+| P5 窗口语言统一 | 第三个读历史的消费方出现 | recentUserText 收编 HistorySpec |
+| P6/P8 缓存声明 + 分支模板 | 新增编排分支 | 参数对象 → cacheable 声明式属性 |
+| Workspace 删除 | 单独批次（ContextManager 手术） | 先摘 Memory 接口消费 |
+
+## 六、变更文件清单（本次）
+
+core（platform-agent-core）：
+- `engine/core/ExecutionTraceStep.java`（+startedAtMs/endedAtMs/terminalKind、toDocument、withIndex 透传）
+- `engine/workflowruntime/DefaultWorkflowRuntime.java`（墙钟采集、traceStep 加参）
+- `runtime/session/StartOptions.java`（+withTraceId）
+- `definition/node/TerminalKind.java`（新增）
+- `definition/node/NodeDefinition.java`（+terminalKind default 方法）
+
+business（platform-business）：
+- `trace/EngineTraceMapper.java`（真实锚点优先、detail 增补）
+- `engine/outcome/RunOutcomeMapper.java`（声明优先 + 兜底）
+- `engine/OtelSpanTracer.java`（新增）
+- `engine/AgentEngineConfiguration.java`（tracer 装配 + 注释修正）
+- `ops/OpsRunner.java`（StartOptions.traceId ×2、renderFindings 改调、注释修正）
+- `ops/TaskFollowUpQa.java`（renderClaims 改调）
+- `ops/workflow/stages/TerminalStageModule.java`（escalate/conclude 节点终态声明——节点构造实际在此，
+  OpsDiagnoseWorkflowFactory 只持有常量）
+- `knowledge/workflow/KnowledgeReactGraphFactory.java`（escalate 节点声明）
+- `knowledge/KnowledgeRunner.java`（StartOptions.traceId）
+- `task/FindingsText.java`（新增）
+
+knowledge（platform-knowledge）：
+- `answer/KnowledgeAnswerService.java`（删死参数）
+- 调用方 `ChitchatResponder`（chitchat 签名同步）

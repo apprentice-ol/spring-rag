@@ -8,9 +8,17 @@
 
 > **结构变更提示（2026-09-12）**：项目已按"框架 / 能力域 / 业务域"重构为 16 个 Maven 模块，
 > 编排决策回归 `platform-business`，`platform-delivery` 只做通道交付（原单模块 `app/`、旧 `platform-chat` 均已不存在）。
-> 结构与命名以 `docs/project-structure.md` 为准，跨会话交接看 `plan/2026-09-12-module-split-progress.md`。
+> 结构与命名以 `docs/architecture.md` 为准，跨会话交接看 `docs/plans/platform-refactor.md`（模块化拆分进度）。
 
-## 多模块结构（2026-09-12 定稿，权威说明见 docs/project-structure.md）
+## 仓库目录约定（2026-10-11 整理）
+
+- `docs/` — 文档中心（总索引 `docs/README.md`）；`docs/plans/` — 计划与设计归档（按主题合并归档，新计划仍按日期新建；跨会话交接入口）
+- `docker/` — 全部容器资产（3 个 compose 都在这里；**命令在项目根执行且必须带 `--project-directory .`**，否则项目名/数据卷名漂移）
+- `scripts/` — 构建/部署/运维脚本（清单见 `scripts/README.md`；提交安全铁律的 pre-commit 钩子也在其中）
+- `.claude/pipeline/` — 流水线配置与台账（pipeline.yml / reports / apifox；全局 skill 读取此位置，旧位置 `.claude/pipeline.yml` 兼容）
+- 环境词表（四词制）：`local`（开发·裸跑）/ `docker`（docker 开发·本机 compose）/ `dev`（测试·服务器）/ `prod`（正式·预留）——统一挂 pipeline.yml 的 `deploy.targets.<env>`，Apifox 环境同名对齐
+
+## 多模块结构（2026-09-12 定稿，权威说明见 docs/architecture.md）
 
 > 本节已随"模块化拆分 + 编排回归业务层"重构刷新；旧 `app/` 单模块结构自 2026-09-12 起不再存在。
 
@@ -18,7 +26,7 @@
 customer-platform（父聚合 POM，groupId com.jjx.customer，包根 com.jjx.customer.platform）
 ├── 框架层（零业务依赖，可独立成仓）
 │   └── platform-agent-core                内核（包根 com.agentframework，2026-09-18 自 agent-framework 仓库整包并入，
-│                                          取代旧 platform-agent-framework，见 docs/agent-rebuild-spec.md §9）：
+│                                          取代旧 platform-agent-framework，见 docs/architecture.md「Agent/Chat 层重建规格」§9）：
 │                                          engine / definition / crosscutting / runtime / infra / extension / sdk
 ├── 基础设施层
 │   ├── platform-common                    util / mybatis 类型处理器 / 分页 DTO
@@ -78,7 +86,7 @@ POST /chat/stream
 5. **手写 JDBC，不走 Spring AI VectorStore**：入库 `IndexerNode` / 查询 `VectorSearchChannel` 均手写 JDBC 直写 pgvector 表（cosine + HNSW），**未用** Spring AI `VectorStore`/`Document` 抽象。表格原文进 content、key-value 仅算 embedding 后丢弃，**不塞 `metadata["raw_content"]`**（旧描述未实现）。
 6. **表前缀 sa_**：业务表 sa_document / sa_doc_collection / sa_ingestion_task / sa_ingestion_task_node / sa_ingestion_pipeline / sa_ingestion_pipeline_node / sa_conversation / sa_message / sa_agent_trace / sa_agent_session / sa_eval_dataset / sa_eval_item / sa_eval_run / sa_eval_metric（spring.sql.init 幂等建表），避免与同库 15_ragent 表冲突。向量表 spring_ai_store_vector 由建表脚本管理（手写 JDBC 读写）。
 7. **ingestionChatClient 独立 bean**：裸 ChatClient（不带 Advisor），给 Enhancer/Enricher/意图分类/槽位抽取/replan 纯 LLM 调用用；ragChatClient 给查询回答用（无 Advisor 挂载）。
-8. **人在环中 HITL（2026-09-19，P1–P3 落地，设计见 `plan/2026-09-19-human-in-the-loop.md`）**：挂起/恢复原语统一承载四种人机协作（问信息/决策移交/计划审批/关键确认），协议件 `HumanRequest`/`HumanResponse` 在 agent-core `definition/workflow`。**P1**：replan 的 escalate 从死亡终点改为 DECIDE 挂起（附证据 + 点选项，终止是选项之一），`pending_human_request` 槽位暂存，结构化 clarify 透出到前端决策卡片。**P2 回复解释器**：`ops/HumanResponseInterpreter`（prompt 资产 `workflow/ops_diagnose_v2/human-response`）把自由文本解析成 `{decision,directive,slots,overrides,autonomy_hint}`——三条防线（点选回传不耗模型 / 模型不可用即退化 `HumanResponse.parse`，最坏 = P1 / 槽名白名单 + 按当前值调和分桶误差）；AskMissing 解释器抽到槽则跳过抽槽器；directive 进 think prompt（软消费不改图）。**P3 自主档位**：`AutonomyLevel`(L1/L2/L3) × `AutonomyPolicy`（目录声明 ∩ 会话档位，只能收紧）管 auto-resolve 三层；档位优先级 请求参数 `?autonomy=` > 回复里的 `autonomy_hint` > `sa_agent_session.autonomy_level` > L2。**P3 槽位来源**：`SlotProvenance` 状态机（rule/default/llm/log_query/user_override）沿用 `inferred_slots` JSON；新确定性协议 `#override:<slot>=<value>`（零模型调用），卡片渲染「槽位 = 值 + 来源角标 + 改成 …」。
+8. **人在环中 HITL（2026-09-19，P1–P3 落地，设计见 `docs/plans/hitl-and-task-qa.md`）**：挂起/恢复原语统一承载四种人机协作（问信息/决策移交/计划审批/关键确认），协议件 `HumanRequest`/`HumanResponse` 在 agent-core `definition/workflow`。**P1**：replan 的 escalate 从死亡终点改为 DECIDE 挂起（附证据 + 点选项，终止是选项之一），`pending_human_request` 槽位暂存，结构化 clarify 透出到前端决策卡片。**P2 回复解释器**：`ops/HumanResponseInterpreter`（prompt 资产 `workflow/ops_diagnose_v2/human-response`）把自由文本解析成 `{decision,directive,slots,overrides,autonomy_hint}`——三条防线（点选回传不耗模型 / 模型不可用即退化 `HumanResponse.parse`，最坏 = P1 / 槽名白名单 + 按当前值调和分桶误差）；AskMissing 解释器抽到槽则跳过抽槽器；directive 进 think prompt（软消费不改图）。**P3 自主档位**：`AutonomyLevel`(L1/L2/L3) × `AutonomyPolicy`（目录声明 ∩ 会话档位，只能收紧）管 auto-resolve 三层；档位优先级 请求参数 `?autonomy=` > 回复里的 `autonomy_hint` > `sa_agent_session.autonomy_level` > L2。**P3 槽位来源**：`SlotProvenance` 状态机（rule/default/llm/log_query/user_override）沿用 `inferred_slots` JSON；新确定性协议 `#override:<slot>=<value>`（零模型调用），卡片渲染「槽位 = 值 + 来源角标 + 改成 …」。
 
 9. **缓存层（2026-09-10，Redis 持久化 + Sentinel-lite 频率策略 + 动态限流 + 语义缓存）**：`rag.cache.*` 配置（总开关+每层 enabled/ttl/admission-threshold）。五层：意图（仅 conf≥0.7）/检索结果/日志工具（trace_id 24h，时间窗 60s 分钟桶 key）/精确答案（重放 citations→message→meta）/查询 embedding。失效 = docver 版本号（入库挂 IngestionEngineService 双 INCR `_all`+collectionId，key 拼版本自然换，不做 keys 扫删）+ TTL 兜底。装饰器 @Primary（CachingIntentClassifier/CachingRetrievalEngine），**检索缓存 key 必含 SearchContext 全参数**（eval 参数扫描正确性硬约束）；LogDiagnoseService 故意注入具体类绕过缓存保实时。**频率策略**（统计/决策/编排三分离：FrequencyTracker 只计数、CacheFrequencyPolicy 纯函数决策）：**2026-09-11 统计器进程内化**（Sentinel LeapArray 朴素版：每 key 16 槽环形时间桶，槽打包「桶纪元<<32|计数」，写 O(1) CAS、求和 O(16)；`rag.cache.freq-max-keys` 上限 + 冷 key sweep）——原 Redis INCR+EXPIRE 每请求固定多 4 次 RTT，统计开销反超缓存收益，且 Redis 故障连带频率策略失效；进程内后热路径零 Redis 调用、降级期准入照常（多实例计数偏低/重启清零为已知取舍，单实例无碍）。窗口内出现满阈值才写（retrieval/answer 默认 2，防长尾一次性查询污染；eval 走 metadata.intent=EVAL 旁路），命中且窗口计数达热度档（≥5 ×4 / ≥20 ×10）延长 TTL——key 含 docver 所以 TTL 只是内存旋钮，延长零正确性风险。**动态限流（熔断联动）**：RedisHealth 共享断路器（连续 5 败 → OPEN 冷却 30s → 半开探测恢复），RedisCacheStore/DocumentVersionStamp 两处共用——慢死形态（连接挂起×每请求 7-8 次操作×3s）等待归零；DegradeGuard 在降级期对昂贵路径（LLM 流式/ops 诊断）限并发 `rag.chat.degrade-limit: 8`（健康期零成本直通，检索侧由 ragContextExecutor 天然 bulkhead），拒绝发礼貌 SSE 提示；connect-timeout 收紧 1s。**语义缓存**：sa_cache_answer（pgvector 1024 维 + HNSW cosine），exact miss 后按归一化问题 embedding 相似度 ≥0.95 命中重放（同范式+同 docver 进 WHERE）；失效靠 docver+概率清理（TTL/容量），无反馈机制；写入不做频率准入（字面不同的重复问题正是靶子）；QueryEmbedder 统一查询 embedding（向量通道与语义缓存共享缓存）。Redis 侧 maxmemory+volatile-lru 兜底（只逐出带 TTL 的缓存 key，MQ stream/docver 无 TTL 不受影响）。
 
