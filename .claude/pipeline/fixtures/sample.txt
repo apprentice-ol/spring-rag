@@ -1,0 +1,2 @@
+smoke fixture for upload deep-test 2026-10-11
+这是一个用于上传接口深测的样本文件，内容长度足以通过分块过滤，专供流水线回归使用。

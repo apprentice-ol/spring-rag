@@ -58,6 +58,9 @@ frontend:
     copy_to: 'platform-bootstrap/src/main/resources/static'
 
 api:
+  # ---- 测试资产 ----
+  # multipart 上传用例的 fixture 目录（apifox-gen-cases.py 读取；小文件入库共享，跨会话/跨机器可重复跑）
+  fixtures_dir: '.claude/pipeline/fixtures'
   # ---- OpenAPI（Apifox 同步源头）----
   openapi:
     url: 'http://localhost:9081/api/rag/v3/api-docs'
@@ -88,6 +91,8 @@ api:
 
 # 联调清单（阶段 4 web-test 核心路径）
 testing:
+  # 接口/交互预期规格（三档路径）权威载体：深测/联调先读、偏差回流（条目格式见该目录 README）
+  expectations_dir: 'docs/requirements'
   e2e_cases:
     - '对话页 → 发消息 → SSE 流式响应（含 traceId 回传）'
     - '管理页 → 控制台（数据与健康状态渲染）'
