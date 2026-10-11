@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS sa_eval_dataset (
     id           BIGSERIAL    PRIMARY KEY,
     name         VARCHAR(128) NOT NULL UNIQUE,
     description  TEXT,
+    collection_id BIGINT,                                    -- 关联文档集合（LiveRAG 导入时归集写入；null=未关联）
     item_count   INT          NOT NULL DEFAULT 0,
     deleted      SMALLINT     NOT NULL DEFAULT 0,
     create_time  TIMESTAMP    NOT NULL DEFAULT NOW(),
@@ -231,6 +232,8 @@ ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NUL
 ALTER TABLE sa_eval_run    ADD COLUMN IF NOT EXISTS paradigm VARCHAR(32) NOT NULL DEFAULT 'naive';
 -- 条目分类（冗余自 sa_eval_item.category，便于运行记录按分类展示/筛选）
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS category VARCHAR(32);
+-- 评测数据集 ↔ 文档集合显式关联（LiveRAG 导入时归集写入；评测页展示/跳转、重灌影响面分析用）
+ALTER TABLE sa_eval_dataset ADD COLUMN IF NOT EXISTS collection_id BIGINT;
 -- 答案质量评测展示（answerEval）：标准答案 + 系统生成答案
 -- （expected_answer 冗余自 sa_eval_item；generated_answer 为评测时 LLM 生成，落库供前端对照）
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS expected_answer TEXT;

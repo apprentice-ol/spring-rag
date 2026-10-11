@@ -126,6 +126,11 @@ public class LiveRagImporter {
             collectionId = docCollectionService.ensureCollection(datasetName,
                     "LiveRAG 基准语料（评测数据集「" + datasetName + "」导入器自动归集）");
         }
+        // 关联显式化：集合写回数据集（评测页展示/跳转、重灌影响面分析用；重复导入刷新）
+        EvalDatasetEntity linkUpdate = new EvalDatasetEntity();
+        linkUpdate.setId(datasetId);
+        linkUpdate.setCollectionId(collectionId);
+        datasetMapper.updateById(linkUpdate);
         List<Row> sampleRows = readSampleRows(parquetFile, sampleSize);
         log.info("[LiveRAG] 数据集 {} 抽样 {} 题（共抽样 {} 行）", datasetName, sampleSize, sampleRows.size());
         if (sampleRows.isEmpty()) {

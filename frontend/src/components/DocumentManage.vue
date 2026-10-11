@@ -23,6 +23,7 @@ import {
   deleteCollection,
   type DocCollection,
 } from '../api/collection'
+import { listDatasets, type EvalDataset } from '../api/eval'
 import DocPreview from './DocPreview.vue'
 import CollectionDocTable from './CollectionDocTable.vue'
 import CollectionPickerModal from './CollectionPickerModal.vue'
@@ -145,12 +146,40 @@ const SOURCE_LABEL: Record<string, string> = {
 let resizeObserver: ResizeObserver | undefined
 
 onMounted(() => {
-  reloadAll()
+  reloadAll().then(() => applyHashCollectionExpand())
+  loadEvalLinks()
   measure()
   resizeObserver = new ResizeObserver(measure)
   if (tableWrap.value) resizeObserver.observe(tableWrap.value)
 })
 onUnmounted(() => resizeObserver?.disconnect())
+
+// ── 评测数据集关联（反向标记：集合行「评测数据集」链接 + 跳转预选）──
+const evalDatasets = ref<EvalDataset[]>([])
+const evalLinkedCollectionIds = computed(
+  () => new Set(evalDatasets.value.filter((d) => d.collectionId != null).map((d) => d.collectionId as number)),
+)
+async function loadEvalLinks() {
+  try {
+    evalDatasets.value = await listDatasets()
+  } catch {
+    evalDatasets.value = []
+  }
+}
+function gotoEval(collectionId: number) {
+  const ds = evalDatasets.value.find((d) => d.collectionId === collectionId)
+  window.location.hash = ds ? '#/admin/eval?dataset=' + ds.id : '#/admin/eval'
+}
+/** 从评测页跳转带 ?collection=<id> 时，数据加载完成后自动展开该集合 */
+async function applyHashCollectionExpand() {
+  const m = window.location.hash.match(/[?&]collection=(\d+)/)
+  if (!m) return
+  const key = 'col-' + m[1]
+  await nextTick()
+  if (!expandedKeys.value.includes(key)) {
+    expandedKeys.value = [...expandedKeys.value, key]
+  }
+}
 
 async function loadCollections() {
   try {
@@ -473,7 +502,10 @@ interface ErrResp {
             <!-- 集合行 -->
             <template v-if="record._type === 'col'">
               <template v-if="column.key === 'name'">
-                <span class="col-name"><FolderOutlined class="col-icon" />{{ record.name }}</span>
+                <span class="col-name">
+                  <FolderOutlined class="col-icon" />{{ record.name }}
+                  <a v-if="evalLinkedCollectionIds.has(record.id)" class="col-eval-link" @click.stop="gotoEval(record.id)">评测数据集 ↗</a>
+                </span>
               </template>
               <template v-else-if="column.key === 'count'">
                 <span class="col-count">{{ record.docCount }} 个文档</span>

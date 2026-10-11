@@ -24,6 +24,9 @@ public class EvalDatasetEntity {
     /** 数据集描述 */
     private String description;
 
+    /** 关联文档集合 id（LiveRAG 导入时归集写入；null=未关联） */
+    private Long collectionId;
+
     /** 条目数（冗余，便于列表展示） */
     private Integer itemCount;
 

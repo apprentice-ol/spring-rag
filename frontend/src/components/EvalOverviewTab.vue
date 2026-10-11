@@ -1,23 +1,45 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { listRuns, type EvalRun } from '../api/eval'
+import { listCollections, type DocCollection } from '../api/collection'
 import { parseAggregate, fmtScore, statusText, isRetrievalMetric, metricLabel, paradigmLabel } from './evalShared'
 
-const props = defineProps<{ datasets: { id: number; name: string; itemCount?: number }[] }>()
+const props = defineProps<{ datasets: { id: number; name: string; itemCount?: number; collectionId?: number | null }[] }>()
 
 const selectedDatasetId = ref<number | null>(null)
 const runs = ref<EvalRun[]>([])
 const loading = ref(false)
+const collections = ref<DocCollection[]>([])
+
+/** 初始选择：优先 hash ?dataset=<id>（从文档管理跳转），否则第一个数据集。
+ * 必须在 datasets 到达后判定（子组件 onMounted 时 props 尚为空），故同时挂在 watch 里调用。 */
+function resolveInitialSelection(ds: typeof props.datasets) {
+  if (!ds.length || selectedDatasetId.value) return
+  const m = window.location.hash.match(/[?&]dataset=(\d+)/)
+  const wanted = m ? Number(m[1]) : null
+  selectedDatasetId.value = wanted != null && ds.some((d) => d.id === wanted) ? wanted : ds[0].id
+}
 
 onMounted(() => {
-  if (props.datasets.length) selectedDatasetId.value = props.datasets[0].id
+  resolveInitialSelection(props.datasets)
+  listCollections()
+    .then((cs) => (collections.value = cs))
+    .catch(() => {})
 })
+
+// ── 关联文档集合（显式链接：展示 + 跳转文档管理）──
+const linkedCollection = computed(() => {
+  const ds = props.datasets.find((d) => d.id === selectedDatasetId.value)
+  const cid = ds?.collectionId
+  return cid != null ? collections.value.find((c) => c.id === cid) || null : null
+})
+function gotoCollection() {
+  if (linkedCollection.value) window.location.hash = '#/admin/docs?collection=' + linkedCollection.value.id
+}
 
 watch(
   () => props.datasets,
-  (ds) => {
-    if (ds.length && !selectedDatasetId.value) selectedDatasetId.value = ds[0].id
-  },
+  (ds) => resolveInitialSelection(ds),
 )
 
 watch(selectedDatasetId, async (id) => {
@@ -107,6 +129,9 @@ function fmtDate(t: string | undefined | null): string {
           </a-select>
         </div>
         <span class="ds-hint">所有指标均限定在所选数据集下（不同数据集难度不同，分数不可跨集比较）</span>
+        <a v-if="linkedCollection" class="ds-collection-link" @click="gotoCollection">
+          关联文档集合：{{ linkedCollection.name }}（{{ linkedCollection.docCount ?? 0 }} 篇）↗
+        </a>
       </div>
     </div>
 

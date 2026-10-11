@@ -4,6 +4,8 @@ export interface EvalDataset {
     id: number
     name: string
     description: string
+    /** 关联文档集合 id（LiveRAG 导入时归集；null=未关联） */
+    collectionId?: number | null
     itemCount: number
 }
 

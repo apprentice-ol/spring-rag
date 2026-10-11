@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
   PlusOutlined,
@@ -42,6 +42,7 @@ const dsColumns = useResizableColumns([
   { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
   { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
   { title: '题数', dataIndex: 'itemCount', key: 'itemCount', width: 80 },
+  { title: '关联集合', key: 'collection', width: 150, ellipsis: true },
   { title: '操作', key: 'action', width: 170 },
 ])
 
@@ -225,6 +226,21 @@ const targetHint = computed(() => {
 /** 语料归集：可选指定文件集；空 = 自动按数据集名查/建同名集合 */
 const importCollectionId = ref<number | undefined>(undefined)
 const collections = ref<DocCollection[]>([])
+
+// ── 关联文档集合（显式链接：列展示 + 跳转文档管理）──
+onMounted(() => {
+  if (collections.value.length === 0) {
+    listCollections()
+      .then((cs) => (collections.value = cs))
+      .catch(() => {})
+  }
+})
+function collectionOf(d: EvalDataset): DocCollection | null {
+  return d.collectionId != null ? collections.value.find((c) => c.id === d.collectionId) || null : null
+}
+function gotoCollection(d: EvalDataset) {
+  if (d.collectionId != null) window.location.hash = '#/admin/docs?collection=' + d.collectionId
+}
 const collectionHint = computed(() => {
   if (importCollectionId.value != null) {
     const c = collections.value.find((x) => x.id === importCollectionId.value)
@@ -381,7 +397,11 @@ interface ErrResp {
           <span v-if="typeof column.title === 'string' && !column.sorter" class="th-cell" v-resize:[column.key]="dsColumns">{{ column.title }}</span>
         </template>
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'action'">
+          <template v-if="column.key === 'collection'">
+            <a v-if="collectionOf(record)" class="col-link" @click.stop="gotoCollection(record)">{{ collectionOf(record)!.name }} ↗</a>
+            <span v-else class="col-none">—</span>
+          </template>
+          <template v-else-if="column.key === 'action'">
             <a-button type="link" size="small" @click.stop="openEdit(record)"><EditOutlined />编辑</a-button>
             <a-button type="link" size="small" danger @click.stop="confirmDeleteDataset(record)"><DeleteOutlined />删除</a-button>
           </template>
