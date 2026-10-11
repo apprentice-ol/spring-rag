@@ -28,6 +28,20 @@ public class EvalProperties {
     /** 评测结果推送 Langfuse 配置（rag.eval.langfuse.*） */
     private Langfuse langfuse = new Langfuse();
 
+    /** bad case 归集配置（rag.eval.badcase.*） */
+    private Badcase badcase = new Badcase();
+
+    /**
+     * bad case 归集（BadcaseService / 管理页）：领域字典供归集归因时下拉选择。
+     * 允许字典外自由值（宽松扩展），仅作前端下拉候选。
+     */
+    @Data
+    public static class Badcase {
+
+        /** 领域字典（预置，可扩展） */
+        private List<String> domains = List.of("接口文档", "技术手册", "行政制度");
+    }
+
     /**
      * Langfuse 推送（LangfusePushSink）：sa_eval_item 惰性同步为 Langfuse dataset 条目，
      * 每条 item 的指标 submitScore 挂 traceId + datasetRunId（runName=eval-run-{runId}）。

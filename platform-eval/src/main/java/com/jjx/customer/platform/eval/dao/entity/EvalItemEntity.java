@@ -73,6 +73,33 @@ public class EvalItemEntity {
     /** 是否启用：1-启用，0-禁用 */
     private Integer enabled;
 
+    /** badcase 归集渠道：online_dislike / eval_low / trace_pick / manual（非 badcase 条目为空） */
+    private String origin;
+
+    /** badcase 来源引用：{messageId,conversationId,traceId,runId,evalItemId}（PG jsonb），回跳原始现场 */
+    @TableField(value = "origin_ref", typeHandler = JsonbTypeHandler.class)
+    private String originRef;
+
+    /** 知识领域（接口文档/技术手册/行政制度/自定义），归集归因时补 */
+    private String domain;
+
+    /** badcase 状态：DRAFT / READY / IGNORED（PG 字符串，参照 {@link com.jjx.customer.platform.eval.domain.BadcaseStatus}）；非 badcase 条目为 NULL */
+    private String badcaseStatus;
+
+    /** 用户点踩原因：answer_irrelevant / content_wrong / incomplete / not_found / other */
+    private String feedbackReason;
+
+    /** 用户点踩备注（可选） */
+    private String feedbackNote;
+
+    /** 归集时证据快照：召回明细（含分数/通道）/ 意图分类 / citations / 原始答案（PG jsonb） */
+    @TableField(value = "evidence", typeHandler = JsonbTypeHandler.class)
+    private String evidence;
+
+    /** 归因结论：{stage,auto,note} 规则预判 + 人工确认（PG jsonb） */
+    @TableField(value = "triage", typeHandler = JsonbTypeHandler.class)
+    private String triage;
+
     /** 记录创建时间 */
     private LocalDateTime createTime;
 

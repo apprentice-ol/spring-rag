@@ -242,6 +242,18 @@ ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS generated_answer TEXT;
 -- 上限对照记录须与常规记录区分展示，避免误读分数）
 ALTER TABLE sa_eval_metric ADD COLUMN IF NOT EXISTS per_question BOOLEAN NOT NULL DEFAULT false;
 
+-- ===== bad case 归集（2026-10-11；设计见 docs/plans/2026-10-11-badcase-collection.md）=====
+-- badcase 即 sa_eval_item 的一种（统一模型，不建第二张表）：归集池(DRAFT) → 补 ground truth → 转正领域数据集(READY)
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS origin          VARCHAR(16);  -- 归集渠道：online_dislike/eval_low/trace_pick/manual
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS origin_ref      JSONB;        -- {messageId,conversationId,traceId,runId,evalItemId} 回跳原始现场
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS domain          VARCHAR(32);  -- 领域字典值（接口文档/技术手册/行政制度/自定义）
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS badcase_status  VARCHAR(16);  -- DRAFT(待补标准答案)/READY(可评测)/IGNORED；非 badcase 条目为 NULL
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS feedback_reason VARCHAR(32);  -- 点踩原因：answer_irrelevant/content_wrong/incomplete/not_found/other
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS feedback_note   TEXT;         -- 点踩备注（可选）
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS evidence        JSONB;        -- 归集时证据快照：召回明细(含分数/通道)/意图分类/citations/原始答案
+ALTER TABLE sa_eval_item ADD COLUMN IF NOT EXISTS triage          JSONB;        -- {stage,auto,note} 规则预判 + 人工确认
+CREATE INDEX IF NOT EXISTS idx_sa_eval_item_badcase ON sa_eval_item (badcase_status) WHERE badcase_status IS NOT NULL;
+
 -- 评测条目 agent 执行轨迹（每 run + item + attempt 一行）
 -- 从 sa_eval_metric 拆出：轨迹是「每条 item 一份」的，塞进「每条 item × 每个指标」的指标表会被复制
 -- 指标数次（实测 9 次），冗余副本占满整表。拆出后落库体积降约 89%，且轨迹与指标解耦，
@@ -282,6 +294,14 @@ COMMENT ON COLUMN sa_eval_item.source IS '来源：builtin(人工构造) / feedb
 COMMENT ON COLUMN sa_eval_item.enabled IS '是否启用：1-启用 0-禁用';
 COMMENT ON COLUMN sa_eval_item.create_time IS '创建时间';
 COMMENT ON COLUMN sa_eval_item.update_time IS '更新时间';
+COMMENT ON COLUMN sa_eval_item.origin IS 'badcase 归集渠道：online_dislike/eval_low/trace_pick/manual';
+COMMENT ON COLUMN sa_eval_item.origin_ref IS 'badcase 来源引用：{messageId,conversationId,traceId,runId,evalItemId}';
+COMMENT ON COLUMN sa_eval_item.domain IS '知识领域（接口文档/技术手册/行政制度/自定义），归集归因时补';
+COMMENT ON COLUMN sa_eval_item.badcase_status IS 'badcase 状态：DRAFT(待补标准答案)/READY(可评测)/IGNORED；非 badcase 条目为 NULL';
+COMMENT ON COLUMN sa_eval_item.feedback_reason IS '用户点踩原因：answer_irrelevant/content_wrong/incomplete/not_found/other';
+COMMENT ON COLUMN sa_eval_item.feedback_note IS '用户点踩备注（可选）';
+COMMENT ON COLUMN sa_eval_item.evidence IS '归集时证据快照：召回明细(含分数/通道)/意图分类/citations/原始答案';
+COMMENT ON COLUMN sa_eval_item.triage IS '归因结论：{stage,auto,note} 规则预判 + 人工确认';
 
 COMMENT ON TABLE sa_eval_run IS '评测运行（一次跑批）';
 COMMENT ON COLUMN sa_eval_run.id IS '自增主键';

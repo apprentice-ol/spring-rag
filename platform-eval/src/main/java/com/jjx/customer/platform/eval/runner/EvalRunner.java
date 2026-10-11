@@ -25,6 +25,7 @@ import com.jjx.customer.platform.eval.dao.mapper.EvalDatasetMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalItemMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalMetricMapper;
 import com.jjx.customer.platform.eval.dao.mapper.EvalRunMapper;
+import com.jjx.customer.platform.eval.domain.BadcaseStatus;
 import com.jjx.customer.platform.eval.domain.EvalParamSnapshot;
 import com.jjx.customer.platform.eval.framework.*;
 import com.jjx.customer.platform.ingestion.domain.entity.DocumentEntity;
@@ -135,9 +136,13 @@ public class EvalRunner {
         try {
             EvalParamSnapshot params = this.parseParams(runEntity.getParamSnapshot());
 
+            // bad case 归集（2026-10-11）：DRAFT（待补 ground truth）不参与跑批。
+            // 双保险——归集写入时同时也置 enabled=0，这里再按状态兜底（防人工/接口误启）
             LambdaQueryWrapper<EvalItemEntity> queryWrapper = new LambdaQueryWrapper<EvalItemEntity>()
                     .eq(EvalItemEntity::getDatasetId, runEntity.getDatasetId())
-                    .eq(EvalItemEntity::getEnabled, 1);
+                    .eq(EvalItemEntity::getEnabled, 1)
+                    .and(w -> w.isNull(EvalItemEntity::getBadcaseStatus)
+                            .or().eq(EvalItemEntity::getBadcaseStatus, BadcaseStatus.READY.name()));
 
             List<EvalItemEntity> evalItemEntityList = evalItemMapper.selectList(queryWrapper);
             if (CollUtil.isNotEmpty(onlyItemIds)) {
