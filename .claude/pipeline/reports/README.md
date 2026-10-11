@@ -1,6 +1,6 @@
 # 流水线报告与台账（.claude/pipeline/reports/）
 
-本目录是流水线执行证据的**落盘区**。机制约定见全局 dev-loop skill「执行台账」。
+本目录是流水线执行证据的**落盘区**。机制约定见pipeline-run skill「执行台账」。
 
 ## 结构
 
