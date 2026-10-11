@@ -1,0 +1,5 @@
+com.jjx.ai.llmobservability.autoconfigure.TelemetryAutoConfiguration
+com.jjx.ai.llmobservability.autoconfigure.SpanProcessorAutoConfiguration
+com.jjx.ai.llmobservability.autoconfigure.springai.SpringAiTelemetryAutoConfiguration
+com.jjx.ai.llmobservability.autoconfigure.OpenTelemetryLogbackAppenderAutoConfiguration
+com.jjx.ai.llmobservability.autoconfigure.TelemetryFilterLogbackAutoConfiguration

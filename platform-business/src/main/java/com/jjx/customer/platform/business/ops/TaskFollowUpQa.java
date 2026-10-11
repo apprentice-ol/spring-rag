@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  * <p><b>为什么要有它</b>：Task 层闭环后，用户对结论的反应仍只有一条消费路径——开新 attempt
  * 重跑整个 SOP。于是「为什么说缺 invoiceNumber？」得到的不是回答，而是一次带确认卡的重新诊断
  * （贵、慢、四段式格式答非所问）。本类补上「读投影、不进循环」的轻路径：结论全文（task.summary）
- * + 生效主张 + 槽位投影组装后单次 LLM 直答，对应设计见 plan/2026-09-20-task-qa-loop.md。</p>
+ * + 生效主张 + 槽位投影组装后单次 LLM 直答，对应设计见 docs/plans/hitl-and-task-qa.md。</p>
  *
  * <p><b>不变量（QA 轮不做的事）</b>：不递增 attempt、不 markConcluded、不重抽 findings
  * （解读不产生新主张——下一轮异议仍以原结论主张为靶）、不建引擎会话。任何一步失败都返回

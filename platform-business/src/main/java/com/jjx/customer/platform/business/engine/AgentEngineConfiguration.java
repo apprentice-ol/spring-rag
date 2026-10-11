@@ -154,11 +154,16 @@ public class AgentEngineConfiguration {
      * OTel 实例优先取容器 bean（micrometer-tracing 桥装配的那个），缺省回退全局——
      * 未配置导出时 OTel SDK 是 no-op，本桥自然降级。</p>
      */
+    /**
+     * 内核 Tracer 的 micrometer 实现（2026-10-11 重构）：引擎 span 直接走与 {@code @TelemetryStep}
+     * 相同的观测管线——父子挂观测 scope 栈（引擎根在请求链下、节点内 LLM 调用挂在 node 下）、
+     * input/output 同一套摘要与 JSON 格式、会话身份由管线统一处理。
+     * 此前的 {@code OtelSpanTracer}（内核→OTel 直通镜像）及其上累积的续链/身份/格式补丁整体退役。
+     */
     @Bean
-    public OtelSpanTracer agentOtelSpanTracer(
-            ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry) {
-        return new OtelSpanTracer(
-                openTelemetry.getIfAvailable(io.opentelemetry.api.GlobalOpenTelemetry::get));
+    public MicrometerTracerAdapter agentMicrometerTracer(
+            com.jjx.ai.llmobservability.observation.TelemetryTemplate obsTemplate) {
+        return new MicrometerTracerAdapter(obsTemplate);
     }
 
     @Bean(destroyMethod = "close")
@@ -174,7 +179,7 @@ public class AgentEngineConfiguration {
                               IntentClassifier intentClassifier,
                               RouteRegistry routeRegistry,
                               QueryRewriter queryRewriter,
-                              OtelSpanTracer otelSpanTracer,
+                              MicrometerTracerAdapter micrometerTracer,
                               @Value("${rag.rerank.min-relevance-score:0.0}") double minRelevanceScore) {
 
         // ---- 工具面（共享注册表：RAG 检索 + ops 诊断 + 时间）----
@@ -216,7 +221,7 @@ public class AgentEngineConfiguration {
                 .toolRegistry(sharedRegistry)
                 .modelGateway(gateway)
                 .promptProvider(promptProvider)
-                .tracer(otelSpanTracer)
+                .tracer(micrometerTracer)
                 .sessionStore(new PgEngineSessionStore(new JdbcTemplate(dataSource), objectMapper))
                 .slotStore(new PgEngineSlotStore(new JdbcTemplate(dataSource), objectMapper));
 

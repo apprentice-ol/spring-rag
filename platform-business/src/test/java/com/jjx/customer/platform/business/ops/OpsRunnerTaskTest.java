@@ -256,7 +256,7 @@ class OpsRunnerTaskTest {
     }
 
     /**
-     * 任务内直答 + 重跑降摩擦（2026-09-20，plan/2026-09-20-task-qa-loop.md）：
+     * 任务内直答 + 重跑降摩擦（2026-09-20，docs/plans/hitl-and-task-qa.md）：
      *
      * <p>CONCLUDED 后的解释类追问（「为什么…」）<b>不进 SOP</b>——不开新 attempt、不动主张；
      * 随后的异议重跑（「不对…」）<b>跳过确认门</b>直进阶段 1（否则会以 CLARIFY 挂在确认单上）。</p>

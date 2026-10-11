@@ -1,0 +1,3 @@
+com.jjx.ai.llmobservability.backends.TelemetryBackendsAutoConfiguration
+com.jjx.ai.llmobservability.backends.openobserve.OpenObserveOtlpAutoConfiguration
+com.jjx.ai.llmobservability.backends.langfuse.LangfuseOtlpAutoConfiguration

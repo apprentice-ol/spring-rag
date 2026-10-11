@@ -196,6 +196,7 @@ public final class DefaultToolExecutor implements ToolExecutor {
         attributes.put(InterceptorAttributes.SPAN_KIND, SpanKind.TOOL);
         attributes.put(InterceptorAttributes.SPAN_NAME, "tool:" + invocation.toolId());
         attributes.put(InterceptorAttributes.CACHE_INPUT, arguments);
+        attributes.put(InterceptorAttributes.PAYLOAD_INPUT, arguments);
         attributes.put(InterceptorAttributes.CACHE_NAMESPACE, context.sessionId());
         attributes.put(InterceptorAttributes.CACHE_OPERATION, "tool:" + invocation.toolId());
         attributes.put(InterceptorAttributes.CIRCUIT_KEY, "tool:" + invocation.toolId());

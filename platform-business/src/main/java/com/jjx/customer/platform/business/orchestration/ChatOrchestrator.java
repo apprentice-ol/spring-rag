@@ -242,7 +242,7 @@ public class ChatOrchestrator<S> {
         long tRetrieve = System.currentTimeMillis();
         KnowledgeRunner.KnowledgeAnswer knowledgeAnswer = knowledgeRunner.retrieve(
                 question, searchCtx, paradigm,
-                new KnowledgeRunner.RunContext(history, null, traceId,
+                new KnowledgeRunner.RunContext(history, null, traceId, otelTraceId,
                         agentChoice, activeTask == null ? null : activeTask.agentId(),
                         RewritePolicy.AUTO, false));
         List<RetrievedChunk> chunks = knowledgeAnswer.chunks();

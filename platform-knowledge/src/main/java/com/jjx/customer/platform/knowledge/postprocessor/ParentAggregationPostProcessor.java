@@ -20,7 +20,7 @@ import com.jjx.ai.llmobservability.observation.annotation.TelemetryStep;
  * 父块聚合后处理器（rerank 之后，责任链末端）——小块检索、大块生成的出口。
  *
  * <p><b>为什么在 rerank 之后</b>：打分排序发生在子块级（语义集中、分数区分度高，
- * 见 plan/2026-09-18-small-to-big-retrieval.md 的对照实验：期望内容平均 +0.103），
+ * 见 docs/plans/ingestion-and-retrieval.md 的对照实验：期望内容平均 +0.103），
  * 交叉编码器吃的是子块短文本而非父块长文；聚合只是把同一父块的多个子块命中折叠成
  * 一个父块席位（父分 = max 子块分），并把内容换回父块原文供生成侧组装。</p>
  *

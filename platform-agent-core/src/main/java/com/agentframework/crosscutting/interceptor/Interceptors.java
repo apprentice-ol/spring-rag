@@ -76,8 +76,16 @@ public final class Interceptors {
             }
             Span span = tracer.startSpan(trace, parent, spanName == null ? context.operation() : spanName,
                     kind == null ? SpanKind.INTERNAL : kind, attributes);
+            // 输入载荷走语义键：观测型 Tracer 实现把它摘要为 span 的 input，摘要策略由实现侧定
+            Object input = context.attributes().get(InterceptorAttributes.PAYLOAD_INPUT);
+            if (input != null) {
+                tracer.setAttribute(span, InterceptorAttributes.PAYLOAD_INPUT, input);
+            }
             try {
                 T result = invocation.proceed();
+                if (result != null) {
+                    tracer.setAttribute(span, InterceptorAttributes.PAYLOAD_OUTPUT, result);
+                }
                 tracer.endSpan(span);
                 return result;
             } catch (Exception e) {

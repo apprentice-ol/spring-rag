@@ -9,7 +9,9 @@ import com.jjx.customer.platform.knowledge.retrieval.SearchChannelResult;
 import com.jjx.customer.platform.knowledge.retrieval.SearchChannelType;
 import com.jjx.customer.platform.knowledge.retrieval.SearchContext;
 import com.jjx.customer.platform.config.properties.ChatProperties;
+import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Duration;
 import java.util.List;
@@ -95,10 +97,21 @@ class CachingRetrievalEngineTest {
         return SearchContext.builder().query("发票冲红").topK(10).threshold(0.0).build();
     }
 
+    /** 无追踪装配的空 provider：通道名册路径走静默跳过分支 */
+    private static ObjectProvider<ObservationRegistry> noRegistry() {
+        return new ObjectProvider<>() {
+            @Override
+            public ObservationRegistry getObject() {
+                // getIfAvailable() 的默认实现只捕这一种异常，抛别的会穿透静默跳过分支
+                throw new org.springframework.beans.factory.NoSuchBeanDefinitionException("no registry in test");
+            }
+        };
+    }
+
     private CachingRetrievalEngine engine(CountingChannel channel, FakeCacheStore store,
                                           CacheProperties props, long ver, long freq) {
         MultiChannelRetrievalEngine delegate = new MultiChannelRetrievalEngine(
-                List.of(channel), List.of(), new ChatProperties(), Runnable::run);
+                List.of(channel), List.of(), new ChatProperties(), Runnable::run, noRegistry());
         return new CachingRetrievalEngine(delegate, store, props, new ObjectMapper(), stamp(ver),
                 new FixedTracker(freq), new CacheFrequencyPolicy(props));
     }

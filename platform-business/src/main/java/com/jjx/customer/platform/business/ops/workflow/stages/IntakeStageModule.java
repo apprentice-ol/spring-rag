@@ -74,7 +74,7 @@ public final class IntakeStageModule implements StageModule {
           //（本任务主张可被否定指认 vs 跨任务背景不可指认）
           .slot("related_findings", SlotType.STRING)
           // 基本信息已确认过（重跑轮由 OpsRunner 预填 1）：同一 Task 的追问轮不再重复确认——
-          // 确认门摊开的是「被推断的前提」，前提没变就不该再问（plan/2026-09-20-task-qa-loop.md §2.4）
+          // 确认门摊开的是「被推断的前提」，前提没变就不该再问（docs/plans/hitl-and-task-qa.md §2.4）
           .slot("intake_confirmed", SlotType.NUMBER);
 
         // 重跑轮直通：已确认过且齐备 → 跳过确认门直进阶段 1（分支按声明顺序首中即出）。

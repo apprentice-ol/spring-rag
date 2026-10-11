@@ -6,7 +6,7 @@
     <name>platform-cache</name>
     <description>缓存能力域：缓存 key 口径、Redis 存储、语义缓存、频率准入</description>
     <dependencies>
-        <dependency><groupId>com.github.apprentice-ol.llm-observability</groupId><artifactId>llm-observability</artifactId><version>0.1.1</version></dependency>
+        <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-llm-observability</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-common</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.jjx.customer</groupId><artifactId>platform-shared</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter</artifactId></dependency>

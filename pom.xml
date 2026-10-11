@@ -21,6 +21,9 @@
     <modules>
         <!-- 新 agent 内核（零依赖底座，放在最前表达 reactor 顺序；自 agent-framework 仓库源码并入） -->
         <module>platform-agent-core</module>
+        <!-- LLM 观测库（自 llm-observability 仓库源码并入，包名保留 com.jjx.ai.llmobservability） -->
+        <module>platform-llm-observability</module>
+        <module>platform-llm-observability-backends</module>
         <module>platform-shared</module>
         <module>platform-observe</module>
         <module>platform-cache</module>
@@ -45,6 +48,9 @@
         <mybatis-plus.version>3.5.14</mybatis-plus.version>
         <rocketmq-spring.version>2.3.5</rocketmq-spring.version>
         <knife4j.version>4.5.0</knife4j.version>
+        <!-- knife4j 4.5.0 传递的 springdoc 2.3.0 与 Spring Boot 3.5/Spring Framework 6.2 不兼容
+             （/v3/api-docs 报 NoSuchMethodError: ControllerAdviceBean.<init>），用 BOM 显式升级 -->
+        <springdoc.version>2.8.17</springdoc.version>
         <hutool-all.version>5.8.37</hutool-all.version>
         <okhttp.version>4.12.0</okhttp.version>
         <commonmark.version>0.22.0</commonmark.version>
@@ -57,6 +63,14 @@
                 <groupId>org.springframework.ai</groupId>
                 <artifactId>spring-ai-bom</artifactId>
                 <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- 覆盖 knife4j 传递的 springdoc 2.3.0（与 Spring Boot 3.5 不兼容） -->
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-bom</artifactId>
+                <version>${springdoc.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -116,6 +130,17 @@
             <dependency>
                 <groupId>com.jjx.customer</groupId>
                 <artifactId>platform-agent-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <!-- LLM 观测库（源码并入本仓；包名保留 com.jjx.ai.llmobservability） -->
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-llm-observability</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.jjx.customer</groupId>
+                <artifactId>platform-llm-observability-backends</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

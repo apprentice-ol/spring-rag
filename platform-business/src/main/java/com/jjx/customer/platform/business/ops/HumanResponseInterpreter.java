@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  * </ol>
  *
  * <p><b>软消费</b>：directive 不改图结构，进后续阶段的 think prompt 由模型自行消化
- * （硬控制留待真实 badcase，见 plan/2026-09-19-human-in-the-loop.md §七）。</p>
+ * （硬控制留待真实 badcase，见 docs/plans/hitl-and-task-qa.md §七）。</p>
  */
 public class HumanResponseInterpreter {
 

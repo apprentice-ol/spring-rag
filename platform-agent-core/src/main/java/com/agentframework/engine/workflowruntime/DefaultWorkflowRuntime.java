@@ -322,6 +322,9 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
             result = result.withMetadata(LOOP_BREAK_METADATA, breakReason);
         }
         if (tracer != null) {
+            // 输出载荷随收尾传出（node span 直建，同 input 一样不经拦截器）：
+            // 观测侧摘要 NodeResult 的 output/slotWrites 落 span 的 output
+            tracer.setAttribute(span, InterceptorAttributes.PAYLOAD_OUTPUT, result);
             if (result.isFailed()) {
                 tracer.endSpan(span, new IllegalStateException(result.error()));
             } else {
@@ -782,6 +785,8 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
         attributes.put(InterceptorAttributes.NODE_ID, node.id());
         attributes.put(InterceptorAttributes.AGENT_ID, context.agent() == null ? null : context.agent().id());
         attributes.put(InterceptorAttributes.TIMEOUT_POLICY, TimeoutPolicy.of(config.nodeTimeout()));
+        // 节点输入 = 进入本节点时的槽位快照（含 query 等上游产物），观测侧摘要后落 span 的 input
+        attributes.put(InterceptorAttributes.PAYLOAD_INPUT, context.slots());
         return InterceptorContext.of(InterceptorPhase.AROUND_NODE, "node:" + node.id())
                 .withOwner(session.id(), node.id())
                 .withAttributes(attributes);
@@ -836,8 +841,12 @@ public final class DefaultWorkflowRuntime implements WorkflowRuntime, BranchInvo
         if (tracer == null || context.trace() == null || !context.trace().active()) {
             return null;
         }
+        // node span 由 runtime 直建（不经 AROUND_NODE 拦截器），输入载荷必须在这里随建随传：
+        // 拦截器上下文里的 PAYLOAD_INPUT 覆盖不到这条路径（2026-10-11 实测 node:* input 全空）
+        Map<String, Object> attributes = new LinkedHashMap<>(spanAttributes(node, resolved));
+        attributes.put(InterceptorAttributes.PAYLOAD_INPUT, context.slots());
         return tracer.startSpan(context.trace(), context.parentSpan(), "node:" + node.id(), SpanKind.NODE,
-                spanAttributes(node, resolved));
+                attributes);
     }
 
     /**

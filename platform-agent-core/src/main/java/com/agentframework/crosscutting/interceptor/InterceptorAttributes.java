@@ -38,6 +38,15 @@ public final class InterceptorAttributes {
     public static final String NODE_ID = "node.id";
     /** 工具 id。 */
     public static final String TOOL_ID = "tool.id";
+
+    /**
+     * 被拦截调用的输入载荷（任意对象），供追踪等观测型拦截器取用。
+     * 与 {@link #CACHE_INPUT} 分开：那是缓存键的原料，语义上不承诺「节点输入」，
+     * 混用会让缓存键或观测内容互相牵制。
+     */
+    public static final String PAYLOAD_INPUT = "payload.input";
+    /** 被拦截调用的输出载荷（任意对象），由 {@code Interceptors.Trace} 在 proceed 后写入。 */
+    public static final String PAYLOAD_OUTPUT = "payload.output";
     /** 模型名。 */
     public static final String MODEL = "model.name";
 

@@ -57,12 +57,15 @@ public class KnowledgeRunner {
      * @param history          最近对话历史（可为空串；kb_rewrite 据此决定是否消解指代）
      * @param clarify          用户在本轮追问节点的补充（可空）
      * @param traceId          正则提取的 traceId（路由规则短路判定用，可空）
+     * @param otelTraceId      编排链的 OTel traceId（引擎会话续链用，可空——评测等无链路径引擎自建；
+     *                         与 traceId 是两个概念：那是消息文本里抽的业务 id，进图槽位；这是观测链 id，
+     *                         不传引擎会自立门户成独立空 trace，一次问答就裂成两棵树）
      * @param agentChoice      用户显式选择的范式（可空）
      * @param sessionAgentType 活动追问会话的 agentType（可空）
      * @param rewritePolicy    首轮改写策略（可空 = AUTO）；评测靠它跑"改写开/关"对照
      * @param forceRetrieval   强制检索：不让领域路由把本轮转给别的 agent（评测专用，见下）
      */
-    public record RunContext(String history, String clarify, String traceId,
+    public record RunContext(String history, String clarify, String traceId, String otelTraceId,
                              String agentChoice, String sessionAgentType,
                              RewritePolicy rewritePolicy, boolean forceRetrieval) {
 
@@ -72,7 +75,7 @@ public class KnowledgeRunner {
 
         /** 空上下文（无历史、无补充、无路由外部事实、改写走默认策略、不强制检索）。 */
         public static RunContext empty() {
-            return new RunContext(null, null, null, null, null, RewritePolicy.AUTO, false);
+            return new RunContext(null, null, null, null, null, null, RewritePolicy.AUTO, false);
         }
 
         /**
@@ -82,7 +85,7 @@ public class KnowledgeRunner {
          * @return 评测运行上下文
          */
         public static RunContext forEval(RewritePolicy rewritePolicy) {
-            return new RunContext(null, null, null, null, null, rewritePolicy, true);
+            return new RunContext(null, null, null, null, null, null, rewritePolicy, true);
         }
     }
 
@@ -163,9 +166,10 @@ public class KnowledgeRunner {
         Session singleTurn = agentEngine.startSession(
                 agentEngine.loadAgent(entry.id(), "latest"),
                 StartOptions.defaults().asEphemeral()
-                        // 引擎会话/事件/span 根挂到编排链 traceId 上（RunContext 已携带；
-                        // 评测等无链路径为空，引擎自生成——withTraceId 对空白安全）
-                        .withTraceId(ctx.traceId()));
+                        // 引擎会话/事件/span 根挂到编排链 OTel traceId 上（一次问答一棵树：
+                        // 不传引擎会自立门户，观测侧多出一棵无关联的空 trace）；
+                        // 评测等无链路径为空，引擎自生成——withTraceId 对空白安全
+                        .withTraceId(ctx.otelTraceId()));
         RunResult result = agentEngine.run(singleTurn, new Input(question, Map.of(), slots));
 
         List<RetrievedChunk> chunks = toChunks(result, agentId);

@@ -129,12 +129,21 @@ public final class DefaultEngine implements Engine {
         try {
             // 执行输入守卫与过滤
             Input filtered = this.guardAndFilterInput(mutableSession, agent, effectiveInput);
+            // agent 根 span 的 input 用守卫后的输入（与 workspace span 同源）；startTrace 时
+            // filtered 尚不可得，故在其后补写——观测侧摘要后落 span 的 input
+            if (trace != null && trace.active()) {
+                services.tracer().setAttribute(trace.rootSpan(), InterceptorAttributes.PAYLOAD_INPUT, filtered);
+            }
 
             WorkflowExecution execution = WorkflowExecution
                     .of(agent, mutableSession, agent.workflow(), slots, workspace, filtered)
                     .withTrace(trace, trace == null ? null : trace.rootSpan());
             RunOutcome outcome = this.runWorkflow(mutableSession, agent, execution);
             String output = handleOutput(mutableSession, agent, outcome);
+            // 最终答复 = agent 根 span 的 output；须在 finishTrace（endSpan）前写入
+            if (trace != null && trace.active()) {
+                services.tracer().setAttribute(trace.rootSpan(), InterceptorAttributes.PAYLOAD_OUTPUT, output);
+            }
             outcome.messages().forEach(mutableSession::appendMessage);
             applyOutcome(mutableSession, outcome, output);
             services.contexts().persist(mutableSession);
@@ -241,6 +250,8 @@ public final class DefaultEngine implements Engine {
         // 根 span 代表一次 Agent 运行，这里的 span 代表其中的一次工作流执行，二者不重名
         attributes.put(InterceptorAttributes.SPAN_NAME, "workflow:" + agent.workflow().id());
         attributes.put(InterceptorAttributes.SPAN_KIND, com.agentframework.crosscutting.trace.SpanKind.WORKFLOW);
+        // 工作流输入 = 用户本轮的 Input，观测侧摘要后落 workflow span 的 input
+        attributes.put(InterceptorAttributes.PAYLOAD_INPUT, execution.input());
         InterceptorContext context = InterceptorContext.of(InterceptorPhase.AROUND_AGENT, "agent:" + agent.id())
                 .withOwner(session.id(), null)
                 .withAttributes(attributes);
@@ -402,9 +413,13 @@ public final class DefaultEngine implements Engine {
         if (services.tracer() == null || !services.tracer().enabled()) {
             return null;
         }
+        // 属性键走点分命名（同 OTel 惯例）：engine.session.id 是引擎内部会话，
+        // 与 trace 级 session.id（用户对话，baggage 注入）刻意分开，避免观测侧混淆两种身份
         return services.tracer().startTrace(session.traceId(), "agent:" + agent.id(),
                 SpanKind.AGENT,
-                Map.of("sessionId", session.id(), "resume", resume, "agentVersion", agent.version()));
+                Map.of("engine.session.id", session.id(),
+                        "engine.resume", resume,
+                        "engine.agent_version", agent.version()));
     }
 
     /**
