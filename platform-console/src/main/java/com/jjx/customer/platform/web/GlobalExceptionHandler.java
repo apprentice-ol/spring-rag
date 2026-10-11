@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -167,6 +168,16 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.CONFLICT)
                 .body(Map.of("code", 409, "message", msg));
+    }
+
+    // ==================== 数据完整性违例（400） ====================
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException e) {
+        log.warn("[全局异常] 数据完整性违例: {}", e.getMessage());
+        return ResponseEntity
+                .badRequest()
+                .body(Map.of("code", 400, "message", "数据不合法（必填字段为空/超长等违反完整性约束）"));
     }
 
     // ==================== 服务端异常（500） ====================

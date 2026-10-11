@@ -178,7 +178,8 @@ public class FileStorageServiceImpl implements FileStorageService {
     @Override
     @SneakyThrows
     public StoredFileDTO uploadAsset(byte[] content, String originalFilename, String contentType) {
-        Assert.notNull(content, "上传内容不能为空");
+        // 空 byte[] 会被写入 0 字节对象（notNull 拦不住）——与 upload 口径一致显式拒绝
+        Assert.isFalse(content == null || content.length == 0, "上传文件不能为空");
         String detected = resolveContentType(originalFilename, contentType);
         String key = randomKey(originalFilename);
         // 用 reliablePut（直连 SDK）而非 streamPut（预签名 URL），
