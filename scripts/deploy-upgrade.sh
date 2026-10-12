@@ -175,7 +175,7 @@ SQL
       echo "  已应用 $INIT_SQL（表数 $(q "SELECT count(*) FROM pg_tables WHERE schemaname='public';")）"
     else
       echo "  [!] 找不到 init.sql —— 走应用自建这条路："
-      echo "      ① 传新 jar：scp platform-bootstrap/target/*.jar root@<IP>:/srv/www/spring-rag/"
+      echo "      ① 传新 jar：scp platform-bootstrap/target/*.jar root@<IP>:/srv/www/springai-rag/platform-bootstrap/target/"
       echo "      ② 重启应用（它会自动建全部表，含本次新增的 sa_agent_task/sa_agent_finding/sa_chunk_parent 等）："
       echo "         docker compose --project-directory . -f docker/docker-compose.dev.yml up -d --build app"
       echo "      ③ 等 health 通过后，重跑本脚本（表已在 → 本步自动跳过）"
