@@ -70,3 +70,6 @@ dist/
 
 # oo_trace_query.py 默认输出
 /trace-*.json
+
+# 会话临时产物（构建日志/调试脚本/快照等中间态，不入库）
+.claude/tmp/

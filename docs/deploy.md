@@ -89,17 +89,23 @@ docker compose --project-directory . -f docker/docker-compose.dev.yml logs -f ap
 
 首次会构建两个镜像（rag-postgres 装.deb 约 1-2 分钟；app 拷 251MB lib），并自动建库建表（`init.sql` 幂等，含 sa_* 业务表与 pgvector 兜底）。
 
-### 5. Nginx 反代 RustFS（图片显示依赖）
+### 5. Nginx 对外入口（80 端口反代，2026-10-12 重装后重建版）
 
-app 生成的图片公网地址形如 `http://<IP>/storage/customer-platform-assets/{key}`，需在服务器 Nginx 加一段反代到 RustFS：
+服务器对外的统一入口是 Nginx 80，两段反代都必须配（配置文件已入库：`docker/nginx/springai-rag.conf`，直接拷贝到 `/etc/nginx/conf.d/` 即可，安装 CentOS 后默认的 `default.conf` 需删除——原生 server 段与 `default_server` 冲突）：
 
-```nginx
-location /storage/ {
-    proxy_pass http://127.0.0.1:9000/;   # RUSTFS_PORT 改过端口的话同步改这里
-}
+```bash
+scp docker/nginx/springai-rag.conf root@<SERVER_IP>:/etc/nginx/conf.d/
+ssh root@<SERVER_IP> 'rm -f /etc/nginx/conf.d/default.conf && nginx -t && systemctl enable --now nginx'
 ```
 
-不配的话：文档入库正常，但前端图片不显示。用别的端口方案就改 `.env` 的 `RUSTFS_PORT` 并同步 `RAG_STORAGE_S3_PUBLIC_URL`。
+| 路径 | 反代目标 | 用途 | 关键配置 |
+|---|---|---|---|
+| `/api/rag/` | `127.0.0.1:9081`（app 容器） | 前端页面 + API + SSE 流式对话 | `proxy_buffering off`（SSE 必须）+ HTTP/1.1 + 600s 读写超时 + `client_max_body_size 200m`（文档上传） |
+| `/storage/` | `127.0.0.1:9000`（RustFS 容器） | 图片等对象存储公网地址 `http://<IP>/storage/customer-platform-assets/{key}` | 端口随 `.env` 的 `RUSTFS_PORT` 同步改 |
+
+不配 `/storage/`：文档入库正常，但前端图片不显示；不配 `/api/rag/`：`http://<IP>/` 打不开前端。用别的端口方案就改 `.env` 的 `RUSTFS_PORT` 并同步 `RAG_STORAGE_S3_PUBLIC_URL`。
+
+> 重装系统后 nginx 配置会随盘丢失，2026-10-12 那次重装即靠本仓库归档文件恢复。
 
 ### 6. OpenObserve 创建 viewer 账号（链路跳转依赖）
 
