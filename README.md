@@ -1,7 +1,5 @@
 # customer-platform
 
-基于 **Spring AI 1.1** 的 RAG **平台**：文档入库 → 多通道检索 → Rerank 精排 → 流式问答，并自带全链路可观测性与 RAG 评测。
-
 ## 项目说明
 
 本项目的检索与文档入库能力源自 **ragent** 项目，用 **Spring AI 生态**（ChatClient / EmbeddingModel / VectorStore / ChatMemory / Advisor）替代原 ragent 的 infra-ai 层（屏蔽模型供应商），是对 ragent 检索管线与入库编排的重写。
@@ -9,7 +7,6 @@
 - **原项目仓库**：
   - Gitee：https://gitee.com/nageoffer/ragent.git
   - GitHub：https://github.com/nageoffer/ragent.git
-- **定位**：非 ragent 官方版本；采用 Spring AI 技术栈重写。
 - **本项目仓库**：
   - GitHub：https://github.com/apprentice-ol/spring-rag
   - Gitee：https://gitee.com/apprentice-ol/spring-rag
@@ -55,6 +52,11 @@ HTTP 入口 → 对话编排 → 意图分类 → LLM 调用（含 token 用量�
 每一步的耗时与跨服务调用（DeepSeek / DashScope）都可下钻：
 
 ![链路追踪](docs/images/readme-oo-trace.png)
+
+**调用树（Langfuse）** —— 同一份 OTel 埋点同步推送 Langfuse：完整调用树（对话编排 → 查询归一化 → 意图分类 → LLM 调用含 token 用量 → 流式输出），
+选中任意 span 可查看输入输出、对话内容与元数据：
+
+![调用树](docs/images/readme-langfuse-trace.png)
 
 **控制台** —— 数据规模、检索管线配置、服务健康与模型清单：
 
