@@ -148,6 +148,25 @@
             <artifactId>postgresql</artifactId>
         </dependency>
 
+        <!-- JDBC 观测（2026-10-12 按官方文档重构）：spring-boot starter 1.5.0 + 官方 OTel 语义模块。
+             opentelemetry 模块在 classpath 即被 Spring Boot 自动配置（官方文档 §4.5：
+             "No additional manual configuration is required beyond adding the module to the classpath"）：
+               - OpenTelemetryQueryObservationConvention：query span → OTel 语义（db.system/db.statement/
+                 db.operation 由 OpenTelemetryQueryAnalyzer 经 JSqlParser 分析归一化）——取代手写翻译 filter
+               - jdbc.opentelemetry.* 控制开关；jdbc.includes=QUERY 只保留 query（官方文档 §4.6 / §5.2.3）
+             手写 JDBC（pgvector 检索）与 MyBatis（业务表）均经 DataSource，一处包装全覆盖；
+             经 micrometer-tracing → OTLP 落 OpenObserve，驱动其 Database Monitoring 与慢查询面板。 -->
+        <dependency>
+            <groupId>net.ttddyy.observation</groupId>
+            <artifactId>datasource-micrometer-spring-boot</artifactId>
+            <version>1.5.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.ttddyy.observation</groupId>
+            <artifactId>datasource-micrometer-opentelemetry</artifactId>
+            <version>1.5.0</version>
+        </dependency>
+
         <!-- MyBatis Plus（业务表） -->
         <dependency>
             <groupId>com.baomidou</groupId>

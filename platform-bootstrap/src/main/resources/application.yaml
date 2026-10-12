@@ -313,3 +313,18 @@ ops:
     trace-ttl-minutes: 1440
   session-ttl-minutes: 60    # 追问会话 TTL（与 rag.chat.agent.session-ttl-minutes 同语义，AgentProperties 优先）
   max-llm-calls: 24          # 流程级 LLM 调用上限（O9；与 rag.chat.agent.workflow.max-llm-calls 同值）
+
+# ====================================================================
+# JDBC 观测精简（datasource-micrometer 官方配置，2026-10-12）
+# 官方文档 §4.6 Notes / §5.2.3 "How to Choose What To Observe"：默认观察全部
+# (CONNECTION, QUERY, KEYS, FETCH) 四类；OTel 语义规范只为 query execution 定义标准
+# （§4.2 Supported Scope），官方原文推荐仅实际执行时限制为：
+#   jdbc.includes: [QUERY]
+# 效果：1 条 SQL = 1 个 span（官方 OTel 语义，直接挂在业务调用 span 下），
+# connection/结果集遍历/generated-keys 从源头不产生；DBM（query span）数据源完整。
+# 注：§4.6 行文写作单数 jdbc.include，但配置元数据与 §5.2.3 均为 includes（复数），
+# 本地实测复数生效。
+# ====================================================================
+jdbc:
+  includes:
+    - QUERY
