@@ -58,6 +58,11 @@ HTTP 入口 → 对话编排 → 意图分类 → LLM 调用（含 token 用量�
 
 ![调用树](docs/images/readme-langfuse-trace.png)
 
+**LLM-as-a-Judge 评测器（Langfuse）** —— 评测跑批时答案打分自动推送 Langfuse Evaluators：
+每条回答的评分、评语与目标 trace 可追溯（Target Trace 直达原对话链路）：
+
+![评测器](docs/images/readme-langfuse-evaluators.png)
+
 **控制台** —— 数据规模、检索管线配置、服务健康与模型清单：
 
 ![控制台](docs/images/readme-console.png)
