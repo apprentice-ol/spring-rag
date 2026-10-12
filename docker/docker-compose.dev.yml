@@ -94,6 +94,10 @@ services:
       # LiveRAG parquet 放项目根 data/liverag/ 即被 downloadParquet 复用（cacheDir=data/liverag）
       - ./data:/app/data
     environment:
+      # ---- JVM（覆盖 Dockerfile 的 JAVA_OPTS；2026-10-12 内存优化）----
+      # SerialGC：2 核小堆场景比 G1 省内存省 CPU（G1 并发线程/RSet 开销在 512M 堆上是负收益）；
+      # ExitOnOutOfMemoryError：OOM 即退出，由 restart: unless-stopped 拉起自愈
+      JAVA_OPTS: "-Xms128m -Xmx512m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
       # 业务时区（与浏览器一致）：容器默认 UTC 导致 createTime 无时区被前端按本地时区解析偏移，
       # AgentTracePanel 的 OO 深链窗口差 8h 查不到（对话页 Date.now() 无此问题）
       TZ: Asia/Shanghai
@@ -149,6 +153,7 @@ services:
       RAG_VLM_ENABLED: "true"
     ports: ["${APP_PORT:-9081}:9081"]
     restart: unless-stopped
+    mem_limit: 1200m   # 防堆外/元空间失控拖垮 4G 全机（JVM 参数 + 余量；超限由 restart 拉起）
 
 volumes:
   pg-data:
