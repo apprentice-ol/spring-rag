@@ -48,6 +48,9 @@ public class TelemetryProperties {
     /** 内容捕获与摘要限额（启动期应用到 SpanIoLimits/Summarizer 全局值）。 */
     private Limits limits = new Limits();
 
+    /** LLM 调用的成本估算（按 token 数 × 单价，写入 gen_ai.usage.cost.* 属性）。 */
+    private Pricing pricing = new Pricing();
+
     @Data
     public static class Collector {
         /**
@@ -113,5 +116,39 @@ public class TelemetryProperties {
             SpanIoLimits.configure(maxSpanIo, truncate);
             Summarizer.configure(summarizeMaxString, summarizeMaxPreview, summarizeMaxMapEntries, summarize);
         }
+    }
+
+    /**
+     * 成本估算定价表（单位：元/百万 token）。
+     *
+     * <p>默认内置常见模型的参考价（2026-10 检索自公开买价，<b>仅供估算，请按官方账单校准</b>），
+     * 同名条目被配置覆盖；未命中的模型不写成本属性。匹配按模型名小写前缀（如
+     * {@code deepseek-chat-v3.2} 命中 {@code deepseek-chat} 条目）。</p>
+     *
+     * <p>示例：</p>
+     * <pre>
+     * telemetry:
+     *   pricing:
+     *     models:
+     *       deepseek-chat:      { input: 2.0, output: 8.0 }
+     *       text-embedding-v3:  { input: 0.5 }
+     * </pre>
+     */
+    @Data
+    public static class Pricing {
+        /** 总开关：关闭后不计算也不写成本属性。 */
+        private boolean enabled = true;
+
+        /** 模型定价（key 为模型名小写；value 为每百万 token 的元单价，output 缺省 0=不计）。 */
+        private Map<String, ModelPrice> models = new HashMap<>();
+    }
+
+    @Data
+    public static class ModelPrice {
+        /** 输入（prompt）单价：元/百万 token。 */
+        private double input;
+
+        /** 输出（completion）单价：元/百万 token。 */
+        private double output;
     }
 }

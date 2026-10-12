@@ -21,6 +21,9 @@ import org.springframework.ai.embedding.observation.EmbeddingModelObservationCon
  * <p>与 {@link ChatModelCompletionObservationHandler} 同模式：handler 挂在 observation 生命周期上，
  * onStart 补输入（{@code gen_ai.prompt}），onStop 补输出占位（{@code gen_ai.completion}）——
  * 向量本体无展示价值，输出写成 {@code {"dimensions":n,"count":m}} 的可读摘要即可。</p>
+ *
+ * <p>成本估算不进本类：同 {@link ChatModelCompletionObservationHandler} 的顺序疑云，
+ * 见 {@link LlmCostObservationFilter}（filter 先于导出 handler，落 span 已被现网验证）。</p>
  */
 public class EmbeddingObservationHandler implements ObservationHandler<EmbeddingModelObservationContext> {
 

@@ -63,3 +63,9 @@ telemetry:
   springai:
     log-prompt: true
     log-completion: true
+
+  # ---------------------------------------------------------------
+  # 6. LLM 成本估算（telemetry.pricing.*，2026-10-12）——同 application-telemetry.yaml 第 6 段说明
+  # ---------------------------------------------------------------
+  pricing:
+    enabled: true

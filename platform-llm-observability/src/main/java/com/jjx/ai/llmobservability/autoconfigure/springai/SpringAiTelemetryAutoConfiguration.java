@@ -1,5 +1,7 @@
 package com.jjx.ai.llmobservability.autoconfigure.springai;
 
+import com.jjx.ai.llmobservability.autoconfigure.TelemetryProperties;
+import com.jjx.ai.llmobservability.observation.llm.LlmPricing;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -46,5 +48,15 @@ public class SpringAiTelemetryAutoConfiguration {
     @ConditionalOnMissingBean(EmbeddingObservationHandler.class)
     public EmbeddingObservationHandler embeddingObservationHandler() {
         return new EmbeddingObservationHandler();
+    }
+
+    /**
+     * LLM/embedding 成本估算：filter 在 stop 阶段先于 OTel 导出 handler 执行，keyValue 可落 span
+     * （handler 后加的键因顺序问题不进 span，2026-10-12 实测）。
+     */
+    @Bean
+    @ConditionalOnMissingBean(LlmCostObservationFilter.class)
+    public LlmCostObservationFilter llmCostObservationFilter(TelemetryProperties telemetryProperties) {
+        return new LlmCostObservationFilter(new LlmPricing(telemetryProperties.getPricing()));
     }
 }

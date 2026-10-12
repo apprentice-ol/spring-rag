@@ -112,3 +112,15 @@ telemetry:
   springai:
     log-prompt: true
     log-completion: true
+
+  # ---------------------------------------------------------------
+  # 6. LLM 成本估算（telemetry.pricing.*，2026-10-12）
+  #    在 LLM/embedding observation 结束时按 token 数 × 单价计算
+  #    gen_ai.usage.cost(.input/.output)，随 span 落 OpenObserve，供成本面板聚合。
+  #    单位：元/百万 token。内置常见模型的公开参考价（仅估算），按实际账单校准时覆盖：
+  #    models:
+  #      deepseek-chat:     { input: 2.0, output: 8.0 }
+  #      text-embedding-v3: { input: 0.5 }
+  # ---------------------------------------------------------------
+  pricing:
+    enabled: true

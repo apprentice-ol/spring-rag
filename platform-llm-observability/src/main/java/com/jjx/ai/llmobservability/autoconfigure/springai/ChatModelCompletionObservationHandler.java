@@ -14,6 +14,10 @@ import org.springframework.ai.chat.observation.ChatModelObservationContext;
  * Spring AI 1.1.x 不会把 completion 写成 {@code gen_ai.completion} span 属性，只写到日志。
  * 这里在 observation stop 时（response 已可用）补写 {@code gen_ai.completion}，让 Langfuse / OpenObserve
  * 的 LLM observation 能看到 output。
+ *
+ * <p>⚠️ 2026-10-12 实测存疑：OpenObserve 中从未出现 {@code gen_ai_completion} 字段，疑似本 handler 的
+ * onStop 执行在 OTel 导出 handler 之后、属性已定稿（同批次成本功能因此改用 {@link LlmCostObservationFilter}）。
+ * 本 handler 暂保持原行为不动，待单独核查（若失效，应同迁 filter）。</p>
  */
 public class ChatModelCompletionObservationHandler implements ObservationHandler<ChatModelObservationContext> {
 

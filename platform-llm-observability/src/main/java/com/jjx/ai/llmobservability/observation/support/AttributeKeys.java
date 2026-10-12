@@ -76,6 +76,19 @@ public final class AttributeKeys {
     /** 总 token 数（OTel GenAI 标准）。 */
     public static final String GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens";
 
+    /**
+     * 本次调用估算成本（单位：元，见 {@code telemetry.pricing}）。
+     * 非 OTel 标准属性，但 OpenObserve AI Observability 等面板按此名展示（展平为 gen_ai_usage_cost）。
+     * 由遥测层在 observation stop 时按配置单价 × token 数计算写入（2026-10-12）。
+     */
+    public static final String GEN_AI_USAGE_COST = "gen_ai.usage.cost";
+
+    /** 成本拆分-输入侧（元）。 */
+    public static final String GEN_AI_USAGE_COST_INPUT = "gen_ai.usage.cost.input";
+
+    /** 成本拆分-输出侧（元）。 */
+    public static final String GEN_AI_USAGE_COST_OUTPUT = "gen_ai.usage.cost.output";
+
     /** GenAI 客户端操作 span 名（OTel GenAI 标准；如 gen_ai.client.operation）。 */
     public static final String GEN_AI_CLIENT_OPERATION = "gen_ai.client.operation";
 
