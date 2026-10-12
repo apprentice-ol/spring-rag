@@ -53,8 +53,8 @@ HTTP 入口 → 对话编排 → 意图分类 → LLM 调用（含 token 用量�
 
 ![链路追踪](docs/images/readme-oo-trace.png)
 
-**调用树（Langfuse）** —— 同一份 OTel 埋点同步推送 Langfuse：完整调用树（对话编排 → 查询归一化 → 意图分类 → LLM 调用含 token 用量 → 流式输出），
-选中任意 span 可查看输入输出、对话内容与元数据：
+**调用树（Langfuse）** —— 同一份 OTel 埋点同步推送 Langfuse：完整调用树（对话编排 → 查询归一化 → 意图分类 → LLM 调用 → 流式输出），
+选中任意 span 可下钻输入输出、token 用量（prompt → completion）与模型参数：
 
 ![调用树](docs/images/readme-langfuse-trace.png)
 
