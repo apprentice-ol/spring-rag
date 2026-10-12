@@ -36,6 +36,9 @@ public interface BadcaseService {
     /** 忽略 / 恢复（只允许 IGNORED ↔ DRAFT；READY 由转正流程管理）。 */
     BadcaseView updateStatus(Long id, String status);
 
+    /** 删除（撤销误点反馈等）：READY 已是评测条目，拒绝删（去评测数据集处理）。 */
+    void delete(Long id);
+
     /** 分布统计：状态 / 环节 / 领域 / 渠道计数。 */
     BadcaseStats stats();
 

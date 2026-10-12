@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -94,6 +95,13 @@ public class BadcaseController {
     @PutMapping("/{id}/status")
     public BadcaseView updateStatus(@PathVariable Long id, @RequestBody StatusRequest request) {
         return badcaseService.updateStatus(id, request.getStatus());
+    }
+
+    /** 删除（撤销误点反馈 / 清理无效归集）；READY 已是评测条目，拒绝。 */
+    @DeleteMapping("/{id}")
+    public Map<String, Object> delete(@PathVariable Long id) {
+        badcaseService.delete(id);
+        return Map.of("ok", true);
     }
 
     /** 转正辅助：在目标数据集关联集合范围内，用该 bad case 的问题重新检索候选文档。 */

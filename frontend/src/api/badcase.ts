@@ -142,6 +142,11 @@ export async function updateBadcaseStatus(id: number, status: string): Promise<B
     return data
 }
 
+/** 删除（撤销误点反馈等）；已转正（READY）的后端拒绝 */
+export async function deleteBadcase(id: number): Promise<void> {
+    await http.delete(`/eval/badcases/${id}`)
+}
+
 /** 分布统计（领域 × 环节） */
 export async function badcaseStats(): Promise<BadcaseStats> {
     const {data} = await http.get<BadcaseStats>('/eval/badcases/stats')

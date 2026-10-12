@@ -6,8 +6,8 @@ import {
   ApartmentOutlined, DeploymentUnitOutlined, CopyOutlined, FileSearchOutlined,
   DislikeOutlined,
 } from '@ant-design/icons-vue'
-import { message } from 'ant-design-vue'
-import { collectBadcase, FEEDBACK_REASONS } from '../api/badcase'
+import { message, Modal } from 'ant-design-vue'
+import { collectBadcase, deleteBadcase, FEEDBACK_REASONS } from '../api/badcase'
 import { streamChat, cancelChat, type AgentTrace, type Citation, type ClarifyChoice, type ClarifyEvent, type ClarifySlotQuestion } from '../api/chat'
 import { getAgentTraceByMessage, toAgentTrace } from '../api/agentTrace'
 import { traceDetailUrl } from '../api/eval'
@@ -618,6 +618,30 @@ async function submitFeedback() {
   }
 }
 
+/** 撤销误点的反馈：删除归集条目（再点「已反馈」触发）。
+ *  已转正（READY）的后端拒绝删除——它已是评测条目；归因/领域不对的也建议去管理页改，不必删。 */
+function undoFeedback(m: Msg) {
+  if (m.feedbackId == null) return
+  const fid = m.feedbackId
+  Modal.confirm({
+    title: '撤销这条反馈？',
+    content: '将从归集池删除这条 bad case。若只是归因或领域不对，可到「Bad Case 归集」页直接修改，不必删除。',
+    okText: '撤销反馈',
+    okType: 'danger',
+    cancelText: '保留',
+    async onOk() {
+      try {
+        await deleteBadcase(fid)
+        m.feedbackId = undefined
+        message.success('已撤销反馈')
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { message?: string } } }
+        message.error(err?.response?.data?.message || '撤销失败，请稍后再试')
+      }
+    },
+  })
+}
+
 /** 消息时间（操作条右侧）：HH:mm */
 function fmtClock(ts: number): string {
   const d = new Date(ts)
@@ -915,9 +939,11 @@ function fillSuggestion(s: string) {
                     @click="openFeedback(m)">
               <DislikeOutlined />反馈
             </button>
-            <span v-else-if="m.feedbackId" class="action-btn action-btn-done" title="已归集为 bad case，可到管理页跟进">
+            <button v-else-if="m.feedbackId" class="action-btn action-btn-done"
+                    title="已归集为 bad case；再次点击可撤销（误点保护）"
+                    @click="undoFeedback(m)">
               <DislikeOutlined />已反馈
-            </span>
+            </button>
             <template v-if="m.traceId">
               <span class="trace-chip" :title="'traceId: ' + m.traceId">{{ m.traceId }}</span>
               <button class="action-btn" title="复制 traceId" @click="copyWithToast(m.traceId)">

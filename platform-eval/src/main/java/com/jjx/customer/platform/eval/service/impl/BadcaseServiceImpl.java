@@ -526,6 +526,17 @@ public class BadcaseServiceImpl implements BadcaseService {
         return item;
     }
 
+    @Override
+    @Transactional
+    public void delete(Long id) {
+        EvalItemEntity item = requireBadcase(id);
+        if (BadcaseStatus.READY.name().equals(item.getBadcaseStatus())) {
+            throw new ClientException("已转正的 bad case 不能删除（它已是评测条目，请到评测数据集处理）");
+        }
+        // 撤销误点反馈 / 清理无效归集：物理删除（证据快照随条目一起消失，无附件要清理）
+        itemMapper.deleteById(id);
+    }
+
     private Long messageIdOf(String originRefJson) {
         if (StrUtil.isBlank(originRefJson)) {
             return null;
